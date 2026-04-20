@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# End-to-end smoke test: spin up the daemon, drive it over raw TCP with nc,
+# verify PUB/SUB + last-value + rules routing.
+
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PORT="${PORT:-14222}"
+BIN="$ROOT/zig-out/bin/monoblok"
+RULES="$ROOT/rules.edn"
+
+if [ ! -x "$BIN" ]; then
+    echo "building..."
+    (cd "$ROOT" && zig build) || exit 1
+fi
+
+cleanup() {
+    if [ -n "${DAEMON_PID:-}" ]; then
+        kill "$DAEMON_PID" 2>/dev/null || true
+        wait "$DAEMON_PID" 2>/dev/null || true
+    fi
+    rm -f /tmp/monoblok-smoke-*.txt
+}
+trap cleanup EXIT
+
+echo "starting daemon on port $PORT..."
+"$BIN" --port "$PORT" --rules "$RULES" >/tmp/monoblok-smoke-daemon.log 2>&1 &
+DAEMON_PID=$!
+sleep 0.5
+
+if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+    echo "FAIL: daemon did not start"
+    cat /tmp/monoblok-smoke-daemon.log
+    exit 1
+fi
+
+SUB_OUT=/tmp/monoblok-smoke-sub.txt
+PUB_OUT=/tmp/monoblok-smoke-pub.txt
+
+# --- Test 1: plain SUB does NOT receive any replay --------------------
+(
+    printf 'CONNECT {}\r\nSUB sensors.temp 1\r\n'
+    sleep 0.8
+) | nc -w 2 127.0.0.1 "$PORT" > "$SUB_OUT"
+
+if grep -q '^MSG ' "$SUB_OUT"; then
+    echo "FAIL: plain SUB should not replay anything"
+    echo "---- got ----"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: plain SUB receives no replay"
+
+# --- Test 1b: \$LVC SUB on empty cache emits no MSG ------------------
+(
+    printf 'CONNECT {}\r\nSUB $LVC.does.not.exist 2\r\n'
+    sleep 0.8
+) | nc -w 2 127.0.0.1 "$PORT" > "$SUB_OUT"
+
+if grep -q '^MSG ' "$SUB_OUT"; then
+    echo "FAIL: \$LVC on empty cache should emit nothing"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: \$LVC on empty cache emits nothing"
+
+# --- Test 1c: after a PUB, \$LVC.foo returns cached value -------------
+(
+    printf 'CONNECT {}\r\nPUB warm.me 5\r\nhello\r\n'
+    sleep 0.3
+) | nc -w 2 127.0.0.1 "$PORT" >/dev/null
+sleep 0.2
+
+(
+    printf 'CONNECT {}\r\nSUB $LVC.warm.me 3\r\n'
+    sleep 0.8
+) | nc -w 2 127.0.0.1 "$PORT" > "$SUB_OUT"
+
+if ! grep -q 'MSG \$LVC.warm.me 3 5' "$SUB_OUT" || ! grep -q '^hello' "$SUB_OUT"; then
+    echo "FAIL: \$LVC.warm.me should replay cached value"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: \$LVC replay returns cached value"
+
+# --- Test 1d: \$LVC wildcard snapshot --------------------------------
+(
+    printf 'CONNECT {}\r\nSUB $LVC.warm.> 4\r\n'
+    sleep 0.8
+) | nc -w 2 127.0.0.1 "$PORT" > "$SUB_OUT"
+
+if ! grep -q 'MSG \$LVC.warm.me 4 5' "$SUB_OUT"; then
+    echo "FAIL: \$LVC wildcard should emit matching cached entries"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: \$LVC wildcard snapshot works"
+
+# --- Test 1d2: \$LVC is a LIVE stream: join late, see current, then tail
+(
+    printf 'CONNECT {}\r\nPUB live.me 2\r\n11\r\nPUB live.me 2\r\n12\r\n'
+    sleep 0.3
+) | nc -w 2 127.0.0.1 "$PORT" >/dev/null
+sleep 0.2
+
+# Subscriber connects after 11 and 12; should get 12 from cache, then 13 live.
+(
+    printf 'CONNECT {}\r\nSUB $LVC.live.me 6\r\n'
+    sleep 1.2
+) | nc -w 3 127.0.0.1 "$PORT" > "$SUB_OUT" &
+SUB_JOB=$!
+sleep 0.4
+
+(
+    printf 'CONNECT {}\r\nPUB live.me 2\r\n13\r\n'
+    sleep 0.3
+) | nc -w 2 127.0.0.1 "$PORT" >/dev/null
+
+wait $SUB_JOB 2>/dev/null || true
+
+if ! grep -qE '^12\r?$' "$SUB_OUT"; then
+    echo "FAIL: \$LVC stream should deliver cached value 12 on subscribe"
+    cat "$SUB_OUT"; exit 1
+fi
+if ! grep -qE '^13\r?$' "$SUB_OUT"; then
+    echo "FAIL: \$LVC stream should deliver live value 13"
+    cat "$SUB_OUT"; exit 1
+fi
+echo "ok: \$LVC stream delivers cached-then-live values"
+
+# --- Test 1e: PUB to \$LVC is rejected --------------------------------
+(
+    printf 'CONNECT {}\r\nPUB $LVC.foo 1\r\nx\r\n'
+    sleep 0.3
+) | nc -w 2 127.0.0.1 "$PORT" > "$PUB_OUT"
+
+if ! grep -q "\-ERR '\$LVC is read-only'" "$PUB_OUT"; then
+    echo "FAIL: PUB to \$LVC should be rejected"
+    cat "$PUB_OUT"
+    exit 1
+fi
+echo "ok: PUB to \$LVC is rejected"
+
+# --- Test 2: PUB / SUB fan-out with rule firing ----------------------
+(
+    printf 'CONNECT {}\r\nSUB sensors.> 9\r\n'
+    sleep 2.5
+) | nc -w 4 127.0.0.1 "$PORT" > "$SUB_OUT" &
+SUB_JOB=$!
+sleep 0.4
+
+(
+    printf 'CONNECT {}\r\nPUB sensors.temp 4\r\n42.5\r\n'
+    sleep 0.4
+) | nc -w 2 127.0.0.1 "$PORT" > "$PUB_OUT"
+
+wait $SUB_JOB 2>/dev/null || true
+
+if ! grep -q 'MSG sensors.temp 9 4' "$SUB_OUT" || ! grep -q '^42.5' "$SUB_OUT"; then
+    echo "FAIL: subscriber did not receive original publish"
+    echo "---- got ----"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: subscriber received sensors.temp publish"
+
+if ! grep -q 'MSG sensors.temp.high 9 4' "$SUB_OUT"; then
+    echo "FAIL: rule did not route to sensors.temp.high"
+    echo "---- got ----"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: rule routed 42.5 to sensors.temp.high"
+
+# --- Test 3: alert routing rule --------------------------------------
+(
+    printf 'CONNECT {}\r\nSUB events.alerts 7\r\n'
+    sleep 1.5
+) | nc -w 3 127.0.0.1 "$PORT" > "$SUB_OUT" &
+SUB_JOB=$!
+sleep 0.4
+
+(
+    printf 'CONNECT {}\r\nPUB log.app 14\r\nkernel: alert!\r\n'
+    sleep 0.4
+) | nc -w 2 127.0.0.1 "$PORT" > "$PUB_OUT"
+
+wait $SUB_JOB 2>/dev/null || true
+
+if ! grep -q 'MSG events.alerts 7' "$SUB_OUT"; then
+    echo "FAIL: alert rule did not route"
+    echo "---- got ----"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: alert rule routed"
+
+echo
+echo "all smoke tests passed."

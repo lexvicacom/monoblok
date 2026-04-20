@@ -1,0 +1,27 @@
+; Example rules for monoblok.
+;
+; Each top-level form is (on SUBJECT-FILTER BODY).
+; BODY runs whenever an incoming publish subject matches the filter.
+;
+; Inside BODY:
+;   subject       - bare symbol, evaluates to the incoming subject string
+;   payload       - bare symbol, evaluates to the payload bytes
+;   payload-float - bare symbol, parses payload as a float
+;
+;   (publish SUBJ PAYLOAD)
+;   (subject-append SUFFIX)            - produces "SUBJECT.SUFFIX"
+;   (str-concat A B C ...)
+;   (when COND BODY...) / (if C T E) / (and ...) / (or ...) / (not X)
+;   (= A B) / (> A B) / (< A B) / (>= A B) / (<= A B)
+;   (+ ...) (- ...) (* ...) (/ ...)
+;   (contains? HAYSTACK NEEDLE)
+
+; Fan high temperature readings out to a dedicated sub-subject.
+(on "sensors.*"
+  (when (> payload-float 30.0)
+    (publish (subject-append "high") payload)))
+
+; Mirror anything mentioning "alert" to events.alerts.
+(on ">"
+  (when (contains? payload "alert")
+    (publish "events.alerts" (str-concat subject ": " payload))))

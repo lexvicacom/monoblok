@@ -1,0 +1,10 @@
+zig-out
+dist
+.DS_Store
+.zig-cache
+zig-pkg
+*.core
+core.*
+perf.data*
+*.prof
+.claude/settings.local.json
