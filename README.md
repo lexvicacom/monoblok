@@ -91,7 +91,7 @@ receive the current value:
 
 ```
 nats pub config.knob hello
-nats sub '$LVC.config.knob'      # prints `hello` immediately
+nats sub '$LVC.config.knob'      # prints `hello` immediately.. subsequent values as they arrive
 ```
 
 `knob` LOL.
