@@ -329,6 +329,29 @@ Fan-out appends bytes directly to each subscriber's outbound
 `ArrayList` and kicks a single `write` per connection per publish,
 with partial-write handling.
 
+### Single-threaded, on purpose
+
+The entire pipeline (parsing, subject matching, rule evaluation,
+fan-out, write buffering) runs on one loop thread. The kernel does
+I/O on other cores (RSS, softirq, io_uring's submission-queue workers
+on Linux), but every application callback lands back on the loop. No
+work is offloaded to a thread pool; there is no thread pool.
+
+This is a deliberate simplicity call, not an oversight. It's what
+lets `Router`, `Conn`, and the LVC touch shared state without locks;
+lets the refcount be a plain `u32`; lets LVC buffers reuse capacity
+via `clearRetainingCapacity` + `appendSlice`; and lets fan-out alias
+slices directly into caller buffers. Adding threads would break every
+one of those.
+
+The cost is a one-core ceiling. A heavy rule (`(moving-avg 1000 ...)`
+on a hot subject) or a large fan-out stalls every other connection
+for its duration. For the workloads monoblok targets (a signal-
+conditioning patchbay in front of modest pub/sub traffic) this is a
+good trade. If you outgrow one core, the path forward is **sharding**
+(N independent loops, subjects hashed to a home shard, cross-shard
+publishes via MPSC queues), not threading the existing loop.
+
 See `CLAUDE.md` for module-level detail.
 
 ## Tests

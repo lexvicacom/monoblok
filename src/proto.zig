@@ -80,7 +80,7 @@ pub fn parseClientOp(buf: []const u8) ParseError!ParseResult {
 }
 
 fn parseSub(rest: []const u8) ParseError!ClientOp {
-    var it = Fields.init(rest);
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
     const subject = it.next() orelse return error.InvalidArgs;
     const a = it.next() orelse return error.InvalidArgs;
     const b = it.next();
@@ -90,7 +90,7 @@ fn parseSub(rest: []const u8) ParseError!ClientOp {
 }
 
 fn parseUnsub(rest: []const u8) ParseError!ClientOp {
-    var it = Fields.init(rest);
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
     const sid = it.next() orelse return error.InvalidArgs;
     const max_str = it.next();
     if (it.next() != null) return error.InvalidArgs;
@@ -102,7 +102,7 @@ fn parseUnsub(rest: []const u8) ParseError!ClientOp {
 }
 
 fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!ParseResult {
-    var it = Fields.init(rest);
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
     const subject = it.next() orelse return error.InvalidArgs;
     const a = it.next() orelse return error.InvalidArgs;
     const b = it.next();
@@ -140,28 +140,6 @@ fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Parse
         .consumed = line_end + nbytes + trailer_len,
     };
 }
-
-const Fields = struct {
-    rest: []const u8,
-
-    fn init(s: []const u8) Fields {
-        return .{ .rest = s };
-    }
-
-    fn next(self: *Fields) ?[]const u8 {
-        var i: usize = 0;
-        while (i < self.rest.len and (self.rest[i] == ' ' or self.rest[i] == '\t')) : (i += 1) {}
-        if (i == self.rest.len) {
-            self.rest = self.rest[i..];
-            return null;
-        }
-        const start = i;
-        while (i < self.rest.len and self.rest[i] != ' ' and self.rest[i] != '\t') : (i += 1) {}
-        const tok = self.rest[start..i];
-        self.rest = self.rest[i..];
-        return tok;
-    }
-};
 
 fn eqIgnoreCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;

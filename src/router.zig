@@ -18,31 +18,44 @@ pub const Conn = struct {
     /// bytes that need to be written. Single-threaded, no locking needed.
     kick_ctx: ?*anyopaque = null,
     kick_fn: ?*const fn (ctx: *anyopaque) void = null,
-    /// Refcount for lifetime across fan-out. Starts at 1; fan-out does not
-    /// retain in the single-threaded model (we finish fan-out before the
-    /// loop returns to the handler that might close the conn), but we keep
-    /// the primitive for future expansion.
-    refs: u32 = 1,
-    closed: bool = false,
+    /// Refcount for lifetime across fan-out. Starts at 1; fan-out does
+    /// not retain in the current single-threaded model (fan-out finishes
+    /// before the loop returns to the handler that might close the
+    /// conn), but `refs` is atomic so that a future sharded / worker
+    /// model can retain across thread boundaries without a refactor.
+    refs: std.atomic.Value(u32) = .init(1),
+    /// Set by the owning loop before `removeAllFor`; read by fan-out and
+    /// `writeMsg` to short-circuit work on a dying conn. Atomic so the
+    /// close signal is visible across threads if fan-out ever moves off
+    /// the loop thread.
+    closed: std.atomic.Value(bool) = .init(false),
 
     pub fn kick(c: *Conn) void {
         if (c.kick_fn) |f| if (c.kick_ctx) |ctx| f(ctx);
     }
 
     pub fn retain(c: *Conn) void {
-        c.refs += 1;
+        _ = c.refs.fetchAdd(1, .monotonic);
     }
 
     pub fn release(c: *Conn) void {
-        c.refs -= 1;
-        if (c.refs == 0) {
+        // Release-before / acquire-on-last-drop pairs the writer's stores
+        // on the last release with the reader's dealloc — standard refcount
+        // fence idiom so non-atomic fields touched by other threads
+        // happen-before the `destroy`.
+        if (c.refs.fetchSub(1, .release) == 1) {
+            _ = c.refs.load(.acquire);
             c.out.deinit(c.gpa);
             c.gpa.destroy(c);
         }
     }
 
     pub fn markClosed(c: *Conn) void {
-        c.closed = true;
+        c.closed.store(true, .release);
+    }
+
+    pub fn isClosed(c: *const Conn) bool {
+        return c.closed.load(.acquire);
     }
 
     pub fn writeMsg(
@@ -52,7 +65,7 @@ pub const Conn = struct {
         reply: ?[]const u8,
         payload: []const u8,
     ) !void {
-        if (c.closed) return;
+        if (c.isClosed()) return;
         try proto.writeMsg(c.gpa, &c.out, subject, sid, reply, payload);
     }
 };
@@ -208,7 +221,7 @@ pub const Router = struct {
         var i: usize = 0;
         while (i < self.subs.items.len) {
             var s = &self.subs.items[i];
-            if (s.conn.closed) {
+            if (s.conn.isClosed()) {
                 self.freeSub(s);
                 _ = self.subs.swapRemove(i);
                 continue;

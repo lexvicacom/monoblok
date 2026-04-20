@@ -219,49 +219,96 @@ fn evalSymbol(ctx: *Context, name: []const u8) EvalError!Value {
     return error.UnknownSymbol;
 }
 
+const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread };
+
+const special_form_map = std.StaticStringMap(SpecialForm).initComptime(.{
+    .{ "if", .@"if" },
+    .{ "when", .@"when" },
+    .{ "and", .@"and" },
+    .{ "or", .@"or" },
+    .{ "do", .do },
+    .{ "->", .thread },
+});
+
+const Op = enum {
+    publish, publish_to, subject_append, str_concat,
+    not, eq, gt, lt, ge, le,
+    add, sub, mul, div,
+    contains, round, quantize, squelch, deadband,
+    moving_avg, moving_sum, moving_max, moving_min,
+};
+
+const op_map = std.StaticStringMap(Op).initComptime(.{
+    .{ "publish", .publish },
+    .{ "publish-to", .publish_to },
+    .{ "subject-append", .subject_append },
+    .{ "str-concat", .str_concat },
+    .{ "not", .not },
+    .{ "=", .eq },
+    .{ ">", .gt },
+    .{ "<", .lt },
+    .{ ">=", .ge },
+    .{ "<=", .le },
+    .{ "+", .add },
+    .{ "-", .sub },
+    .{ "*", .mul },
+    .{ "/", .div },
+    .{ "contains?", .contains },
+    .{ "round", .round },
+    .{ "quantize", .quantize },
+    .{ "squelch", .squelch },
+    .{ "deadband", .deadband },
+    .{ "moving-avg", .moving_avg },
+    .{ "moving-sum", .moving_sum },
+    .{ "moving-max", .moving_max },
+    .{ "moving-min", .moving_min },
+});
+
 fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
     if (items.len == 0) return .nil;
     if (items[0] != .symbol) return error.TypeMismatch;
     const op = items[0].symbol;
     const args = items[1..];
 
-    // Special forms that don't pre-evaluate their args.
-    if (std.mem.eql(u8, op, "if")) return evalIf(ctx, args);
-    if (std.mem.eql(u8, op, "when")) return evalWhen(ctx, args);
-    if (std.mem.eql(u8, op, "and")) return evalAnd(ctx, args);
-    if (std.mem.eql(u8, op, "or")) return evalOr(ctx, args);
-    if (std.mem.eql(u8, op, "do")) return evalDo(ctx, args);
-    if (std.mem.eql(u8, op, "->")) return evalThread(ctx, args);
+    if (special_form_map.get(op)) |sf| return switch (sf) {
+        .@"if" => evalIf(ctx, args),
+        .@"when" => evalWhen(ctx, args),
+        .@"and" => evalAnd(ctx, args),
+        .@"or" => evalOr(ctx, args),
+        .do => evalDo(ctx, args),
+        .thread => evalThread(ctx, args),
+    };
 
-    // Ordinary functions: evaluate args left-to-right, then dispatch.
+    const tag = op_map.get(op) orelse return error.UnknownSymbol;
+
     const evaled = try ctx.arena.alloc(Value, args.len);
     for (args, 0..) |a, i| evaled[i] = try eval(ctx, a);
 
-    if (std.mem.eql(u8, op, "publish")) return callPublish(ctx, evaled);
-    if (std.mem.eql(u8, op, "publish-to")) return callPublishTo(ctx, evaled);
-    if (std.mem.eql(u8, op, "subject-append")) return callSubjectAppend(ctx, evaled);
-    if (std.mem.eql(u8, op, "str-concat")) return callStrConcat(ctx, evaled);
-    if (std.mem.eql(u8, op, "not")) return callNot(evaled);
-    if (std.mem.eql(u8, op, "=")) return callEq(evaled);
-    if (std.mem.eql(u8, op, ">")) return callCmp(evaled, .gt);
-    if (std.mem.eql(u8, op, "<")) return callCmp(evaled, .lt);
-    if (std.mem.eql(u8, op, ">=")) return callCmp(evaled, .ge);
-    if (std.mem.eql(u8, op, "<=")) return callCmp(evaled, .le);
-    if (std.mem.eql(u8, op, "+")) return callArith(evaled, .add);
-    if (std.mem.eql(u8, op, "-")) return callArith(evaled, .sub);
-    if (std.mem.eql(u8, op, "*")) return callArith(evaled, .mul);
-    if (std.mem.eql(u8, op, "/")) return callArith(evaled, .div);
-    if (std.mem.eql(u8, op, "contains?")) return callContains(evaled);
-    if (std.mem.eql(u8, op, "round")) return callRound(evaled);
-    if (std.mem.eql(u8, op, "quantize")) return callQuantize(evaled);
-    if (std.mem.eql(u8, op, "squelch")) return callSquelch(ctx, evaled);
-    if (std.mem.eql(u8, op, "deadband")) return callDeadband(ctx, evaled);
-    if (std.mem.eql(u8, op, "moving-avg")) return callMoving(ctx, evaled, "moving-avg", .avg);
-    if (std.mem.eql(u8, op, "moving-sum")) return callMoving(ctx, evaled, "moving-sum", .sum);
-    if (std.mem.eql(u8, op, "moving-max")) return callMoving(ctx, evaled, "moving-max", .max);
-    if (std.mem.eql(u8, op, "moving-min")) return callMoving(ctx, evaled, "moving-min", .min);
-
-    return error.UnknownSymbol;
+    return switch (tag) {
+        .publish => callPublish(ctx, evaled),
+        .publish_to => callPublishTo(ctx, evaled),
+        .subject_append => callSubjectAppend(ctx, evaled),
+        .str_concat => callStrConcat(ctx, evaled),
+        .not => callNot(evaled),
+        .eq => callEq(evaled),
+        .gt => callCmp(evaled, .gt),
+        .lt => callCmp(evaled, .lt),
+        .ge => callCmp(evaled, .ge),
+        .le => callCmp(evaled, .le),
+        .add => callArith(evaled, .add),
+        .sub => callArith(evaled, .sub),
+        .mul => callArith(evaled, .mul),
+        .div => callArith(evaled, .div),
+        .contains => callContains(evaled),
+        .round => callRound(evaled),
+        .quantize => callQuantize(evaled),
+        .squelch => callSquelch(ctx, evaled),
+        .deadband => callDeadband(ctx, evaled),
+        .moving_avg => callMoving(ctx, evaled, .avg),
+        .moving_sum => callMoving(ctx, evaled, .sum),
+        .moving_max => callMoving(ctx, evaled, .max),
+        .moving_min => callMoving(ctx, evaled, .min),
+    };
 }
 
 fn evalIf(ctx: *Context, args: []const Value) EvalError!Value {
@@ -519,7 +566,7 @@ const MovingKind = enum { avg, sum, max, min };
 /// allocated on first sight per slot; `N` must be a positive literal
 /// (well, any number ≥ 1; we round down). First call returns the
 /// aggregate over just the first sample.
-fn callMoving(ctx: *Context, args: []const Value, op_name: []const u8, kind: MovingKind) EvalError!Value {
+fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const n_f = try asNumber(args[0]);
@@ -527,6 +574,12 @@ fn callMoving(ctx: *Context, args: []const Value, op_name: []const u8, kind: Mov
     const n: usize = @intFromFloat(n_f);
     const x = try asNumber(args[1]);
 
+    const op_name = switch (kind) {
+        .avg => "moving-avg",
+        .sum => "moving-sum",
+        .max => "moving-max",
+        .min => "moving-min",
+    };
     const key = try std.fmt.allocPrint(ctx.arena, "{s}:{s}", .{ op_name, ctx.subject });
     const gop = try rule.state.getOrPut(ctx.gpa, key);
     if (!gop.found_existing) {
