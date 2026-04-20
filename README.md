@@ -1,11 +1,10 @@
-# monoblok
-
 <p align="center">
   <img src="monoblok.png" alt="monoblok" width="480" style="border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.25);">
 </p>
 
+# monoblok
 
->Experimental, partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing DSL called **patchbay**.
+An experimental, partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing DSL called **patchbay**.
 
 ## Build & run
 
