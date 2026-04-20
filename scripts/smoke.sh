@@ -7,7 +7,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${PORT:-14222}"
 BIN="$ROOT/zig-out/bin/monoblok"
-RULES="$ROOT/rules.edn"
+PATCHBAY="$ROOT/patchbay.edn"
 
 if [ ! -x "$BIN" ]; then
     echo "building..."
@@ -24,7 +24,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "starting daemon on port $PORT..."
-"$BIN" --port "$PORT" --rules "$RULES" >/tmp/monoblok-smoke-daemon.log 2>&1 &
+"$BIN" --port "$PORT" --patchbay "$PATCHBAY" >/tmp/monoblok-smoke-daemon.log 2>&1 &
 DAEMON_PID=$!
 sleep 0.5
 
@@ -194,6 +194,52 @@ if ! grep -q 'MSG events.alerts 7' "$SUB_OUT"; then
     exit 1
 fi
 echo "ok: alert rule routed"
+
+# --- Test 4: threaded pipeline (-> round squelch publish-to) ---------
+# Feed 42.01, 42.04, 42.08, 42.12, 43.00 to sensors.temp. The "stable"
+# rule is (-> payload-float (round 1) (squelch) (publish-to ...)):
+# rounds are 42.0, 42.0, 42.1, 42.1, 43.0 → squelch passes 3 of them.
+# publish-to formats numbers canonically: "42", "42.1", "43".
+(
+    printf 'CONNECT {}\r\nSUB sensors.temp.stable 11\r\n'
+    sleep 2.5
+) | nc -w 4 127.0.0.1 "$PORT" > "$SUB_OUT" &
+SUB_JOB=$!
+sleep 0.4
+
+(
+    for v in 42.01 42.04 42.08 42.12 43.00; do
+        printf 'PUB sensors.temp %d\r\n%s\r\n' "${#v}" "$v"
+    done
+    # Include CONNECT so the daemon accepts the session; prepend it.
+    :
+) | (
+    printf 'CONNECT {}\r\n'
+    cat
+    sleep 0.6
+) | nc -w 3 127.0.0.1 "$PORT" > "$PUB_OUT"
+
+wait $SUB_JOB 2>/dev/null || true
+
+STABLE_COUNT=$(grep -c '^MSG sensors.temp.stable 11 ' "$SUB_OUT" || true)
+if [ "$STABLE_COUNT" != "3" ]; then
+    echo "FAIL: expected 3 MSG on sensors.temp.stable, got $STABLE_COUNT"
+    echo "---- got ----"
+    cat "$SUB_OUT"
+    exit 1
+fi
+# Strip \r for a stable payload check; expect exactly these three payloads.
+PAYLOADS=$(tr -d '\r' < "$SUB_OUT" | awk '/^MSG sensors\.temp\.stable/ { getline; print }')
+EXPECTED=$'42\n42.1\n43'
+if [ "$PAYLOADS" != "$EXPECTED" ]; then
+    echo "FAIL: threaded pipeline payload mismatch"
+    echo "---- expected ----"
+    echo "$EXPECTED"
+    echo "---- got ----"
+    echo "$PAYLOADS"
+    exit 1
+fi
+echo "ok: threaded pipeline emitted rounded+squelched values"
 
 echo
 echo "all smoke tests passed."

@@ -13,12 +13,12 @@ pub const server = @import("server.zig");
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const arena = init.arena.allocator();
-    const fsio = init.io; // Only used for loading the rules file at startup.
+    const fsio = init.io; // Only used for loading the patchbay file at startup.
 
     const args = try init.minimal.args.toSlice(arena);
 
     var port: u16 = 4222;
-    var rules_path: ?[]const u8 = null;
+    var patchbay_path: ?[]const u8 = null;
     var lvc_enabled = true;
 
     var i: usize = 1;
@@ -28,10 +28,11 @@ pub fn main(init: std.process.Init) !void {
             i += 1;
             if (i >= args.len) fatal("--port requires a value");
             port = std.fmt.parseInt(u16, args[i], 10) catch fatal("invalid port");
-        } else if (std.mem.eql(u8, a, "--rules")) {
+        } else if (std.mem.eql(u8, a, "--patchbay") or std.mem.eql(u8, a, "--rules")) {
+            // `--rules` is kept as a silent alias so existing scripts don't break.
             i += 1;
-            if (i >= args.len) fatal("--rules requires a path");
-            rules_path = args[i];
+            if (i >= args.len) fatal("--patchbay requires a path");
+            patchbay_path = args[i];
         } else if (std.mem.eql(u8, a, "--no-lvc")) {
             lvc_enabled = false;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
@@ -40,14 +41,15 @@ pub fn main(init: std.process.Init) !void {
         } else fatal("unknown argument");
     }
 
-    const loaded_rules = blk: {
-        if (rules_path) |path| {
+    const loaded_rules: []rules.Rule = blk: {
+        if (patchbay_path) |path| {
             const src = try readFile(fsio, arena, path);
             break :blk try rules.loadRules(arena, src);
         }
-        break :blk &[_]rules.Rule{};
+        break :blk &.{};
     };
-    std.log.info("loaded {d} rule(s)", .{loaded_rules.len});
+    defer rules.deinitRules(loaded_rules, gpa);
+    std.log.info("loaded {d} patchbay form(s)", .{loaded_rules.len});
     std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
     std.log.info("lvc: {s}", .{if (lvc_enabled) "enabled" else "disabled"});
 
@@ -103,15 +105,16 @@ fn fatal(msg: []const u8) noreturn {
 
 fn printUsage() void {
     std.debug.print(
-        \\Usage: monoblok [--port PORT] [--rules FILE] [--no-lvc]
+        \\Usage: monoblok [--port PORT] [--patchbay FILE] [--no-lvc]
         \\
-        \\A NATS-compatible daemon with S-expression routing rules.
+        \\A NATS-compatible daemon with an S-expression routing DSL ("patchbay").
         \\
         \\Options:
-        \\  --port PORT    TCP port to listen on (default 4222)
-        \\  --rules FILE   Path to rules file (optional)
-        \\  --no-lvc       Disable the last-value cache and $LVC.* live streams.
-        \\                 The LVC is on by default; overhead is ~2-4% in benches.
+        \\  --port PORT      TCP port to listen on (default 4222)
+        \\  --patchbay FILE  Path to patchbay file (optional). --rules is a
+        \\                   backwards-compatible alias.
+        \\  --no-lvc         Disable the last-value cache and $LVC.* live
+        \\                   streams. LVC is on by default; overhead ~2-4%.
         \\
     , .{});
 }

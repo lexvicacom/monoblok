@@ -18,7 +18,7 @@ pub const Server = struct {
     gpa: Allocator,
     loop: *xev.Loop,
     router: *router_mod.Router,
-    rules: []const rules_mod.Rule,
+    rules: []rules_mod.Rule,
     listener: xev.TCP,
     accept_completion: xev.Completion = undefined,
     next_conn_id: u64 = 1,
@@ -272,6 +272,7 @@ const Conn = struct {
                     .payload = payload,
                     .publisher = router_mod.rulesPublisher(router),
                     .arena = arena,
+                    .gpa = gpa,
                 };
                 rules_mod.run(self.server.rules, &ctx) catch |err| {
                     std.log.warn("rule error: {s}", .{@errorName(err)});

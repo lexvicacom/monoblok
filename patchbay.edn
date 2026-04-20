@@ -1,0 +1,68 @@
+; Example rules for monoblok.
+;
+; Each top-level form is (on SUBJECT-FILTER BODY).
+; BODY runs whenever an incoming publish subject matches the filter.
+;
+; Inside BODY:
+;   subject       - bare symbol, evaluates to the incoming subject string
+;   payload       - bare symbol, evaluates to the payload bytes
+;   payload-float - bare symbol, parses payload as a float
+;
+;   (publish SUBJ PAYLOAD)
+;   (subject-append SUFFIX)            - produces "SUBJECT.SUFFIX"
+;   (str-concat A B C ...)
+;   (when COND BODY...) / (if C T E) / (and ...) / (or ...) / (not X)
+;   (= A B) / (> A B) / (< A B) / (>= A B) / (<= A B)
+;   (+ ...) (- ...) (* ...) (/ ...)
+;   (contains? HAYSTACK NEEDLE)
+;   (round DECIMALS X)                  - round X to N decimal places
+;   (quantize STEP X)                   - snap X to nearest multiple of STEP
+;   (squelch X)                         - pass X through iff it differs from
+;                                         last X seen (nil otherwise)
+;   (deadband DELTA X)                  - pass X through iff changed by >= DELTA
+;                                         (nil otherwise)
+;   (moving-avg N X)                    - running mean over last N samples
+;   (moving-sum N X)                    - running sum over last N samples
+;   (moving-max N X) / (moving-min N X) - window extremes
+;
+;   (-> X f1 f2 ...)                    - thread X through each form as its
+;                                         last argument: (-> x (f 1) g)
+;                                         expands to (g (f 1 x)). A gate
+;                                         returning nil short-circuits any
+;                                         downstream (publish-to ...).
+;   (publish-to SUBJECT VALUE)          - like publish with args flipped,
+;                                         no-op when VALUE is nil. Numbers
+;                                         are formatted canonically.
+
+; Fan high temperature readings out to a dedicated sub-subject.
+(on "sensors.*"
+  (when (> payload-float 30.0)
+    (publish (subject-append "high") payload)))
+
+; Mirror anything mentioning "alert" to events.alerts.
+(on ">"
+  (when (contains? payload "alert")
+    (publish "events.alerts" (str-concat subject ": " payload))))
+
+; Squelch a noisy sensor: only re-publish when the value changes after
+; rounding to 1 decimal place. Upstream may emit 42.01, 42.04, 42.08,
+; 42.12 — we emit once at 42.0 and once at 42.1.
+(on "sensors.*"
+  (-> payload-float
+      (round 1)
+      (squelch)
+      (publish-to (subject-append "stable"))))
+
+; Analog-style deadband: suppress changes smaller than 0.5.
+(on "sensors.*"
+  (-> payload-float
+      (deadband 0.5)
+      (publish-to (subject-append "delta"))))
+
+; Smooth a noisy stream with a 10-sample moving average, only emitting
+; when the smoothed value drifts by >= 1.0.
+(on "sensors.*"
+  (-> payload-float
+      (moving-avg 10)
+      (deadband 1.0)
+      (publish-to (subject-append "smoothed"))))

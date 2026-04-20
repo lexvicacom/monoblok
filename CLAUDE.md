@@ -18,9 +18,11 @@ Zig version: **0.16.0** exactly. The code assumes its stdlib shape.
 Running the daemon:
 
 ```
-./zig-out/bin/monoblok --port 4222 --rules rules.edn        # LVC on (default)
-./zig-out/bin/monoblok --port 4222 --rules rules.edn --no-lvc
+./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn        # LVC on (default)
+./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn --no-lvc
 ```
+
+The routing DSL is called the **patchbay**; its file is `patchbay.edn`. The CLI flag is `--patchbay`, with `--rules` kept as a silent backwards-compatible alias. Internal code still uses the generic names `Rule`, `rules.zig`, `loadRules` — those are implementation terms, not user-facing vocabulary.
 
 ## Architecture
 
@@ -33,7 +35,7 @@ Running the daemon:
 - `subject.zig` — pure: validates subjects, wildcard matcher (`*` token, `>` tail)
 - `proto.zig` — pure, slice-based NATS wire parser + serializers that append into a caller's `ArrayList(u8)`. Returns `ParseResult { op, consumed }` or `error.NeedMoreData`. Zero allocations on parse.
 - `sexpr.zig` — pure s-expression parser; arena-allocated output
-- `rules.zig` — depends on sexpr + subject. Compiles rule file into `[]Rule`; `run()` evaluates bodies against a `Context { subject, payload, publisher, arena }`
+- `rules.zig` — depends on sexpr + subject. Compiles rule file into `[]Rule`; `run()` evaluates bodies against a `Context { subject, payload, publisher, arena, gpa, current_rule }`. The split between `arena` (per-message scratch, reset each publish) and `gpa` (long-lived, owns the per-rule state tables for `squelch` / `deadband` / `moving-*`) is load-bearing — stateful ops must use `gpa` for anything that outlives a single message.
 - `router.zig` — depends on proto + subject + rules. Owns `Router` (subscription table + LVC `StringHashMap` with value-buffer reuse) and `Conn` (router-facing side of a connection: outbound `ArrayList(u8)`, a `kick_fn` callback that notifies the server when there are bytes to write)
 - `server.zig` — depends on everything. libxev state machine. Each connection = one `Conn` struct holding the `xev.TCP`, rx buffer, in-flight write buffer, and its `router.Conn`. On read completion: `proto.parseClientOp` in a loop until `NeedMoreData`, dispatch each op, compact the rx buffer. On each op that produces output: append to `router_conn.out`, then `maybeKickWrite` (if no write in flight, swap `out` with `in_flight_buf`, fire a `tcp.write`). Partial writes resubmit the remainder on the same completion.
 - `main.zig` — CLI parsing, rule file load, loop construction, `server_id` generation
@@ -50,9 +52,11 @@ Running the daemon:
 
 `$LVC.<subject>` is a live stream: subscribing registers a normal sub whose match filter is the stripped inner subject, plus an `is_lvc` flag. On subscribe, any matching cached value is emitted immediately. On each subsequent publish to the inner subject, router fan-out emits a MSG prefixed with `$LVC.`. Publishing to `$LVC.*` is rejected by the server as read-only. `--no-lvc` disables the cache + rejects `$LVC.*` subscribes.
 
-## Rules language
+## Patchbay (routing DSL)
 
-Top-level forms are `(on SUBJECT-FILTER BODY)`. The evaluator sees these bound symbols: `subject`, `payload`, `payload-float`. Functions: `publish`, `subject-append`, `str-concat`, `contains?`, arithmetic (`+ - * /`), comparisons (`= < <= > >=`), `not`. Special forms: `if`, `when`, `and`, `or`, `do`. **Rule-published messages go through normal fan-out but do not re-enter the rule engine** (no loops). See `rules.edn` for examples.
+Top-level forms are `(on SUBJECT-FILTER BODY)`. The evaluator sees these bound symbols: `subject`, `payload`, `payload-float`. Functions: `publish`, `publish-to`, `subject-append`, `str-concat`, `contains?`, `not`, arithmetic (`+ - * /`), comparisons (`= < <= > >=`), numeric transforms (`round`, `quantize`), stateful gates (`squelch`, `deadband` — each per-rule-per-subject, stored in `Rule.state`), and windowed aggregates (`moving-avg`, `moving-sum`, `moving-max`, `moving-min` — fixed-size ring per `(rule, subject, op)` slot). Special forms: `if`, `when`, `and`, `or`, `do`, `->`. **Messages published from the patchbay go through normal fan-out but do not re-enter the DSL** (no loops). See `patchbay.edn` and the README for examples.
+
+`(-> X f1 f2 ...)` threads X as the **last** argument of each form (last-arg, like Clojure's `->>`). Last-arg fits this dialect because the stateful/transform ops (`round`, `quantize`, `moving-*`, `squelch`, `deadband`) all take the value last. Gates (`squelch`, `deadband`) pass the value through on success and return `nil` on suppress. `publish-to` is a no-op on `nil`, which is what makes `(-> payload-float (round 1) (squelch) (publish-to (subject-append "stable")))` read top-to-bottom as "round, dedupe, emit."
 
 ## NATS protocol scope
 

@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
 
     // `zig build dist` — ReleaseSafe cross-compiles for common targets,
-    // staged into dist/<triple>/ alongside rules.edn and the bench script.
+    // staged into dist/<triple>/ alongside patchbay.edn and the bench script.
     // Safe (not Fast) because these are the shippable binaries — network
     // input shouldn't silently miscompute on an overflow.
     const dist_step = b.step("dist", "Cross-compile release binaries for common targets into dist/");
@@ -86,8 +86,8 @@ fn addDistTarget(
     });
     dist_step.dependOn(&install.step);
 
-    const install_rules = b.addInstallFile(b.path("rules.edn"), b.fmt("../dist/{s}/rules.edn", .{triple}));
-    dist_step.dependOn(&install_rules.step);
+    const install_patchbay = b.addInstallFile(b.path("patchbay.edn"), b.fmt("../dist/{s}/patchbay.edn", .{triple}));
+    dist_step.dependOn(&install_patchbay.step);
 
     const install_bench = b.addInstallFile(b.path("scripts/bench.sh"), b.fmt("../dist/{s}/bench.sh", .{triple}));
     dist_step.dependOn(&install_bench.step);
