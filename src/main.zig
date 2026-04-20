@@ -10,35 +10,43 @@ pub const rules = @import("rules.zig");
 pub const router = @import("router.zig");
 pub const server = @import("server.zig");
 
+const Flag = enum { port, patchbay, no_lvc, help };
+
+const flag_map = std.StaticStringMap(Flag).initComptime(.{
+    .{ "--port", .port },
+    .{ "--patchbay", .patchbay },
+    // `--rules` is kept as a silent alias so existing scripts don't break.
+    .{ "--rules", .patchbay },
+    .{ "--no-lvc", .no_lvc },
+    .{ "--help", .help },
+    .{ "-h", .help },
+});
+
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const arena = init.arena.allocator();
     const fsio = init.io; // Only used for loading the patchbay file at startup.
 
-    const args = try init.minimal.args.toSlice(arena);
-
     var port: u16 = 4222;
     var patchbay_path: ?[]const u8 = null;
     var lvc_enabled = true;
 
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const a = args[i];
-        if (std.mem.eql(u8, a, "--port")) {
-            i += 1;
-            if (i >= args.len) fatal("--port requires a value");
-            port = std.fmt.parseInt(u16, args[i], 10) catch fatal("invalid port");
-        } else if (std.mem.eql(u8, a, "--patchbay") or std.mem.eql(u8, a, "--rules")) {
-            // `--rules` is kept as a silent alias so existing scripts don't break.
-            i += 1;
-            if (i >= args.len) fatal("--patchbay requires a path");
-            patchbay_path = args[i];
-        } else if (std.mem.eql(u8, a, "--no-lvc")) {
-            lvc_enabled = false;
-        } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            printUsage();
-            return;
-        } else fatal("unknown argument");
+    var it = init.minimal.args.iterate();
+    _ = it.skip();
+    while (it.next()) |a| {
+        const flag = flag_map.get(a) orelse fatal("unknown argument");
+        switch (flag) {
+            .port => {
+                const v = it.next() orelse fatal("--port requires a value");
+                port = std.fmt.parseInt(u16, v, 10) catch fatal("invalid port");
+            },
+            .patchbay => patchbay_path = it.next() orelse fatal("--patchbay requires a path"),
+            .no_lvc => lvc_enabled = false,
+            .help => {
+                printUsage();
+                return;
+            },
+        }
     }
 
     const loaded_rules: []rules.Rule = blk: {

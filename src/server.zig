@@ -192,28 +192,21 @@ const Conn = struct {
         const gpa = self.server.gpa;
         var cursor: usize = 0;
         while (cursor < self.rx.items.len) {
-            const result = proto.parseClientOp(self.rx.items[cursor..]) catch |err| switch (err) {
-                error.NeedMoreData => break,
-                error.UnknownOp => {
-                    try proto.writeErr(gpa, &self.router_conn.out, "Unknown Protocol Operation");
-                    // Skip this line.
-                    if (std.mem.indexOfScalar(u8, self.rx.items[cursor..], '\n')) |nl| {
-                        cursor += nl + 1;
-                        continue;
-                    } else break;
-                },
-                error.InvalidArgs, error.MalformedOp => {
-                    try proto.writeErr(gpa, &self.router_conn.out, "Invalid Operation");
-                    if (std.mem.indexOfScalar(u8, self.rx.items[cursor..], '\n')) |nl| {
-                        cursor += nl + 1;
-                        continue;
-                    } else break;
-                },
-                error.ControlLineTooLong, error.PayloadTooLarge => {
-                    try proto.writeErr(gpa, &self.router_conn.out, "Protocol Violation");
-                    self.closing = true;
-                    break;
-                },
+            const result = proto.parseClientOp(self.rx.items[cursor..]) catch |err| {
+                const err_msg: []const u8 = switch (err) {
+                    error.NeedMoreData => break,
+                    error.UnknownOp => "Unknown Protocol Operation",
+                    error.InvalidArgs, error.MalformedOp => "Invalid Operation",
+                    error.ControlLineTooLong, error.PayloadTooLarge => {
+                        try proto.writeErr(gpa, &self.router_conn.out, "Protocol Violation");
+                        self.closing = true;
+                        break;
+                    },
+                };
+                try proto.writeErr(gpa, &self.router_conn.out, err_msg);
+                const nl = std.mem.indexOfScalar(u8, self.rx.items[cursor..], '\n') orelse break;
+                cursor += nl + 1;
+                continue;
             };
 
             try self.handleOp(result.op);
