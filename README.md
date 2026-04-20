@@ -15,6 +15,8 @@ zig build --release=safe
 
 Builds for the current platform. For other targets or shipping
 binaries for several platforms at once, see [Cross-compile](#cross-compile).
+Prebuilt Linux and Windows binaries are on the
+[latest release page](https://github.com/lexvicacom/monoblok/releases/latest).
 
 Any NATS client works:
 
