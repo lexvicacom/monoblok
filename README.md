@@ -31,7 +31,7 @@ headers or JetStream.
 
 ### Driving the demo patchbay
 
-The shipped `patchbay.edn` wires up a handful of forms on `sensors.*`
+The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*`
 and `log.app`. Start the daemon, then in another shell subscribe so you
 can watch the derived traffic show up:
 
