@@ -5,10 +5,9 @@
 </p>
 
 
->Experimental toy NATS-compatible pub/sub daemon (PUB, SUB, and the other
+>Experimental somewhat NATS-compatible pub/sub daemon (PUB, SUB, and the other
 basics) with a little S-expression signal-routing DSL called **patchbay**
-and last-value streams. Single event loop on
-[libxev](https://github.com/mitchellh/libxev).
+and last-value streams. 
 
 ## Build & run
 
@@ -20,13 +19,13 @@ zig build --release=fast
 Any NATS client works:
 
 ```
-nats -s nats://127.0.0.1:4222 pub sensors.temp 42.5
-nats -s nats://127.0.0.1:4222 sub 'sensors.*'
+nats pub sensors.temp 42.5
+nats sub 'sensors.*'
 ```
 
 Subjects are alphanumerics plus `- _ $`; `*` is a single token, `>` is
-a trailing wildcard. Core protocol only — no auth, TLS, queue groups,
-headers, JetStream.
+a trailing wildcard. Core protocol only: no auth, TLS, queue groups,
+headers or JetStream.
 
 ### Driving the demo patchbay
 
@@ -93,19 +92,21 @@ nats pub config.knob hello
 nats sub '$LVC.config.knob'      # prints `hello` immediately
 ```
 
+`knob` LOL.
+
 ## Patchbay
 
-The patchbay is a small S-expression DSL describing how every incoming
+patchbay is a small S-expression DSL describing how every incoming
 publish gets filtered, conditioned, and re-routed. Think of it as a
 wiring diagram: jacks (subject filters) at the top, filter chains in
 the middle (`round`, `squelch`, `deadband`, `moving-avg` …), and sends
 (`publish-to`) at the bottom. Top-level forms are
 `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming
-subject matches `SUBJECT-FILTER` (normal `*` / `>` wildcards apply).
+subject matches `SUBJECT-FILTER` (normal `*` / `>` wildcards can apply).
 Messages a patchbay form publishes fan out normally but **do not**
-re-enter the DSL — no cycles.
+re-enter the DS, there are no cycles.
 
-### What it's for
+### What it can be used for
 
 Filtering, routing, light payload rewriting, and signal conditioning
 at the broker. A form inspects an incoming message and can `publish`
@@ -120,7 +121,7 @@ storage. It's not a stream processor and not Turing-complete — closer
 to a signal-chain / patchbay with a little arithmetic and string glue
 than to a full CEP engine.
 
-```
+```edn
 (on "sensors.*"
   (when (> payload-float 30.0)
     (publish (subject-append "high") payload)))
@@ -210,7 +211,7 @@ A bare symbol `f` is treated as the call `(f)`. Last-arg threading
 fits this dialect because every stateful/transform op takes the value
 last:
 
-```
+```edn
 (-> payload-float
     (round 1)
     (squelch)
@@ -219,7 +220,7 @@ last:
 
 expands to:
 
-```
+```edn
 (publish-to (subject-append "stable") (squelch (round 1 payload-float)))
 ```
 
@@ -248,7 +249,7 @@ anchor and only updates it on an accepted change. Both are **per rule,
 per subject** — two rules watching the same subject don't interfere,
 and the first message a rule sees on a new subject always passes.
 
-```
+```edn
 ; Jittery temperature sensor → only emit when the rounded value moves.
 (on "sensors.*"
   (-> payload-float
@@ -281,7 +282,7 @@ Memory is `N × 8 B` per `(rule, subject, op)` slot plus a small deque
 for max/min. `N` is fixed at first call — don't change it between
 invocations on the same rule.
 
-```
+```edn
 ; Smooth with a 10-sample moving average, and only emit when the
 ; smoothed value drifts by at least 1.0.
 (on "sensors.*"
@@ -383,7 +384,7 @@ on fan-out if you want to see the ceiling.
 
 Ubuntu 24.04 (2-core AMD EPYC KVM VM, 4 GB), Zig 0.16, libxev
 io_uring backend, vs `nats-server` v2.12.7 on the same machine.
-ReleaseSafe (via `zig build dist`).
+ReleaseSafe (via `zig build dist`). I think this is the second cheapest machine Hetzner sell.
 
 Publish-only:
 
@@ -401,7 +402,7 @@ Fan-out:
 | 10 | 2.87M msg/s | 3.01M msg/s |
 | 50 | 4.51M msg/s | 3.28M msg/s |
 
-Numbers are lower than the M2 MBA as expected for a 2-vCPU cloud VM.
+Numbers are lower than the M2 MBA as expected for a 2-vCPU cheap cloud VM.
 io_uring works cleanly end-to-end. Single-subscriber fan-out is weak —
 the 1-sub workload is dominated by scheduling on a 2-vCPU box and our
 profile differs from nats-server's there; ~10 subs onward it levels
@@ -412,7 +413,7 @@ out.
 Zig 0.16's `std.Io` networking backends are broken on every target we
 tried: `Dispatch` (macOS) has no net ops, `Kqueue` references a vtable
 field that no longer exists, `Uring` has error-set mismatches. libxev
-has working kqueue/io_uring/epoll/IOCP, so that's what we use.
+has working kqueue/io_uring/epoll/IOCP, so that's what we use. It's great.
 
 ## Cross-compile
 
