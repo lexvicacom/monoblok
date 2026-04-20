@@ -5,9 +5,7 @@
 </p>
 
 
->Experimental somewhat NATS-compatible pub/sub daemon (PUB, SUB, and the other
-basics) with a little S-expression signal-routing DSL called **patchbay**
-and last-value streams. 
+>Experimental, partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing DSL called **patchbay**.
 
 ## Build & run
 
