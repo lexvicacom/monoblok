@@ -9,9 +9,12 @@ An experimental, partially NATS-compatible pub/sub daemon with last-value stream
 ## Build & run
 
 ```
-zig build --release=fast
+zig build --release=safe
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
 ```
+
+Builds for the current platform. For other targets or shipping
+binaries for several platforms at once, see [Cross-compile](#cross-compile).
 
 Any NATS client works:
 
