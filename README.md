@@ -40,20 +40,20 @@ nats sub 'sensors.>'       # in one shell
 nats sub 'events.>'        # in another (for the alert rule)
 ```
 
-1. **`sensors.temp.high` — threshold.** Anything `> 30.0` is mirrored
+1. **`sensors.temp.high`, threshold.** Anything `> 30.0` is mirrored
    onto `.high`:
    ```
    nats pub sensors.temp 42.5
    ```
 
-2. **`events.alerts` — content match.** Any payload containing
+2. **`events.alerts`, content match.** Any payload containing
    `"alert"` is mirrored onto `events.alerts` with the original subject
    prepended:
    ```
    nats pub log.app "kernel: alert!"
    ```
 
-3. **`sensors.temp.stable` — round + squelch pipeline.** Only emits on
+3. **`sensors.temp.stable`, round + squelch pipeline.** Only emits on
    a change after rounding to 1 decimal. Send five values; you'll see
    three `.stable` messages with payloads `42`, `42.1`, `43`:
    ```
@@ -62,9 +62,9 @@ nats sub 'events.>'        # in another (for the alert rule)
    done
    ```
 
-4. **`sensors.temp.delta` — analog deadband.** Suppresses changes under
+4. **`sensors.temp.delta`, analog deadband.** Suppresses changes under
    `0.5`. Send six values; expect three `.delta` emissions (at `10.0`,
-   `10.6`, `11.2` — the others are within deadband of the last accepted
+   `10.6`, `11.2`; the others are within deadband of the last accepted
    anchor):
    ```
    for v in 10.0 10.2 10.4 10.6 10.7 11.2; do
@@ -72,7 +72,7 @@ nats sub 'events.>'        # in another (for the alert rule)
    done
    ```
 
-5. **`sensors.temp.smoothed` — 10-sample moving average + deadband
+5. **`sensors.temp.smoothed`, 10-sample moving average + deadband
    `1.0`.** Needs a longer stream to drift the mean past each
    threshold:
    ```
@@ -82,11 +82,11 @@ nats sub 'events.>'        # in another (for the alert rule)
    ```
 
 Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state
-**per rule, per subject** for the daemon's lifetime — restart the
+**per rule, per subject** for the daemon's lifetime; restart the
 daemon to reset. The first sample a rule sees on a subject always
 passes the gate (no prior value to compare against).
 
-**`$LVC` cache demo** — publish once, then subscribe late and still
+**`$LVC` cache demo.** Publish once, then subscribe late and still
 receive the current value:
 
 ```
@@ -112,14 +112,14 @@ re-enter the DS, there are no cycles.
 
 Filtering, routing, light payload rewriting, and signal conditioning
 at the broker. A form inspects an incoming message and can `publish`
-zero or more derived messages on other subjects — think "threshold
+zero or more derived messages on other subjects; think "threshold
 this numeric stream onto a `.high` sub-subject," "mirror anything
 mentioning `alert` into `events.alerts`," "split a firehose into
 per-tenant subjects," or "deadband a jittery sensor so only meaningful
 changes hit downstream." The stateful primitives (`squelch`,
 `deadband`, `moving-*`) keep O(1) per-`(rule, subject)` state but
 there's no time-based windowing, no aggregation across messages, no
-storage. It's not a stream processor and not Turing-complete — closer
+storage. It's not a stream processor and not Turing-complete; closer
 to a signal-chain / patchbay with a little arithmetic and string glue
 than to a full CEP engine.
 
@@ -194,15 +194,15 @@ Variadic, left-fold, numeric. Single-arg variants follow Clojure:
 
 ### Side effects
 
-`(publish SUBJECT PAYLOAD)` — validates `SUBJECT` as a publishable
+`(publish SUBJECT PAYLOAD)` validates `SUBJECT` as a publishable
 subject (no wildcards, no `$LVC.*`) and enqueues a fan-out. Returns
 `nil`. Publishes from rules participate in normal delivery + LVC
 caching but are not themselves fed back through rule evaluation.
 
-`(publish-to SUBJECT VALUE)` — same thing with args flipped so it
+`(publish-to SUBJECT VALUE)` is the same thing with args flipped so it
 slots on the tail of a `->` pipeline. Coerces numeric `VALUE` to its
-canonical string form. If `VALUE` is `nil` — which is what a gate
-returns when it suppresses — `publish-to` is a no-op. That nil
+canonical string form. If `VALUE` is `nil` (which is what a gate
+returns when it suppresses), `publish-to` is a no-op. That nil
 short-circuit is what makes the pipeline form below read
 top-to-bottom.
 
@@ -233,7 +233,7 @@ gate blocks. You don't need `when` anywhere in a threaded pipeline.
 ### Idempotent filters
 
 Real sensor streams are noisy. These four primitives turn a chatty
-publisher into a "change-only" one without any timers or windows —
+publisher into a "change-only" one without any timers or windows;
 one slot of state per subject the rule has ever seen.
 
 | form                  | behavior                                                                       |
@@ -243,12 +243,12 @@ one slot of state per subject the rule has ever seen.
 | `(squelch X)`         | pass `X` through iff it differs from the last `X` seen on this (rule, subject) |
 | `(deadband DELTA X)`  | pass `X` through iff numeric `X` changed by at least `DELTA` since last emit   |
 
-Gates return the value on pass and `nil` on suppress — truthy-on-pass
+Gates return the value on pass and `nil` on suppress. Truthy-on-pass
 keeps them usable as conditions in `when` / `and`, while passing the
 value through makes them compose directly with `->` and `publish-to`.
 `squelch` stores the stringified value; `deadband` stores the numeric
 anchor and only updates it on an accepted change. Both are **per rule,
-per subject** — two rules watching the same subject don't interfere,
+per subject**: two rules watching the same subject don't interfere,
 and the first message a rule sees on a new subject always passes.
 
 ```edn
@@ -259,7 +259,7 @@ and the first message a rule sees on a new subject always passes.
       (squelch)
       (publish-to (subject-append "stable"))))
 
-; Analog deadband — suppress changes below 0.5.
+; Analog deadband: suppress changes below 0.5.
 (on "sensors.*"
   (-> payload-float
       (deadband 0.5)
@@ -270,7 +270,7 @@ and the first message a rule sees on a new subject always passes.
 
 A small ring-buffer family for smoothing and window-based triggers.
 Each call site gets its own N-wide ring, keyed by `(rule, subject, op)`
-— so `(moving-avg 10 ...)` and `(moving-max 10 ...)` in the same rule
+, so `(moving-avg 10 ...)` and `(moving-max 10 ...)` in the same rule
 maintain independent windows.
 
 | form                 | returns | cost                                    |
@@ -281,7 +281,7 @@ maintain independent windows.
 | `(moving-min N X)`   | number  | O(1) amortized                          |
 
 Memory is `N × 8 B` per `(rule, subject, op)` slot plus a small deque
-for max/min. `N` is fixed at first call — don't change it between
+for max/min. `N` is fixed at first call; don't change it between
 invocations on the same rule.
 
 ```edn
@@ -303,9 +303,9 @@ invocations on the same rule.
 ```
 
 Ring ops return numbers, so they compose directly with the arithmetic,
-comparison, and gating primitives above — no special pipeline syntax.
+comparison, and gating primitives above. No special pipeline syntax.
 
-## `$LVC.*` — last-value stream
+## `$LVC.*`: last-value stream
 
 Every subject has an implicit last-value cache. Subscribing to
 `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value
@@ -343,8 +343,8 @@ bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
 
 Fair warning before the numbers: `nats-server` is a mature, battle-tested
 Go codebase with a decade of production history behind it. It's doing
-substantially more than monoblok — accounting, logging, metrics, slow-consumer
-detection, account isolation, clustering, JetStream, TLS, auth — any of
+substantially more than monoblok: accounting, logging, metrics, slow-consumer
+detection, account isolation, clustering, JetStream, TLS, auth, any of
 which has a non-zero runtime cost even when unused. monoblok is a
 comparative toy implementing a tiny slice of that. Treat these numbers as
 informational, not as a claim of "faster than nats-server."
@@ -358,7 +358,7 @@ figures in proportion to how much your rules do.
 
 M2 MacBook Air (8-core, 16 GB), Zig 0.16, libxev kqueue backend,
 vs `nats-server` 2.9.6 on the same machine. `nats bench` as the load
-generator. Single run each — indicative, not rigorous. monoblok built
+generator. Single run each: indicative, not rigorous. monoblok built
 with `--release=safe` (what `zig build dist` produces).
 
 Publish-only:
@@ -405,7 +405,7 @@ Fan-out:
 | 50 | 4.51M msg/s | 3.28M msg/s |
 
 Numbers are lower than the M2 MBA as expected for a 2-vCPU cheap cloud VM.
-io_uring works cleanly end-to-end. Single-subscriber fan-out is weak —
+io_uring works cleanly end-to-end. Single-subscriber fan-out is weak;
 the 1-sub workload is dominated by scheduling on a 2-vCPU box and our
 profile differs from nats-server's there; ~10 subs onward it levels
 out.
@@ -430,7 +430,7 @@ zig build dist
 # dist/x86_64-windows-gnu/  → monoblok.exe
 ```
 
-Pick one and `scp` it anywhere — the Linux binaries are statically
+Pick one and `scp` it anywhere. The Linux binaries are statically
 linked against musl so there's no glibc dependency.
 
 For an ad-hoc one-off target that isn't in the dist set, the vanilla
@@ -452,7 +452,7 @@ workflow in `.github/workflows/release.yml`: it runs tests, runs
 `zip` for Windows), and attaches them to a new GitHub release.
 
 Only Linux (`x86_64`, `aarch64`) and Windows (`x86_64`) binaries are
-shipped. macOS is not included — unsigned Mac binaries hit Gatekeeper
+shipped. macOS is not included: unsigned Mac binaries hit Gatekeeper
 warnings and want an `xattr -d com.apple.quarantine` dance, which is
 more friction than just building locally. If you're on a Mac:
 `zig build --release=safe`.
