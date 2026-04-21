@@ -9,6 +9,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
+const package_version = @import("manifest").version;
+
 pub const max_control_line = 4096;
 pub const max_payload = 1 * 1024 * 1024;
 
@@ -162,8 +164,8 @@ pub fn writeInfo(
         "INFO {{" ++
             "\"server_id\":\"{s}\"," ++
             "\"server_name\":\"{s}\"," ++
-            "\"version\":\"0.1.0\"," ++
-            "\"zig\":\"{s}\"," ++
+            "\"version\":\"{s}\"," ++
+            "\"zig_version\":\"{s}\"," ++
             "\"proto\":1," ++
             "\"host\":\"{s}\"," ++
             "\"port\":{d}," ++
@@ -173,7 +175,7 @@ pub fn writeInfo(
             "\"auth_required\":false," ++
             "\"tls_required\":false" ++
         "}}\r\n",
-        .{ server_id, server_id, builtin.zig_version_string, host, port, max_payload, client_id },
+        .{ server_id, server_id, package_version, builtin.zig_version_string, host, port, max_payload, client_id },
     );
 }
 

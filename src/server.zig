@@ -26,6 +26,16 @@ const out_queued_warn_threshold: usize = 4 * 1024 * 1024;
 /// `--stats` flushes a summary line every this many inbound PUBs.
 const stats_interval: u64 = 10_000;
 
+/// Reserved prefix for the stats stream. Client publishes to `$STATS.*`
+/// are rejected (same rule as `$LVC.*`); the server emits to it on a
+/// wall-clock tick. Subscribers read via `$LVC.$STATS.>` for last-value
+/// or `$STATS.>` for live deltas.
+const stats_prefix = "$STATS.";
+
+/// Wall-clock tick for `$STATS.*` publishes. Short enough to feel live,
+/// long enough that tight loops don't spend noticeable time here.
+const stats_tick_ms: u64 = 1_000;
+
 pub const Server = struct {
     gpa: Allocator,
     loop: *xev.Loop,
@@ -46,6 +56,15 @@ pub const Server = struct {
     stats_pubs: u64 = 0,
     stats_max_rule_publishes: u32 = 0,
     stats_max_out_hwm: usize = 0,
+
+    /// Cumulative total of inbound client PUBs since server start. Published
+    /// on the `$STATS.*` tick.
+    total_pubs: u64 = 0,
+
+    /// Periodic `$STATS.*` publisher state. Timer fires every
+    /// `stats_tick_ms` and re-arms itself from the callback.
+    stats_timer: xev.Timer = undefined,
+    stats_completion: xev.Completion = undefined,
 
     fn recordPub(self: *Server, rule_publishes: u32) void {
         if (rule_publishes > self.stats_max_rule_publishes) {
@@ -69,6 +88,53 @@ pub const Server = struct {
         try self.listener.listen(128);
         self.listen_port = address.getPort();
         self.listener.accept(self.loop, &self.accept_completion, Server, self, onAccept);
+
+        self.stats_timer = try xev.Timer.init();
+        self.stats_timer.run(self.loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
+    }
+
+    pub fn deinit(self: *Server) void {
+        self.stats_timer.deinit();
+    }
+
+    fn onStatsTick(
+        self_opt: ?*Server,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        r: xev.Timer.RunError!void,
+    ) xev.CallbackAction {
+        _ = r catch {};
+        const self = self_opt.?;
+
+        self.emitStats() catch |err| {
+            std.log.warn("stats emit failed: {s}", .{@errorName(err)});
+        };
+
+        self.stats_timer.run(loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
+        return .disarm;
+    }
+
+    /// Publish the current cumulative totals to `$STATS.*`. Values are
+    /// u64 formatted as decimal; the router fan-outs and LVC caches them
+    /// like any other stream. `router.publish` copies the payload, so a
+    /// stack-local buffer is fine.
+    fn emitStats(self: *Server) !void {
+        try self.publishStat("$STATS.global.pubs", self.total_pubs);
+
+        var subj_buf: [64]u8 = undefined;
+        for (self.rules, 0..) |*rule, i| {
+            const emit_subj = try std.fmt.bufPrint(&subj_buf, "$STATS.rules.{d}.emitted", .{i});
+            try self.publishStat(emit_subj, rule.publishes_emitted);
+
+            const supp_subj = try std.fmt.bufPrint(&subj_buf, "$STATS.rules.{d}.suppressed", .{i});
+            try self.publishStat(supp_subj, rule.publishes_suppressed);
+        }
+    }
+
+    fn publishStat(self: *Server, subject: []const u8, value: u64) !void {
+        var buf: [32]u8 = undefined;
+        const payload = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+        try self.router.publish(subject, payload);
     }
 
     fn onAccept(
@@ -291,6 +357,12 @@ const Conn = struct {
                     try proto.writeErr(gpa, &rconn.out, "$LVC is read-only");
                     return;
                 }
+                if (std.mem.startsWith(u8, p.subject, stats_prefix)) {
+                    try proto.writeErr(gpa, &rconn.out, "$STATS is read-only");
+                    return;
+                }
+
+                self.server.total_pubs += 1;
 
                 _ = self.msg_arena.reset(.retain_capacity);
                 const arena = self.msg_arena.allocator();

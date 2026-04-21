@@ -95,6 +95,7 @@ pub fn main(init: std.process.Init) !void {
 
     const address: std.Io.net.IpAddress = .{ .ip4 = .unspecified(port) };
     try srv.listen(address);
+    defer srv.deinit();
     std.log.info("monoblok listening on {f} id={s}", .{ address, server_id });
 
     try loop.run(.until_done);
