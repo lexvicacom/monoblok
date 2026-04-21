@@ -4,7 +4,7 @@
 
 # monoblok
 
-An experimental toy, this is a partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**.
+An experimental toy, this is a partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**. [Read the introduction post](https://alexjreid.dev/posts/monoblok/)
 
 ## Build & run
 
@@ -15,7 +15,7 @@ zig build --release=safe
 
 Builds for the current platform. For other targets or shipping
 binaries for several platforms at once, see [Cross-compile](#cross-compile).
-Prebuilt Linux and Windows binaries are on the
+Prebuilt Mac (ARM only), Linux and Windows binaries are on the
 [latest release page](https://github.com/lexvicacom/monoblok/releases/latest).
 
 Any NATS client works:
@@ -542,7 +542,8 @@ zig build dist
 ```
 
 Pick one and `scp` it anywhere. The Linux binaries are statically
-linked against musl so there's no glibc dependency.
+linked against musl so there's no glibc dependency. Easy enough to
+add to a tiny container image if that's your jam.
 
 For an ad-hoc one-off target that isn't in the dist set, the vanilla
 Zig flag still works:
@@ -554,14 +555,6 @@ zig build --release=safe -Dtarget=x86_64-linux-gnu
 libxev picks the right backend at comptime: `io_uring` on Linux,
 `kqueue` on macOS, `iocp` on Windows. The daemon logs which backend
 it's using at startup.
-
-## Releases
-
-Only Linux (`x86_64`, `aarch64`) and Windows (`x86_64`) binaries are
-shipped. macOS is not included: unsigned Mac binaries hit Gatekeeper
-warnings and want an `xattr -d com.apple.quarantine` dance, which is
-more friction than just building locally. If you're on a Mac:
-`zig build --release=safe`.
 
 ## License
 
