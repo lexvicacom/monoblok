@@ -4,7 +4,7 @@
 
 # monoblok
 
-An experimental, partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing DSL called **patchbay**.
+An experimental, partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**.
 
 ## Build & run
 
@@ -108,6 +108,23 @@ subject matches `SUBJECT-FILTER` (normal `*` / `>` wildcards can apply).
 Messages a patchbay form publishes fan out normally but **do not**
 re-enter the DSL, there are no cycles.
 
+### Wait, signal conditioning?
+
+Borrowed from electronics, where it means cleaning up a raw analog
+reading before anything downstream has to deal with it: smoothing
+noise, ignoring tiny wobbles, snapping to a grid, suppressing
+duplicates. A temperature sensor that reports 22.031, 22.028, 22.034,
+22.031 fifty times a second is technically accurate and practically
+useless; you want "22.0, and tell me when it actually changes."
+
+patchbay does the software version of that, at the broker, before
+your subscribers ever see the message. `round` snaps to decimals,
+`quantize` snaps to a step size, `squelch` drops repeats, `deadband`
+ignores changes below a threshold, `moving-avg` smooths a window.
+Chain them together and a chatty sensor becomes a well-behaved
+"change-only" stream, so subscribers don't have to deal with the
+noise themselves and can stay simple: they get a clean signal.
+
 ### What it can be used for
 
 Filtering, routing, light payload rewriting, and signal conditioning
@@ -119,9 +136,7 @@ per-tenant subjects," or "deadband a jittery sensor so only meaningful
 changes hit downstream." The stateful primitives (`squelch`,
 `deadband`, `moving-*`) keep O(1) per-`(rule, subject)` state but
 there's no time-based windowing, no aggregation across messages, no
-storage. It's not a stream processor and not Turing-complete; closer
-to a signal-chain / patchbay with a little arithmetic and string glue
-than to a full CEP engine.
+storage. It's not a stream processor.
 
 ```edn
 (on "sensors.*"
@@ -369,28 +384,25 @@ with partial-write handling.
 
 ### Single-threaded, on purpose
 
-The entire pipeline (parsing, subject matching, rule evaluation,
-fan-out, write buffering) runs on one loop thread. The kernel does
-I/O on other cores (RSS, softirq, io_uring's submission-queue workers
-on Linux), but every application callback lands back on the loop. No
-work is offloaded to a thread pool; there is no thread pool.
+Everything application-level runs on one loop thread: parsing, subject
+matching, rule evaluation, fan-out, write buffering. The kernel still
+gets to use your other cores for actual I/O, but once a byte arrives
+it's single file through monoblok. No thread pool. No work queue.
+One thread.
 
-This is a deliberate simplicity call, not an oversight. It's what
-lets `Router`, `Conn`, and the LVC touch shared state without locks;
-lets the refcount be a plain `u32`; lets LVC buffers reuse capacity
-via `clearRetainingCapacity` + `appendSlice`; and lets fan-out alias
-slices directly into caller buffers. Adding threads would break every
-one of those.
+That's a choice, not a TODO. It's what lets the whole thing skip locks
+entirely, keep refcounts as plain `u32`s, reuse LVC buffers in place
+instead of reallocating, and have fan-out alias directly into caller
+buffers without copying. The moment you add a second thread, every one
+of those shortcuts turns into a bug.
 
-The cost is a one-core ceiling. A heavy rule (`(moving-avg 1000 ...)`
-on a hot subject) or a large fan-out stalls every other connection
-for its duration. For the workloads monoblok targets (a signal-
-conditioning patchbay in front of modest pub/sub traffic) this is a
-good trade. If you outgrow one core, the path forward is **sharding**
-(N independent loops, subjects hashed to a home shard, cross-shard
-publishes via MPSC queues), not threading the existing loop.
-
-See `CLAUDE.md` for module-level detail.
+The trade is a one-core ceiling. A heavy rule on a hot subject, or a
+giant fan-out, will stall every other connection while it runs.
+monoblok is aimed at signal-conditioning patchbays sitting in front
+of modest pub/sub traffic, which fits comfortably inside one core.
+If you outgrow that, the answer isn't threading the loop, it's
+**sharding**: N loops, subjects hashed to a home shard, cross-shard
+publishes over MPSC queues. That's a future problem.
 
 ## Tests
 
