@@ -106,7 +106,7 @@ the middle (`round`, `squelch`, `deadband`, `moving-avg` …), and sends
 `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming
 subject matches `SUBJECT-FILTER` (normal `*` / `>` wildcards can apply).
 Messages a patchbay form publishes fan out normally but **do not**
-re-enter the DS, there are no cycles.
+re-enter the DSL, there are no cycles.
 
 ### What it can be used for
 
@@ -132,6 +132,21 @@ than to a full CEP engine.
   (when (contains? payload "alert")
     (publish "events.alerts" (str-concat subject ": " payload))))
 ```
+
+### S-expression syntax in 30 seconds
+
+If the parens look alien: every list `(head arg1 arg2 ...)` is a call
+where `head` is the operator and the rest are its arguments. No commas,
+no infix, no precedence to memorise; `(+ 1 2 3)` is `1 + 2 + 3` and
+`(> x 10)` is `x > 10`. Nesting is just a list inside a list:
+`(publish (subject-append "high") payload)` calls `publish` with two
+args, the first of which is itself the result of calling
+`subject-append`. Strings are double-quoted, numbers bare, and
+everything else (`subject`, `payload`, `when`, `+`) is a symbol
+resolved by the evaluator.
+
+That's the whole grammar. The rest of this section is just which
+operators exist and what they do.
 
 ### Values
 
@@ -320,6 +335,29 @@ PUB foo.bar 13      ; -> subscriber receives 13
 ```
 
 On by default; `--no-lvc` disables (~2–4% overhead when enabled).
+
+## Observability
+
+Two always-on warn thresholds fire if something's off:
+
+- **Patchbay amplification**: a single inbound PUB that causes 64+
+  rule-generated publishes logs once with the offending subject.
+  Catches runaway fan-out from a misconfigured rule.
+- **Outbound buffer high-water**: if any connection's pending-write
+  buffer grows past 4 MiB between drains, logs the conn id and the
+  size. Usually means a slow consumer or a fan-out target that
+  stopped reading.
+
+`--stats` opts into a periodic summary line every 10k inbound PUBs,
+with the observed max rule-publishes-per-input and max per-conn
+outbound buffer over the window:
+
+```
+info: stats: pubs=10000 max_rule_publishes=0 max_out_hwm=41160B
+```
+
+Useful for seeing how much headroom you have under the warn thresholds.
+No output when `--stats` is off.
 
 ## Architecture
 

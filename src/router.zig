@@ -29,6 +29,10 @@ pub const Conn = struct {
     /// close signal is visible across threads if fan-out ever moves off
     /// the loop thread.
     closed: std.atomic.Value(bool) = .init(false),
+    /// Largest `out.items.len` observed on this conn between drains. The
+    /// server reads this after each PUB dispatch to detect slow-consumer
+    /// blow-ups, and resets it when it kicks a write.
+    out_hwm: usize = 0,
 
     pub fn kick(c: *Conn) void {
         if (c.kick_fn) |f| if (c.kick_ctx) |ctx| f(ctx);
@@ -67,6 +71,7 @@ pub const Conn = struct {
     ) !void {
         if (c.isClosed()) return;
         try proto.writeMsg(c.gpa, &c.out, subject, sid, reply, payload);
+        if (c.out.items.len > c.out_hwm) c.out_hwm = c.out.items.len;
     }
 };
 
