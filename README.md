@@ -148,6 +148,45 @@ storage. It's not a stream processor.
     (publish "events.alerts" (str-concat subject ": " payload))))
 ```
 
+### What about NEX and similar?
+
+[NEX](https://github.com/synadia-io/nex) (the NATS Execution Engine) is a
+workload scheduler: it runs JS functions, WebAssembly modules, or static
+Linux binaries on agents next to a NATS cluster, each with its own process,
+sandbox, and scoped NATS credentials. Triggers are general (pub/sub,
+request/reply, JetStream), and the function can do arbitrary work: HTTP
+calls, database writes, anything.
+
+patchbay is not that. It's an in-broker routing DSL evaluated on the event
+loop, no processes, no sandbox, no NATS client. The only side effect a rule
+can have is `publish`; bodies are pure over `subject` / `payload` /
+`payload-float`. It's for per-message transform and gating (quantize,
+deadband, squelch, moving averages, re-publish to another subject) without
+leaving the broker.
+
+Look at NEX when the work is arbitrary code with external I/O. Look at
+patchbay when the work is "reshape the message and maybe drop it" and you
+don't want a second process in the path. They compose fine: a NEX function
+can subscribe to the cleaned-up stream a patchbay rule is producing.
+
+### Not NATS subject mappings either
+
+nats-server has built-in [subject mappings / transforms](https://docs.nats.io/nats-concepts/subject_mapping)
+configured in the server config file: pattern-match an incoming subject
+with wildcards and rewrite it, e.g. `"bar.*.*" : "baz.{{wildcard(2)}}.{{wildcard(1)}}"`
+to swap tokens, plus partitioning helpers for splitting a firehose across
+queue workers. JetStream `republish` and stream `subject_transform` use
+the same rewrite syntax.
+
+That's pure subject rewriting: the rewritten subject still carries the
+original payload, and there's no condition on the payload, no numeric
+comparison, no state across messages. patchbay can do subject rewriting
+too (via `subject-append` and `publish` to any subject), but the thing it
+exists for is looking at `payload-float`, gating on value change, and
+maintaining per-(rule, subject) state (`squelch`, `deadband`, `moving-avg`).
+If all you want is "rename `bar.a.b` to `baz.b.a`," the built-in mappings
+are what should be used.
+
 ### S-expression syntax in 30 seconds
 
 If the parens look alien: every list `(head arg1 arg2 ...)` is a call
