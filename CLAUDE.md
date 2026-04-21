@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 zig build                    # debug build
 zig build --release=fast     # release build (use this for any benchmarking)
-zig build test               # unit tests — proto, subject, sexpr, rules
+zig build test               # unit tests (proto, subject, sexpr, rules)
+zig build dist               # ReleaseSafe cross-compile for linux-musl (x86_64, aarch64) and windows-gnu into dist/<triple>/
 bash scripts/smoke.sh        # end-to-end test: spins up daemon, drives over raw TCP with nc
 ```
 
@@ -20,6 +21,7 @@ Running the daemon:
 ```
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn        # LVC on (default)
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn --no-lvc
+./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn --stats  # log running max rule-publishes-per-input and per-conn outbound hwm every 10k PUBs
 ```
 
 The routing DSL is called the **patchbay**; its file is `patchbay.edn`. The CLI flag is `--patchbay`, with `--rules` kept as a silent backwards-compatible alias. Internal code still uses the generic names `Rule`, `rules.zig`, `loadRules` — those are implementation terms, not user-facing vocabulary.
