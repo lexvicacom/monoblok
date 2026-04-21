@@ -4,7 +4,7 @@
 
 # monoblok
 
-An experimental, partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**.
+An experimental toy, this is a partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**. [Read the introduction post](https://alexjreid.dev/posts/monoblok/)
 
 ## Build & run
 
@@ -15,7 +15,7 @@ zig build --release=safe
 
 Builds for the current platform. For other targets or shipping
 binaries for several platforms at once, see [Cross-compile](#cross-compile).
-Prebuilt Linux and Windows binaries are on the
+Prebuilt Mac (ARM only), Linux and Windows binaries are on the
 [latest release page](https://github.com/lexvicacom/monoblok/releases/latest).
 
 Any NATS client works:
@@ -423,13 +423,13 @@ with partial-write handling.
 
 ### Single-threaded, on purpose
 
-Everything application-level runs on one loop thread: parsing, subject
+Everything application-level runs on a single thread: parsing, subject
 matching, rule evaluation, fan-out, write buffering. The kernel still
 gets to use your other cores for actual I/O, but once a byte arrives
 it's single file through monoblok. No thread pool. No work queue.
 One thread.
 
-That's a choice, not a TODO. It's what lets the whole thing skip locks
+That's a deliberate choice, not a TODO. It's what lets the whole thing skip locks
 entirely, keep refcounts as plain `u32`s, reuse LVC buffers in place
 instead of reallocating, and have fan-out alias directly into caller
 buffers without copying. The moment you add a second thread, every one
@@ -440,8 +440,7 @@ giant fan-out, will stall every other connection while it runs.
 monoblok is aimed at signal-conditioning patchbays sitting in front
 of modest pub/sub traffic, which fits comfortably inside one core.
 If you outgrow that, the answer isn't threading the loop, it's
-**sharding**: N loops, subjects hashed to a home shard, cross-shard
-publishes over MPSC queues. That's a future problem.
+**sharding**: N loops - more later.
 
 ## Tests
 
@@ -548,7 +547,8 @@ macOS arm64 binaries are built natively on a macOS runner during the
 release workflow (see below), not via `zig build dist`.
 
 Pick one and `scp` it anywhere. The Linux binaries are statically
-linked against musl so there's no glibc dependency.
+linked against musl so there's no glibc dependency. Easy enough to
+add to a tiny container image if that's your jam.
 
 For an ad-hoc one-off target that isn't in the dist set, the vanilla
 Zig flag still works:
@@ -560,20 +560,6 @@ zig build --release=safe -Dtarget=x86_64-linux-gnu
 libxev picks the right backend at comptime: `io_uring` on Linux,
 `kqueue` on macOS, `iocp` on Windows. The daemon logs which backend
 it's using at startup.
-
-## Releases
-
-Pushing a tag matching `v[0-9]*` (e.g. `v0.1.0`) triggers the release
-workflow in `.github/workflows/release.yml`: it runs tests, runs
-`zig build dist` for Linux and Windows, builds natively for macOS arm64
-on a macOS runner, packages each target (`tar.gz` for Linux/macOS,
-`zip` for Windows), and attaches them to a new GitHub release.
-
-Shipped targets: Linux (`x86_64`, `aarch64`), Windows (`x86_64`), and
-macOS (`aarch64`). The macOS binaries are unsigned, so Gatekeeper will
-complain on first run; clear the quarantine attribute with
-`xattr -d com.apple.quarantine ./monoblok` or just build from source:
-`zig build --release=safe`.
 
 ## License
 
