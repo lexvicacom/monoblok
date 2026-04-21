@@ -17,6 +17,13 @@ pub const Rule = struct {
     /// Keys and stored payloads are owned by `gpa` and freed in `deinit`.
     state: std.StringHashMapUnmanaged(StateEntry) = .empty,
 
+    /// Cumulative totals since server start. Exposed via `$STATS.rules.<i>.*`.
+    /// `emitted` bumps on each successful `publish` / `publish-to` from this
+    /// rule; `suppressed` bumps whenever a gate (`squelch`, `deadband`,
+    /// `changed?`, `rising-edge`, `falling-edge`) returns nil.
+    publishes_emitted: u64 = 0,
+    publishes_suppressed: u64 = 0,
+
     pub fn deinit(self: *Rule, gpa: Allocator) void {
         var it = self.state.iterator();
         while (it.next()) |e| {
@@ -220,6 +227,10 @@ fn evalSymbol(ctx: *Context, name: []const u8) EvalError!Value {
         const n = std.fmt.parseFloat(f64, ctx.payload) catch return error.TypeMismatch;
         return .{ .number = n };
     }
+    if (std.mem.eql(u8, name, "payload-int")) {
+        const n = std.fmt.parseInt(i64, ctx.payload, 10) catch return error.TypeMismatch;
+        return .{ .number = @floatFromInt(n) };
+    }
     return error.UnknownSymbol;
 }
 
@@ -238,7 +249,9 @@ const Op = enum {
     publish, publish_to, subject_append, str_concat,
     not, eq, gt, lt, ge, le,
     add, sub, mul, div,
-    contains, round, quantize, squelch, deadband,
+    contains, starts_with, ends_with, subject_token,
+    round, quantize, clamp, min, max, abs, sign,
+    squelch, deadband, changed, delta,
     moving_avg, moving_sum, moving_max, moving_min,
     rising_edge, falling_edge,
 };
@@ -259,10 +272,20 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "*", .mul },
     .{ "/", .div },
     .{ "contains?", .contains },
+    .{ "starts-with?", .starts_with },
+    .{ "ends-with?", .ends_with },
+    .{ "subject-token", .subject_token },
     .{ "round", .round },
     .{ "quantize", .quantize },
+    .{ "clamp", .clamp },
+    .{ "min", .min },
+    .{ "max", .max },
+    .{ "abs", .abs },
+    .{ "sign", .sign },
     .{ "squelch", .squelch },
     .{ "deadband", .deadband },
+    .{ "changed?", .changed },
+    .{ "delta", .delta },
     .{ "moving-avg", .moving_avg },
     .{ "moving-sum", .moving_sum },
     .{ "moving-max", .moving_max },
@@ -307,10 +330,20 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .mul => callArith(evaled, .mul),
         .div => callArith(evaled, .div),
         .contains => callContains(evaled),
+        .starts_with => callStartsEnds(evaled, .starts),
+        .ends_with => callStartsEnds(evaled, .ends),
+        .subject_token => callSubjectToken(ctx, evaled),
         .round => callRound(evaled),
         .quantize => callQuantize(evaled),
+        .clamp => callClamp(evaled),
+        .min => callMinMax(evaled, .min),
+        .max => callMinMax(evaled, .max),
+        .abs => callAbs(evaled),
+        .sign => callSign(evaled),
         .squelch => callSquelch(ctx, evaled),
         .deadband => callDeadband(ctx, evaled),
+        .changed => callChanged(ctx, evaled),
+        .delta => callDelta(ctx, evaled),
         .moving_avg => callMoving(ctx, evaled, .avg),
         .moving_sum => callMoving(ctx, evaled, .sum),
         .moving_max => callMoving(ctx, evaled, .max),
@@ -395,6 +428,7 @@ fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
     ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
     ctx.rule_publishes += 1;
+    if (ctx.current_rule) |r| r.publishes_emitted += 1;
     return .nil;
 }
 
@@ -411,6 +445,7 @@ fn callPublishTo(ctx: *Context, args: []const Value) EvalError!Value {
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
     ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
     ctx.rule_publishes += 1;
+    if (ctx.current_rule) |r| r.publishes_emitted += 1;
     return .nil;
 }
 
@@ -506,6 +541,37 @@ fn callContains(args: []const Value) EvalError!Value {
     return .{ .boolean = std.mem.indexOf(u8, hay, needle) != null };
 }
 
+const AffixKind = enum { starts, ends };
+
+/// `(starts-with? HAY NEEDLE)` / `(ends-with? HAY NEEDLE)` — mirror `contains?`.
+fn callStartsEnds(args: []const Value, kind: AffixKind) EvalError!Value {
+    if (args.len != 2) return error.ArityMismatch;
+    const hay = try asString(args[0]);
+    const needle = try asString(args[1]);
+    return .{ .boolean = switch (kind) {
+        .starts => std.mem.startsWith(u8, hay, needle),
+        .ends => std.mem.endsWith(u8, hay, needle),
+    } };
+}
+
+/// `(subject-token N)` / `(subject-token N S)` returns the Nth
+/// dot-separated token (0-indexed) of the current subject, or of an
+/// explicit string. Returns nil if N is out of range.
+fn callSubjectToken(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len < 1 or args.len > 2) return error.ArityMismatch;
+    const n_f = try asNumber(args[0]);
+    if (n_f < 0) return error.TypeMismatch;
+    const n: usize = @intFromFloat(n_f);
+    const s = if (args.len == 2) try asString(args[1]) else ctx.subject;
+    var it = std.mem.splitScalar(u8, s, '.');
+    var i: usize = 0;
+    while (it.next()) |tok| : (i += 1) {
+        if (i == n) return .{ .string = tok };
+    }
+    return .nil;
+}
+
+
 /// `(round N X)` — round X to N decimal places. Returns a number.
 fn callRound(args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
@@ -526,6 +592,45 @@ fn callQuantize(args: []const Value) EvalError!Value {
     return .{ .number = @round(x / step) * step };
 }
 
+/// `(clamp LO HI X)` — clip X to the inclusive range [LO, HI]. Value
+/// last so it threads: `(-> payload-float (clamp 0 100))`.
+fn callClamp(args: []const Value) EvalError!Value {
+    if (args.len != 3) return error.ArityMismatch;
+    const lo = try asNumber(args[0]);
+    const hi = try asNumber(args[1]);
+    const x = try asNumber(args[2]);
+    if (lo > hi) return error.TypeMismatch;
+    return .{ .number = std.math.clamp(x, lo, hi) };
+}
+
+const MinMaxKind = enum { min, max };
+
+/// `(min A B ...)` / `(max A B ...)` — variadic over numbers; at least one arg.
+fn callMinMax(args: []const Value, kind: MinMaxKind) EvalError!Value {
+    if (args.len == 0) return error.ArityMismatch;
+    var acc = try asNumber(args[0]);
+    for (args[1..]) |a| {
+        const x = try asNumber(a);
+        acc = switch (kind) {
+            .min => @min(acc, x),
+            .max => @max(acc, x),
+        };
+    }
+    return .{ .number = acc };
+}
+
+fn callAbs(args: []const Value) EvalError!Value {
+    if (args.len != 1) return error.ArityMismatch;
+    return .{ .number = @abs(try asNumber(args[0])) };
+}
+
+/// `(sign X)` — returns -1, 0, or 1.
+fn callSign(args: []const Value) EvalError!Value {
+    if (args.len != 1) return error.ArityMismatch;
+    const x = try asNumber(args[0]);
+    return .{ .number = if (x > 0) 1.0 else if (x < 0) -1.0 else 0.0 };
+}
+
 /// `(squelch X)` — passes X through iff it differs from the last X seen
 /// on this subject by this rule, otherwise returns nil. On first sight
 /// for a subject, passes. Truthy-on-pass / falsy-on-suppress means it
@@ -536,6 +641,7 @@ fn callSquelch(ctx: *Context, args: []const Value) EvalError!Value {
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const encoded = try encodeForState(ctx.arena, args[0]);
     const changed = try stateEqualsOrStore(ctx.gpa, rule, ctx.subject, encoded);
+    if (!changed) rule.publishes_suppressed += 1;
     return if (changed) args[0] else .nil;
 }
 
@@ -564,9 +670,53 @@ fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
             return .{ .number = x };
         },
     };
-    if (@abs(x - last) < delta) return .nil;
+    if (@abs(x - last) < delta) {
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
     gop.value_ptr.* = .{ .number = x };
     return .{ .number = x };
+}
+
+/// `(changed? X)` — boolean predicate: true iff X differs from the last
+/// X seen on this subject by this rule. First sight returns true. Unlike
+/// `squelch` (returns value-or-nil), this returns a boolean so it
+/// composes cleanly inside `if` / `and` / `or`. Keyed per (rule, subject)
+/// with a distinct prefix so it doesn't collide with `squelch`.
+fn callChanged(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 1) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const encoded = try encodeForState(ctx.arena, args[0]);
+    const key = try std.fmt.allocPrint(ctx.arena, "changed?:{s}", .{ctx.subject});
+    const changed = try stateEqualsOrStore(ctx.gpa, rule, key, encoded);
+    if (!changed) rule.publishes_suppressed += 1;
+    return .{ .boolean = changed };
+}
+
+/// `(delta X)` — numeric difference between X and the last X seen on
+/// this (rule, subject). First sight returns 0. Stored as a number in
+/// the existing state union. Keyed per (rule, subject) with a distinct
+/// prefix so it doesn't collide with `deadband`.
+fn callDelta(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 1) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const x = try asNumber(args[0]);
+    const key = try std.fmt.allocPrint(ctx.arena, "delta:{s}", .{ctx.subject});
+    const gop = try rule.state.getOrPut(ctx.gpa, key);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
+        gop.value_ptr.* = .{ .number = x };
+        return .{ .number = 0 };
+    }
+    const last = switch (gop.value_ptr.*) {
+        .number => |n| n,
+        else => blk: {
+            gop.value_ptr.deinit(ctx.gpa);
+            break :blk x;
+        },
+    };
+    gop.value_ptr.* = .{ .number = x };
+    return .{ .number = x - last };
 }
 
 const EdgeKind = enum { rising, falling };
@@ -590,6 +740,7 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
     if (!gop.found_existing) {
         gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
         gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+        rule.publishes_suppressed += 1;
         return .nil;
     }
     const prev = switch (gop.value_ptr.*) {
@@ -604,6 +755,7 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
         .rising => !prev and now,
         .falling => prev and !now,
     };
+    if (!fired) rule.publishes_suppressed += 1;
     return if (fired) args[0] else .nil;
 }
 
@@ -1179,4 +1331,182 @@ test "contains? and str-concat" {
     try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
     try testing.expectEqualStrings("events.alerts", tp.buf.items[0].subject);
     try testing.expectEqualStrings("log.app: something alert here", tp.buf.items[0].payload);
+}
+
+test "starts-with? and ends-with?" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (when (and (starts-with? subject "sensors.") (ends-with? payload "!"))
+        \\    (publish "hit" payload)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "sensors.temp",
+        .payload = "boom!",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+
+    ctx.subject = "other.thing";
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+
+    ctx.subject = "sensors.temp";
+    ctx.payload = "quiet";
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+}
+
+test "subject-token extracts Nth dot-separated token" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (publish (str-concat "room." (subject-token 1)) payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "sensors.kitchen.temp",
+        .payload = "72",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("room.kitchen", tp.buf.items[0].subject);
+}
+
+test "payload-int parses integer payloads" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (when (> payload-int 100)
+        \\    (publish "big" payload)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "200",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+
+    ctx.payload = "50";
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+}
+
+test "clamp, min, max, abs, sign" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (do
+        \\    (-> payload-float (clamp 0 10) (publish-to "c"))
+        \\    (-> (min 1 2 3) (publish-to "m"))
+        \\    (-> (max 1 5 3) (publish-to "x"))
+        \\    (-> (abs -7) (publish-to "a"))
+        \\    (-> (sign -42) (publish-to "s"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "z",
+        .payload = "99",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 5), tp.buf.items.len);
+    try testing.expectEqualStrings("10", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("1", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("5", tp.buf.items[2].payload);
+    try testing.expectEqualStrings("7", tp.buf.items[3].payload);
+    try testing.expectEqualStrings("-1", tp.buf.items[4].payload);
+}
+
+test "changed? fires only on distinct values" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (when (changed? payload)
+        \\    (publish "c" payload)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "a",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try run(rules, &ctx);
+    ctx.payload = "b";
+    try run(rules, &ctx);
+    try run(rules, &ctx);
+    ctx.payload = "a";
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+}
+
+test "delta returns difference from last value" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (-> (delta payload-float) (publish-to "d")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "10",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    ctx.payload = "13";
+    try run(rules, &ctx);
+    ctx.payload = "12";
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+    try testing.expectEqualStrings("0", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("3", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("-1", tp.buf.items[2].payload);
 }

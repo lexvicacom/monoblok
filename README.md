@@ -125,6 +125,26 @@ Chain them together and a chatty sensor becomes a well-behaved
 "change-only" stream, so subscribers don't have to deal with the
 noise themselves and can stay simple: they get a clean signal.
 
+### Why the electronics vocabulary
+
+Because the operations already have names, and the names already mean
+the right thing. `squelch` on a radio suppresses the channel until
+signal strength changes; here it suppresses the message until the
+value changes. `deadband` on an industrial controller ignores input
+movement smaller than a threshold; here it ignores payload changes
+smaller than a threshold. A "patchbay" in a studio is a grid of jacks
+you physically wire between sources and destinations, which is exactly
+what the DSL looks like on the page, subject filters on the left,
+sends on the right. Reaching for "filter chain" or "stream transform"
+works, but they're generic names that carry no intuition: a reader
+who's seen a hardware squelch knob immediately knows what a
+`(squelch payload)` call does, whereas "idempotent publish filter"
+has to be explained from scratch. The terms are also specific enough
+to resist scope creep, `deadband` is a numeric gate, full stop, so
+there's no pressure to overload it into something fancier.
+
+It's also just more fun than calling everything `FilterOperatorImpl`.
+
 ### What it can be used for
 
 Filtering, routing, light payload rewriting, and signal conditioning
@@ -187,223 +207,10 @@ maintaining per-(rule, subject) state (`squelch`, `deadband`, `moving-avg`).
 If all you want is "rename `bar.a.b` to `baz.b.a`," the built-in mappings
 are what should be used.
 
-### S-expression syntax in 30 seconds
+### Reference
 
-If the parens look alien: every list `(head arg1 arg2 ...)` is a call
-where `head` is the operator and the rest are its arguments. No commas,
-no infix, no precedence to memorise; `(+ 1 2 3)` is `1 + 2 + 3` and
-`(> x 10)` is `x > 10`. Nesting is just a list inside a list:
-`(publish (subject-append "high") payload)` calls `publish` with two
-args, the first of which is itself the result of calling
-`subject-append`. Strings are double-quoted, numbers bare, and
-everything else (`subject`, `payload`, `when`, `+`) is a symbol
-resolved by the evaluator.
-
-That's the whole grammar. The rest of this section is just which
-operators exist and what they do.
-
-### Values
-
-`nil`, booleans (`true` / `false`), numbers (parsed as `f64`),
-strings (`"..."`), symbols, and lists. Truthiness: `nil` and `false`
-are falsy, everything else (including `0` and `""`) is truthy.
-
-### Bound symbols
-
-Bare symbols inside a body that resolve against the current message:
-
-| symbol          | type     | value                              |
-|-----------------|----------|------------------------------------|
-| `subject`       | string   | the incoming subject               |
-| `payload`       | string   | the raw payload bytes              |
-| `payload-float` | number   | `payload` parsed as a float (errors if not numeric) |
-
-### Special forms
-
-Evaluate their arguments lazily / with short-circuiting.
-
-| form                        | behavior                                                     |
-|-----------------------------|--------------------------------------------------------------|
-| `(if C T E?)`               | `T` if `C` is truthy, else `E` (or `nil` if omitted)         |
-| `(when C BODY...)`          | evaluate `BODY` sequentially iff `C` is truthy               |
-| `(and X...)`                | left-to-right, returns the first falsy value or the last     |
-| `(or  X...)`                | left-to-right, returns the first truthy value or the last    |
-| `(do  X...)`                | evaluate in order, return the last                           |
-| `(-> X F...)`               | thread `X` as the **last** arg of each `F` (see below)       |
-
-### Comparisons and logic
-
-All comparisons are chained: `(< a b c)` means `a < b && b < c`.
-Numeric comparisons coerce string args via `parseFloat`; `=` is
-tag-strict (a `number` never equals a `string`).
-
-| form              | notes                                                    |
-|-------------------|----------------------------------------------------------|
-| `(= a b ...)`     | all equal; same-tag, deep-equal for strings/symbols      |
-| `(> a b ...)`     | chained numeric                                          |
-| `(< a b ...)`     | chained numeric                                          |
-| `(>= a b ...)`    | chained numeric                                          |
-| `(<= a b ...)`    | chained numeric                                          |
-| `(not x)`         | boolean negation on truthiness                           |
-
-### Arithmetic
-
-Variadic, left-fold, numeric. Single-arg variants follow Clojure:
-`(- x)` negates, `(/ x)` reciprocates, `(+ x)` / `(* x)` are identity.
-
-`(+ a b ...)` `(- a b ...)` `(* a b ...)` `(/ a b ...)`
-
-### Strings and subjects
-
-| form                             | result                                              |
-|----------------------------------|-----------------------------------------------------|
-| `(str-concat a b ...)`           | concatenates string/symbol args                     |
-| `(subject-append "suffix")`      | `"<current-subject>.suffix"`                        |
-| `(contains? haystack needle)`    | boolean substring check                             |
-
-### Side effects
-
-`(publish SUBJECT PAYLOAD)` validates `SUBJECT` as a publishable
-subject (no wildcards, no `$LVC.*`) and enqueues a fan-out. Returns
-`nil`. Publishes from rules participate in normal delivery + LVC
-caching but are not themselves fed back through rule evaluation.
-
-`(publish-to SUBJECT VALUE)` is the same thing with args flipped so it
-slots on the tail of a `->` pipeline. Coerces numeric `VALUE` to its
-canonical string form. If `VALUE` is `nil` (which is what a gate
-returns when it suppresses), `publish-to` is a no-op. That nil
-short-circuit is what makes the pipeline form below read
-top-to-bottom.
-
-### Threading with `->`
-
-`(-> X f1 f2 ...)` threads `X` as the **last** argument of each `fN`.
-A bare symbol `f` is treated as the call `(f)`. Last-arg threading
-fits this dialect because every stateful/transform op takes the value
-last:
-
-```edn
-(-> payload-float
-    (round 1)
-    (squelch)
-    (publish-to (subject-append "stable")))
-```
-
-expands to:
-
-```edn
-(publish-to (subject-append "stable") (squelch (round 1 payload-float)))
-```
-
-The gates (`squelch`, `deadband`) return the value on pass and `nil`
-on suppress, so `publish-to` at the tail becomes a no-op when the
-gate blocks. You don't need `when` anywhere in a threaded pipeline.
-
-### Idempotent filters
-
-Real sensor streams are noisy. These four primitives turn a chatty
-publisher into a "change-only" one without any timers or windows;
-one slot of state per subject the rule has ever seen.
-
-| form                  | behavior                                                                       |
-|-----------------------|--------------------------------------------------------------------------------|
-| `(round N X)`         | round number `X` to `N` decimal places (pure)                                  |
-| `(quantize STEP X)`   | snap `X` to the nearest multiple of `STEP` (pure)                              |
-| `(squelch X)`         | pass `X` through iff it differs from the last `X` seen on this (rule, subject) |
-| `(deadband DELTA X)`  | pass `X` through iff numeric `X` changed by at least `DELTA` since last emit   |
-
-Gates return the value on pass and `nil` on suppress. Truthy-on-pass
-keeps them usable as conditions in `when` / `and`, while passing the
-value through makes them compose directly with `->` and `publish-to`.
-`squelch` stores the stringified value; `deadband` stores the numeric
-anchor and only updates it on an accepted change. Both are **per rule,
-per subject**: two rules watching the same subject don't interfere,
-and the first message a rule sees on a new subject always passes.
-
-```edn
-; Jittery temperature sensor → only emit when the rounded value moves.
-(on "sensors.*"
-  (-> payload-float
-      (round 1)
-      (squelch)
-      (publish-to (subject-append "stable"))))
-
-; Analog deadband: suppress changes below 0.5.
-(on "sensors.*"
-  (-> payload-float
-      (deadband 0.5)
-      (publish-to (subject-append "delta"))))
-```
-
-### Windowed aggregates
-
-A small ring-buffer family for smoothing and window-based triggers.
-Each call site gets its own N-wide ring, keyed by `(rule, subject, op)`
-, so `(moving-avg 10 ...)` and `(moving-max 10 ...)` in the same rule
-maintain independent windows.
-
-| form                 | returns | cost                                    |
-|----------------------|---------|-----------------------------------------|
-| `(moving-avg N X)`   | number  | O(1) per update (running sum)           |
-| `(moving-sum N X)`   | number  | O(1)                                    |
-| `(moving-max N X)`   | number  | O(1) amortized (monotonic deque)        |
-| `(moving-min N X)`   | number  | O(1) amortized                          |
-
-Memory is `N × 8 B` per `(rule, subject, op)` slot plus a small deque
-for max/min. `N` is fixed at first call; don't change it between
-invocations on the same rule.
-
-```edn
-; Smooth with a 10-sample moving average, and only emit when the
-; smoothed value drifts by at least 1.0.
-(on "sensors.*"
-  (-> payload-float
-      (moving-avg 10)
-      (deadband 1.0)
-      (publish-to (subject-append "smoothed"))))
-
-; Volatility detector: alert if the spread over the last 20 samples
-; exceeds 5 units. Ring ops return numbers, so the non-threaded form
-; is often clearer when you need multiple windows at once.
-(on "sensors.*"
-  (when (> (- (moving-max 20 payload-float)
-              (moving-min 20 payload-float)) 5.0)
-    (publish (subject-append "volatile") payload)))
-```
-
-Ring ops return numbers, so they compose directly with the arithmetic,
-comparison, and gating primitives above. No special pipeline syntax.
-
-### Edge gates
-
-`squelch` fires on every change; often you only want one fire per
-transition in a specific direction (alert on cross-up, all-clear on
-cross-down). Edge gates take a boolean and pass it through only on the
-matching transition.
-
-| form                  | fires when                                     |
-|-----------------------|------------------------------------------------|
-| `(rising-edge X)`     | `X` transitions from falsy to truthy           |
-| `(falling-edge X)`    | `X` transitions from truthy to falsy           |
-
-Both are **per rule, per subject**, and the first message a rule sees
-on a new subject never fires (no prior state means no edge, so no
-cold-start noise). Pair a `rising-edge` rule with a `falling-edge` rule
-on the same predicate to get alert + all-clear semantics:
-
-```edn
-; Alert once when the 60-sample moving average crosses above 28°C.
-(on "temp.*.*"
-  (-> (> (moving-avg 60 payload-float) 28.0)
-      (rising-edge)
-      (publish-to (subject-append "alert"))))
-
-; All-clear once when it drops back below.
-(on "temp.*.*"
-  (-> (> (moving-avg 60 payload-float) 28.0)
-      (falling-edge)
-      (publish-to (subject-append "ok"))))
-```
+The full DSL reference (syntax, bound symbols, every operator, all the
+tables and worked pipelines) lives in [PATCHBAY.md](./PATCHBAY.md).
 
 ## `$LVC.*`: last-value stream
 
@@ -420,6 +227,28 @@ PUB foo.bar 13      ; -> subscriber receives 13
 ```
 
 On by default; `--no-lvc` disables (~2–4% overhead when enabled).
+
+## `$STATS.*`: live counters
+
+The server publishes cumulative counters to `$STATS.*` on a 1-second
+wall-clock tick. Values are u64 decimals; subscribers compute their own
+rates across ticks. The stream goes through normal fan-out, so it's
+cached by LVC and `SUB $LVC.$STATS.>` gives the current value on
+subscribe.
+
+| subject                          | value                                             |
+|----------------------------------|---------------------------------------------------|
+| `$STATS.global.pubs`             | total inbound client PUBs since server start      |
+| `$STATS.rules.<i>.emitted`       | successful `publish` / `publish-to` calls by rule |
+| `$STATS.rules.<i>.suppressed`    | gate suppressions (squelch, deadband, changed?, rising-edge, falling-edge) by rule |
+
+Rules are indexed by position in the patchbay file, 0-based. Client
+publishes to `$STATS.*` are rejected (read-only, like `$LVC.*`).
+
+```
+SUB $LVC.$STATS.rules.0.suppressed   ; -> immediately receives current count
+SUB $STATS.global.pubs               ; -> live ticks every second
+```
 
 ## Observability
 

@@ -9,6 +9,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const manifest_mod = b.createModule(.{ .root_source_file = b.path("build.zig.zon") });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -20,6 +22,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{
             .{ .name = "xev", .module = libxev_dep.module("xev") },
+            .{ .name = "manifest", .module = manifest_mod },
         },
     });
 
@@ -53,13 +56,14 @@ pub fn build(b: *std.Build) void {
         "x86_64-windows-gnu",
     };
     for (dist_targets) |triple| {
-        addDistTarget(b, libxev_dep, dist_step, triple);
+        addDistTarget(b, libxev_dep, manifest_mod, dist_step, triple);
     }
 }
 
 fn addDistTarget(
     b: *std.Build,
     libxev_dep: *std.Build.Dependency,
+    manifest_mod: *std.Build.Module,
     dist_step: *std.Build.Step,
     triple: []const u8,
 ) void {
@@ -73,6 +77,7 @@ fn addDistTarget(
         .link_libc = true,
         .imports = &.{
             .{ .name = "xev", .module = libxev_dep.module("xev") },
+            .{ .name = "manifest", .module = manifest_mod },
         },
     });
 
