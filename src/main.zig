@@ -10,7 +10,7 @@ pub const rules = @import("rules.zig");
 pub const router = @import("router.zig");
 pub const server = @import("server.zig");
 
-const Flag = enum { port, patchbay, no_lvc, help };
+const Flag = enum { port, patchbay, no_lvc, stats, help };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -18,6 +18,7 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     // `--rules` is kept as a silent alias so existing scripts don't break.
     .{ "--rules", .patchbay },
     .{ "--no-lvc", .no_lvc },
+    .{ "--stats", .stats },
     .{ "--help", .help },
     .{ "-h", .help },
 });
@@ -30,6 +31,7 @@ pub fn main(init: std.process.Init) !void {
     var port: u16 = 4222;
     var patchbay_path: ?[]const u8 = null;
     var lvc_enabled = true;
+    var stats_enabled = false;
 
     var it = try init.minimal.args.iterateAllocator(gpa);
     defer it.deinit();
@@ -43,6 +45,7 @@ pub fn main(init: std.process.Init) !void {
             },
             .patchbay => patchbay_path = it.next() orelse fatal("--patchbay requires a path"),
             .no_lvc => lvc_enabled = false,
+            .stats => stats_enabled = true,
             .help => {
                 printUsage();
                 return;
@@ -87,6 +90,7 @@ pub fn main(init: std.process.Init) !void {
         .server_id = server_id,
         .listen_host = "0.0.0.0",
         .listen_port = port,
+        .stats_enabled = stats_enabled,
     };
 
     const address: std.Io.net.IpAddress = .{ .ip4 = .unspecified(port) };
@@ -124,6 +128,10 @@ fn printUsage() void {
         \\                   backwards-compatible alias.
         \\  --no-lvc         Disable the last-value cache and $LVC.* live
         \\                   streams. LVC is on by default; overhead ~2-4%.
+        \\  --stats          Log a running summary every 10k PUBs: max
+        \\                   rule-publishes-per-input and max per-conn
+        \\                   outbound hwm. Useful for spotting headroom
+        \\                   under threshold.
         \\
     , .{});
 }

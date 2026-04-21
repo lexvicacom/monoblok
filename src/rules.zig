@@ -190,6 +190,10 @@ pub const Context = struct {
     /// Set by `run` before each rule body executes so stateful primitives
     /// know which rule's state table to read/write.
     current_rule: ?*Rule = null,
+    /// Count of publishes the patchbay generated for this one inbound PUB.
+    /// Incremented by `callPublish` / `callPublishTo`. Read by the server
+    /// after `run()` returns to detect rule-amplification blow-ups.
+    rule_publishes: u32 = 0,
 };
 
 pub fn run(rules: []Rule, ctx: *Context) !void {
@@ -385,6 +389,7 @@ fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     const payload = try asString(args[1]);
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
     ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
+    ctx.rule_publishes += 1;
     return .nil;
 }
 
@@ -400,6 +405,7 @@ fn callPublishTo(ctx: *Context, args: []const Value) EvalError!Value {
     const payload = try coercePayload(ctx.arena, args[1]);
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
     ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
+    ctx.rule_publishes += 1;
     return .nil;
 }
 

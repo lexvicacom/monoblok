@@ -14,6 +14,18 @@ const subject_mod = @import("subject.zig");
 const rx_initial = 32 * 1024;
 const rx_max = proto.max_control_line + proto.max_payload + 64;
 
+/// Warn (once per PUB) if the patchbay emits more than this many publishes
+/// for a single inbound message. Catches rule-amplification blow-ups before
+/// they become memory/rate problems.
+const rule_publish_warn_threshold: u32 = 64;
+
+/// Warn (once per PUB) if any conn's outbound buffer grew past this many
+/// bytes during the dispatch. Catches slow-consumer / fan-out blow-ups.
+const out_queued_warn_threshold: usize = 4 * 1024 * 1024;
+
+/// `--stats` flushes a summary line every this many inbound PUBs.
+const stats_interval: u64 = 10_000;
+
 pub const Server = struct {
     gpa: Allocator,
     loop: *xev.Loop,
@@ -27,6 +39,29 @@ pub const Server = struct {
     server_id: []const u8,
     listen_host: []const u8,
     listen_port: u16,
+
+    /// `--stats` mode: print running-max summaries every `stats_interval`
+    /// PUBs. Counters are reset each time the line is printed.
+    stats_enabled: bool = false,
+    stats_pubs: u64 = 0,
+    stats_max_rule_publishes: u32 = 0,
+    stats_max_out_hwm: usize = 0,
+
+    fn recordPub(self: *Server, rule_publishes: u32) void {
+        if (rule_publishes > self.stats_max_rule_publishes) {
+            self.stats_max_rule_publishes = rule_publishes;
+        }
+        self.stats_pubs += 1;
+        if (self.stats_pubs >= stats_interval) {
+            std.log.info(
+                "stats: pubs={d} max_rule_publishes={d} max_out_hwm={d}B",
+                .{ self.stats_pubs, self.stats_max_rule_publishes, self.stats_max_out_hwm },
+            );
+            self.stats_pubs = 0;
+            self.stats_max_rule_publishes = 0;
+            self.stats_max_out_hwm = 0;
+        }
+    }
 
     pub fn listen(self: *Server, address: std.Io.net.IpAddress) !void {
         self.listener = try xev.TCP.init(address);
@@ -271,9 +306,18 @@ const Conn = struct {
                     std.log.warn("rule error: {s}", .{@errorName(err)});
                 };
 
+                if (ctx.rule_publishes >= rule_publish_warn_threshold) {
+                    std.log.warn(
+                        "patchbay amplification: subject={s} generated {d} publishes",
+                        .{ subject, ctx.rule_publishes },
+                    );
+                }
+
                 router.publish(subject, payload) catch |err| {
                     std.log.warn("publish error: {s}", .{@errorName(err)});
                 };
+
+                if (self.server.stats_enabled) self.server.recordPub(ctx.rule_publishes);
             },
         }
     }
@@ -286,6 +330,17 @@ const Conn = struct {
     fn maybeKickWrite(self: *Conn, loop: *xev.Loop) void {
         if (self.closing or self.write_in_flight) return;
         if (self.router_conn.out.items.len == 0) return;
+
+        if (self.router_conn.out_hwm >= out_queued_warn_threshold) {
+            std.log.warn(
+                "conn {d} outbound hwm {d} bytes (slow consumer or fan-out blow-up)",
+                .{ self.router_conn.id, self.router_conn.out_hwm },
+            );
+        }
+        if (self.server.stats_enabled and self.router_conn.out_hwm > self.server.stats_max_out_hwm) {
+            self.server.stats_max_out_hwm = self.router_conn.out_hwm;
+        }
+        self.router_conn.out_hwm = 0;
 
         const gpa = self.server.gpa;
         // Swap the router's out buffer with the (empty) in_flight buffer.
