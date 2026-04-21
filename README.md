@@ -557,11 +557,6 @@ it's using at startup.
 
 ## Releases
 
-Pushing a tag matching `v[0-9]*` (e.g. `v0.1.0`) triggers the release
-workflow in `.github/workflows/release.yml`: it runs tests, runs
-`zig build dist`, packages each target (`tar.gz` for Linux,
-`zip` for Windows), and attaches them to a new GitHub release.
-
 Only Linux (`x86_64`, `aarch64`) and Windows (`x86_64`) binaries are
 shipped. macOS is not included: unsigned Mac binaries hit Gatekeeper
 warnings and want an `xattr -d com.apple.quarantine` dance, which is
