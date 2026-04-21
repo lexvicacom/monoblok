@@ -423,13 +423,13 @@ with partial-write handling.
 
 ### Single-threaded, on purpose
 
-Everything application-level runs on one loop thread: parsing, subject
+Everything application-level runs on a single thread: parsing, subject
 matching, rule evaluation, fan-out, write buffering. The kernel still
 gets to use your other cores for actual I/O, but once a byte arrives
 it's single file through monoblok. No thread pool. No work queue.
 One thread.
 
-That's a choice, not a TODO. It's what lets the whole thing skip locks
+That's a deliberate choice, not a TODO. It's what lets the whole thing skip locks
 entirely, keep refcounts as plain `u32`s, reuse LVC buffers in place
 instead of reallocating, and have fan-out alias directly into caller
 buffers without copying. The moment you add a second thread, every one
@@ -440,8 +440,7 @@ giant fan-out, will stall every other connection while it runs.
 monoblok is aimed at signal-conditioning patchbays sitting in front
 of modest pub/sub traffic, which fits comfortably inside one core.
 If you outgrow that, the answer isn't threading the loop, it's
-**sharding**: N loops, subjects hashed to a home shard, cross-shard
-publishes over MPSC queues. That's a future problem.
+**sharding**: N loops - more later.
 
 ## Tests
 
