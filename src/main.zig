@@ -31,7 +31,8 @@ pub fn main(init: std.process.Init) !void {
     var patchbay_path: ?[]const u8 = null;
     var lvc_enabled = true;
 
-    var it = init.minimal.args.iterate();
+    var it = try init.minimal.args.iterateAllocator(gpa);
+    defer it.deinit();
     _ = it.skip();
     while (it.next()) |a| {
         const flag = flag_map.get(a) orelse fatal("unknown argument");
