@@ -78,17 +78,19 @@ pub const Server = struct {
         r: xev.AcceptError!xev.TCP,
     ) xev.CallbackAction {
         const self = self_opt.?;
+        defer self.listener.accept(loop, &self.accept_completion, Server, self, onAccept);
+
         const tcp = r catch |err| {
             std.log.warn("accept failed: {s}", .{@errorName(err)});
-            return .rearm;
+            return .disarm;
         };
 
         const conn_state = Conn.init(self, tcp) catch |err| {
             std.log.warn("conn init failed: {s}", .{@errorName(err)});
-            return .rearm;
+            return .disarm;
         };
         conn_state.start(loop);
-        return .rearm;
+        return .disarm;
     }
 };
 
