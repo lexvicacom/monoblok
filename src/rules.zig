@@ -240,6 +240,7 @@ const Op = enum {
     add, sub, mul, div,
     contains, round, quantize, squelch, deadband,
     moving_avg, moving_sum, moving_max, moving_min,
+    rising_edge, falling_edge,
 };
 
 const op_map = std.StaticStringMap(Op).initComptime(.{
@@ -266,6 +267,8 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "moving-sum", .moving_sum },
     .{ "moving-max", .moving_max },
     .{ "moving-min", .moving_min },
+    .{ "rising-edge", .rising_edge },
+    .{ "falling-edge", .falling_edge },
 });
 
 fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
@@ -312,6 +315,8 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .moving_sum => callMoving(ctx, evaled, .sum),
         .moving_max => callMoving(ctx, evaled, .max),
         .moving_min => callMoving(ctx, evaled, .min),
+        .rising_edge => callEdge(ctx, evaled, .rising),
+        .falling_edge => callEdge(ctx, evaled, .falling),
     };
 }
 
@@ -562,6 +567,44 @@ fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
     if (@abs(x - last) < delta) return .nil;
     gop.value_ptr.* = .{ .number = x };
     return .{ .number = x };
+}
+
+const EdgeKind = enum { rising, falling };
+
+/// `(rising-edge X)` / `(falling-edge X)` — returns X on the matching
+/// boolean transition, nil otherwise. First sight returns nil (no prior
+/// state means no edge). Keyed per (rule, op, subject) so two rising-edge
+/// gates on the same subject don't share state. Stored as a number (0/1)
+/// in the existing state union — no new variant needed.
+fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value {
+    if (args.len != 1) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const now = args[0].isTruthy();
+
+    const op_name = switch (kind) {
+        .rising => "rising-edge",
+        .falling => "falling-edge",
+    };
+    const key = try std.fmt.allocPrint(ctx.arena, "{s}:{s}", .{ op_name, ctx.subject });
+    const gop = try rule.state.getOrPut(ctx.gpa, key);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
+        gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+        return .nil;
+    }
+    const prev = switch (gop.value_ptr.*) {
+        .number => |n| n != 0,
+        else => blk: {
+            gop.value_ptr.deinit(ctx.gpa);
+            break :blk now;
+        },
+    };
+    gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+    const fired = switch (kind) {
+        .rising => !prev and now,
+        .falling => prev and !now,
+    };
+    return if (fired) args[0] else .nil;
 }
 
 const MovingKind = enum { avg, sum, max, min };
@@ -1074,6 +1117,44 @@ test "thread -> expands moving-avg pipeline" {
         n_emits += tp.buf.items.len;
     }
     try testing.expectEqual(@as(usize, 3), n_emits);
+}
+
+test "rising-edge and falling-edge fire once per transition" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Alert on rising edge, all-clear on falling edge of payload > 10.
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (-> (> payload-float 10.0)
+        \\      (rising-edge)
+        \\      (publish-to (subject-append "alert"))))
+        \\(on "sensors.*"
+        \\  (-> (> payload-float 10.0)
+        \\      (falling-edge)
+        \\      (publish-to (subject-append "ok"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    // 5 (first, no edge) → 6 (still false, no edge) → 15 (rising) → 20 (still true, no edge)
+    // → 8 (falling) → 7 (still false, no edge) → 12 (rising again).
+    const feed = [_][]const u8{ "5", "6", "15", "20", "8", "7", "12" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "sensors.temp",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+    try testing.expectEqualStrings("sensors.temp.alert", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("sensors.temp.ok", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("sensors.temp.alert", tp.buf.items[2].subject);
 }
 
 test "contains? and str-concat" {

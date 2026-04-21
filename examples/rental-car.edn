@@ -1,0 +1,18 @@
+;; RPM: quantize to 50rpm buckets, drop duplicates, republish
+(on "car.*.rpm"
+  (-> payload-float
+      (quantize 50)
+      (squelch)
+      (publish-to (subject-append "stable"))))
+
+;; Coolant temp: 1°C deadband is plenty
+(on "car.*.coolant"
+  (-> payload-float
+      (round 0)
+      (deadband 1.0)
+      (publish-to (subject-append "stable"))))
+
+;; Over-rev alert: sustained above 7500rpm across a 20-sample window
+(on "car.*.rpm"
+  (when (> (moving-avg 20 payload-float) 7500.0)
+    (publish (subject-append "alert") payload)))

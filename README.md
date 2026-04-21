@@ -374,6 +374,37 @@ invocations on the same rule.
 Ring ops return numbers, so they compose directly with the arithmetic,
 comparison, and gating primitives above. No special pipeline syntax.
 
+### Edge gates
+
+`squelch` fires on every change; often you only want one fire per
+transition in a specific direction (alert on cross-up, all-clear on
+cross-down). Edge gates take a boolean and pass it through only on the
+matching transition.
+
+| form                  | fires when                                     |
+|-----------------------|------------------------------------------------|
+| `(rising-edge X)`     | `X` transitions from falsy to truthy           |
+| `(falling-edge X)`    | `X` transitions from truthy to falsy           |
+
+Both are **per rule, per subject**, and the first message a rule sees
+on a new subject never fires (no prior state means no edge, so no
+cold-start noise). Pair a `rising-edge` rule with a `falling-edge` rule
+on the same predicate to get alert + all-clear semantics:
+
+```edn
+; Alert once when the 60-sample moving average crosses above 28°C.
+(on "temp.*.*"
+  (-> (> (moving-avg 60 payload-float) 28.0)
+      (rising-edge)
+      (publish-to (subject-append "alert"))))
+
+; All-clear once when it drops back below.
+(on "temp.*.*"
+  (-> (> (moving-avg 60 payload-float) 28.0)
+      (falling-edge)
+      (publish-to (subject-append "ok"))))
+```
+
 ## `$LVC.*`: last-value stream
 
 Every subject has an implicit last-value cache. Subscribing to
