@@ -4,7 +4,7 @@
 
 # monoblok
 
-An experimental, partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**.
+An experimental toy, this is a partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**.
 
 ## Build & run
 
