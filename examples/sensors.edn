@@ -1,0 +1,5 @@
+(on "sensors.*"
+  (-> payload-float
+      (round 1)
+      (squelch)
+      (publish-to (subject-append "stable"))))

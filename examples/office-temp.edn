@@ -1,0 +1,19 @@
+;; Round to 1dp, ignore wobbles under 0.3°C, republish for dashboards
+(on "temp.*.*"
+  (-> payload-float
+      (round 1)
+      (deadband 0.3)
+      (publish-to (subject-append "stable"))))
+
+;; Sustained heat alert: fire once when the 60-sample moving average
+;; crosses above 28°C.
+(on "temp.*.*"
+  (-> (> (moving-avg 60 payload-float) 28.0)
+      (rising-edge)
+      (publish-to (subject-append "alert"))))
+
+;; All-clear: fire once when the same moving average drops back below 28°C.
+(on "temp.*.*"
+  (-> (> (moving-avg 60 payload-float) 28.0)
+      (falling-edge)
+      (publish-to (subject-append "ok"))))
