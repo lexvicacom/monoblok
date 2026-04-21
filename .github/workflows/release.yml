@@ -61,3 +61,53 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build (aarch64-macos, ReleaseSafe)
+        run: |
+          set -eu
+          triple="aarch64-macos"
+          out="dist/${triple}"
+          mkdir -p "$out"
+          zig build -Dtarget="$triple" -Doptimize=ReleaseSafe
+          cp zig-out/bin/monoblok "$out/"
+          cp patchbay.edn "$out/"
+          cp scripts/bench.sh "$out/"
+
+      - name: Package artifact
+        run: |
+          set -eu
+          cd dist
+          tar -czf "monoblok-aarch64-macos.tar.gz" "aarch64-macos"
+          ls -la
+
+      - name: Upload artifact bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

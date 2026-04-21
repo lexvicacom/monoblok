@@ -524,10 +524,12 @@ out.
 
 ## Why libxev
 
-Zig 0.16's `std.Io` networking backends are broken on every target we
-tried: `Dispatch` (macOS) has no net ops, `Kqueue` references a vtable
-field that no longer exists, `Uring` has error-set mismatches. libxev
-has working kqueue/io_uring/epoll/IOCP, so that's what we use. It's great.
+Zig 0.16's `std.Io` works, but not in a way that fits a single-threaded
+event loop: the macOS `Dispatch` backend is thread-per-connection, and
+the other backends I tried (`Kqueue`, `Uring`) didn't compile cleanly
+for me on 0.16 (could well be me holding it wrong, the API is still
+shifting). libxev gives us a proper single-loop model on
+kqueue/io_uring/epoll/IOCP, so that's what we use. It's great.
 
 ## Cross-compile
 
@@ -541,6 +543,9 @@ zig build dist
 # dist/aarch64-linux-musl/  → monoblok (static musl ELF, ARM64)
 # dist/x86_64-windows-gnu/  → monoblok.exe
 ```
+
+macOS arm64 binaries are built natively on a macOS runner during the
+release workflow (see below), not via `zig build dist`.
 
 Pick one and `scp` it anywhere. The Linux binaries are statically
 linked against musl so there's no glibc dependency.
@@ -560,13 +565,14 @@ it's using at startup.
 
 Pushing a tag matching `v[0-9]*` (e.g. `v0.1.0`) triggers the release
 workflow in `.github/workflows/release.yml`: it runs tests, runs
-`zig build dist`, packages each target (`tar.gz` for Linux,
+`zig build dist` for Linux and Windows, builds natively for macOS arm64
+on a macOS runner, packages each target (`tar.gz` for Linux/macOS,
 `zip` for Windows), and attaches them to a new GitHub release.
 
-Only Linux (`x86_64`, `aarch64`) and Windows (`x86_64`) binaries are
-shipped. macOS is not included: unsigned Mac binaries hit Gatekeeper
-warnings and want an `xattr -d com.apple.quarantine` dance, which is
-more friction than just building locally. If you're on a Mac:
+Shipped targets: Linux (`x86_64`, `aarch64`), Windows (`x86_64`), and
+macOS (`aarch64`). The macOS binaries are unsigned, so Gatekeeper will
+complain on first run; clear the quarantine attribute with
+`xattr -d com.apple.quarantine ./monoblok` or just build from source:
 `zig build --release=safe`.
 
 ## License
