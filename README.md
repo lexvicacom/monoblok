@@ -349,9 +349,25 @@ Fan-out (1 pub, N subs, aggregated sub rate):
 | 50 | 8.01M msg/s | 6.70M msg/s |
 
 Single-publisher parity; multi-publisher nats-server pulls ahead
-(their sublist is a token-keyed radix tree, ours is linear); fan-out
-we still edge out at 10+ subs. `--release=fast` gains roughly 10-15%
-on fan-out if you want to see the ceiling.
+(their sublist is a token-keyed radix tree, ours is linear).
+`--release=fast` gains roughly 10–15% if you want to poke at the ceiling.
+
+### M4 Mac Mini
+
+M4 Mac Mini (10-core, 16 GB), macOS 26.2, Zig 0.16, libxev kqueue backend,
+vs `nats-server` v2.12.7. ReleaseSafe.
+
+| workload             |   monoblok | nats-server |       Δ |
+|----------------------|-----------:|------------:|--------:|
+| 1 pub × 500k × 64B   |  6.46M/s   |   7.14M/s   |    −9%  |
+| 2 pub × 10k × 64B    |  7.35M/s   |   5.97M/s   |  **+23%** |
+| 8 pub × 50k × 128B   | 11.83M/s   |   8.17M/s   |  **+45%** |
+| 1 pub → 1 sub        |  4.27M/s   |   3.93M/s   |   **+9%** |
+| 1 pub → 10 subs      | 12.60M/s   |   4.95M/s   | **+155%** |
+| 1 pub → 50 subs      | 17.52M/s   |   4.82M/s   | **+264%** |
+
+Fanout shows the largest delta, though see the caveat above about what
+nats-server is doing that monoblok isn't.
 
 ### Linux
 

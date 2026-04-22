@@ -11,6 +11,10 @@
 #   - nats-server  (optional; comparison section skipped if absent)
 #
 # Usage: ./scripts/bench.sh
+#
+# NOTE: If numbers seem low, ensure you're running a release build:
+#   zig build --release=safe   (recommended, what dist/ ships)
+#   zig build --release=fast   (slightly faster, no safety checks)
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -29,8 +33,9 @@ export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 PORT="${NATS_URL##*:}"
 
 command -v nats >/dev/null 2>&1 || { echo "missing: nats CLI (install from https://github.com/nats-io/natscli/releases)"; exit 1; }
-if ! command -v nats-server >/dev/null 2>&1; then
-    echo "warning: nats-server not installed — comparison section will be skipped"
+HAS_NATS_SERVER=false
+if command -v nats-server >/dev/null 2>&1; then
+    HAS_NATS_SERVER=true
 fi
 
 if [ ! -x "$MB_BIN" ]; then
@@ -76,64 +81,127 @@ run_fanout() {
     extract_rate subscriber < /tmp/bench_sub.out
 }
 
-run_sweep() {
-    printf "%-30s %s msgs/sec\n" "1 pub × 500k × 64B"  "$(run_pub 1 500000 64)"
-    printf "%-30s %s msgs/sec\n" "2 pub × 10k × 64B"   "$(run_pub 2 10000 64)"
-    printf "%-30s %s msgs/sec\n" "8 pub × 50k × 128B"  "$(run_pub 8 50000 128)"
-    printf "%-30s %s msgs/sec\n" "1 pub → 1 sub"       "$(run_fanout 1 200000)"
-    printf "%-30s %s msgs/sec\n" "1 pub → 10 subs"     "$(run_fanout 10 50000)"
-    printf "%-30s %s msgs/sec\n" "1 pub → 50 subs"     "$(run_fanout 50 20000)"
+# Convert "1,234,567" to 1234567
+parse_num() {
+    echo "${1:-0}" | tr -d ','
 }
 
-echo "=== host ==="
-uname -a
-if command -v nproc >/dev/null 2>&1; then
-    echo "cpu cores: $(nproc)"
-elif command -v sysctl >/dev/null 2>&1; then
-    echo "cpu cores: $(sysctl -n hw.ncpu 2>/dev/null || echo unknown)"
+# Format number with commas
+fmt_num() {
+    printf "%'d" "$1" 2>/dev/null || echo "$1"
+}
+
+# Calculate percentage difference: (a - b) / b * 100
+calc_delta() {
+    local a="$1" b="$2"
+    if [ "$b" -eq 0 ]; then
+        echo "—"
+        return
+    fi
+    awk -v a="$a" -v b="$b" 'BEGIN {
+        d = (a - b) / b * 100
+        if (d >= 0) printf "+%.0f%%", d
+        else printf "%.0f%%", d
+    }'
+}
+
+# --- Host info ----------------------------------------------------------------
+echo "=== Host ==="
+echo
+if [[ "$(uname)" == "Darwin" ]]; then
+    sw_vers 2>/dev/null | awk -F: '/ProductName|ProductVersion/ {gsub(/^[ \t]+/, "", $2); printf "%s ", $2} END {print ""}'
+    echo "$(uname -m) · $(sysctl -n hw.ncpu) cores · $(($(sysctl -n hw.memsize) / 1024 / 1024 / 1024)) GB"
+else
+    uname -sr
+    cores=$(nproc 2>/dev/null || echo "?")
+    mem=$(awk '/MemTotal/ {printf "%.0f", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "?")
+    echo "$(uname -m) · ${cores} cores · ${mem} GB"
 fi
-if [ -r /proc/meminfo ]; then
-    grep MemTotal /proc/meminfo
-elif command -v sysctl >/dev/null 2>&1; then
-    mem_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
-    echo "MemTotal: $((mem_bytes / 1024)) kB"
-fi
-echo "NATS_URL: $NATS_URL"
-nats --version 2>&1 | head -1
-command -v nats-server >/dev/null 2>&1 && nats-server --version 2>&1 | head -1
+echo
+echo "$("$MB_BIN" --version)"
+echo "nats cli $(nats --version 2>&1 | head -1)"
+$HAS_NATS_SERVER && echo "$(nats-server --version 2>&1 | head -1)"
 echo
 
-# --- monoblok --------------------------------------------------------------
+# --- monoblok -----------------------------------------------------------------
 "$MB_BIN" --port $PORT > /tmp/mb.log 2>&1 &
 MB_PID=$!
 sleep 0.3
 kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
 
-echo "=== monoblok ==="
-head -3 /tmp/mb.log
-echo
-run_sweep
+echo "Running monoblok benchmarks..."
+MB_1=$(run_pub 1 500000 64)
+MB_2=$(run_pub 2 10000 64)
+MB_3=$(run_pub 8 50000 128)
+MB_4=$(run_fanout 1 200000)
+MB_5=$(run_fanout 10 50000)
+MB_6=$(run_fanout 50 20000)
 kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
 MB_PID=""
 sleep 0.2
 
-# --- nats-server (optional) ------------------------------------------------
-if command -v nats-server >/dev/null 2>&1; then
+# --- nats-server (optional) ---------------------------------------------------
+NS_1="" NS_2="" NS_3="" NS_4="" NS_5="" NS_6=""
+if $HAS_NATS_SERVER; then
     nats-server --port $PORT > /tmp/ns.log 2>&1 &
     NS_PID=$!
     sleep 0.4
     if kill -0 $NS_PID 2>/dev/null; then
-        echo
-        echo "=== nats-server ==="
-        run_sweep
+        echo "Running nats-server benchmarks..."
+        NS_1=$(run_pub 1 500000 64)
+        NS_2=$(run_pub 2 10000 64)
+        NS_3=$(run_pub 8 50000 128)
+        NS_4=$(run_fanout 1 200000)
+        NS_5=$(run_fanout 10 50000)
+        NS_6=$(run_fanout 50 20000)
+        kill $NS_PID 2>/dev/null; wait $NS_PID 2>/dev/null || true
+        NS_PID=""
     else
         echo "nats-server failed to start:"
         cat /tmp/ns.log
     fi
+fi
+
+# --- Results table ------------------------------------------------------------
+echo
+echo "=== Results (msgs/sec) ==="
+echo
+
+print_row() {
+    local label="$1" mb="$2" ns="$3"
+    local mb_n=$(parse_num "$mb")
+    if [ -n "$ns" ]; then
+        local ns_n=$(parse_num "$ns")
+        local delta=$(calc_delta "$mb_n" "$ns_n")
+        printf "%-22s %14s %14s %8s\n" "$label" "$(fmt_num $mb_n)" "$(fmt_num $ns_n)" "$delta"
+    else
+        printf "%-22s %14s\n" "$label" "$(fmt_num $mb_n)"
+    fi
+}
+
+if [ -n "$NS_1" ]; then
+    # With comparison
+    printf "%-22s %14s %14s %8s\n" "Workload" "monoblok" "nats-server" "Δ"
+    printf "%-22s %14s %14s %8s\n" "--------" "--------" "-----------" "---"
+    print_row "1 pub × 500k × 64B"  "$MB_1" "$NS_1"
+    print_row "2 pub × 10k × 64B"   "$MB_2" "$NS_2"
+    print_row "8 pub × 50k × 128B"  "$MB_3" "$NS_3"
+    print_row "1 pub → 1 sub"       "$MB_4" "$NS_4"
+    print_row "1 pub → 10 subs"     "$MB_5" "$NS_5"
+    print_row "1 pub → 50 subs"     "$MB_6" "$NS_6"
 else
+    # monoblok only
+    printf "%-22s %14s\n" "Workload" "monoblok"
+    printf "%-22s %14s\n" "--------" "--------"
+    print_row "1 pub × 500k × 64B"  "$MB_1" ""
+    print_row "2 pub × 10k × 64B"   "$MB_2" ""
+    print_row "8 pub × 50k × 128B"  "$MB_3" ""
+    print_row "1 pub → 1 sub"       "$MB_4" ""
+    print_row "1 pub → 10 subs"     "$MB_5" ""
+    print_row "1 pub → 50 subs"     "$MB_6" ""
     echo
     echo "(nats-server not installed — skipping comparison)"
 fi
 
 echo
-echo "done."
+echo "NOTE: If numbers seem low, ensure a release build (zig build --release=safe)"

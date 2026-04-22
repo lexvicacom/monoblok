@@ -32,9 +32,8 @@ const stats_interval: u64 = 10_000;
 /// or `$STATS.>` for live deltas.
 const stats_prefix = "$STATS.";
 
-/// Wall-clock tick for `$STATS.*` publishes. Short enough to feel live,
-/// long enough that tight loops don't spend noticeable time here.
-const stats_tick_ms: u64 = 1_000;
+/// Wall-clock tick for `$STATS.*` publishes.
+const stats_tick_ms: u64 = 60_000;
 
 pub const Server = struct {
     gpa: Allocator,
