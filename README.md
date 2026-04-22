@@ -355,6 +355,16 @@ Reconnects are handled by nats.c internally. During the reconnect
 window, publishes are buffered up to the library default; once the
 buffer is full, further publishes count as dropped.
 
+### Front-NATS pattern
+
+Using monoblok as a front-NATS for existing publishers is an elegant,
+light addition. What might have previously been handled by a consumer
+can now be done by monoblok. All consumers of the processed subjects
+are none the wiser, they just connect to the same production NATS
+environment. NATS is not actually necessary though: in smaller or more
+experimental setups, it is fine to simply point those consumers at
+monoblok instead.
+
 ### Counters
 
 Published on the `$STATS.*` tick (1/sec):
