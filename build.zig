@@ -86,6 +86,13 @@ fn addNatsC(b: *std.Build, mod: *std.Build.Module) void {
 
     const c_flags = [_][]const u8{
         "-D_REENTRANT",
+        // _GNU_SOURCE must be set on the command line, not via n-unix.h.
+        // Several nats.c sources (js.c, jsm.c, ...) include <ctype.h> /
+        // <limits.h> before n-unix.h, so glibc has already latched its
+        // feature set by the time the header's #define runs, and
+        // asprintf stays hidden. macOS libc exposes asprintf unconditionally,
+        // which is why this only breaks the Linux build.
+        "-D_GNU_SOURCE",
         "-DNATS_STATIC",
         "-DNATS_HAS_TLS",
         "-Wno-deprecated-declarations",
