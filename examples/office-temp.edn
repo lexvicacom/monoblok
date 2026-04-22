@@ -5,15 +5,10 @@
       (deadband 0.3)
       (publish-to (subject-append "stable"))))
 
-;; Sustained heat alert: fire once when the 60-sample moving average
-;; crosses above 28°C.
+;; Sustained heat alert + all-clear in one rule: fire "alert" once when
+;; the 60-sample moving average crosses above 28°C, "ok" once when it
+;; drops back below. One predicate, one ring buffer, one prev slot.
 (on "temp.*.*"
-  (-> (> (moving-avg 60 payload-float) 28.0)
-      (rising-edge)
-      (publish-to (subject-append "alert"))))
-
-;; All-clear: fire once when the same moving average drops back below 28°C.
-(on "temp.*.*"
-  (-> (> (moving-avg 60 payload-float) 28.0)
-      (falling-edge)
-      (publish-to (subject-append "ok"))))
+  (transition (> (moving-avg 60 payload-float) 28.0)
+    (publish-to (subject-append "alert") "hot")
+    (publish-to (subject-append "ok")    "cool")))
