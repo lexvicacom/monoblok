@@ -67,16 +67,16 @@ extract_rate() {
 
 run_pub() {
     local clients="$1" msgs="$2" size="$3"
-    nats bench pub --clients=$clients --msgs=$msgs --size=$size solo 2>&1 \
+    nats --no-context bench pub --clients=$clients --msgs=$msgs --size=$size solo 2>&1 \
         | extract_rate publisher
 }
 
 run_fanout() {
     local subs="$1" msgs="$2"
-    nats bench sub --clients=$subs --msgs=$msgs fan > /tmp/bench_sub.out 2>&1 &
+    nats --no-context bench sub --clients=$subs --msgs=$msgs fan > /tmp/bench_sub.out 2>&1 &
     local sub_pid=$!
     sleep 0.8
-    nats bench pub --clients=1 --msgs=$msgs --size=64 fan > /dev/null 2>&1
+    nats --no-context bench pub --clients=1 --msgs=$msgs --size=64 fan > /dev/null 2>&1
     wait $sub_pid 2>/dev/null || true
     extract_rate subscriber < /tmp/bench_sub.out
 }
