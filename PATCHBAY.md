@@ -49,6 +49,7 @@ Evaluate their arguments lazily / with short-circuiting.
 | `(or  X...)`                | left-to-right, returns the first truthy value or the last    |
 | `(do  X...)`                | evaluate in order, return the last                           |
 | `(-> X F...)`               | thread `X` as the **last** arg of each `F` (see below)       |
+| `(transition C UP DOWN)`    | eval `UP` on `C` false→true, `DOWN` on true→false, else nil  |
 
 ## Comparisons and logic
 
@@ -220,19 +221,21 @@ matching transition.
 
 Both are **per rule, per subject**, and the first message a rule sees
 on a new subject never fires (no prior state means no edge, so no
-cold-start noise). Pair a `rising-edge` rule with a `falling-edge` rule
-on the same predicate to get alert + all-clear semantics:
+cold-start noise). Use `rising-edge` / `falling-edge` when you only
+care about one direction and want to keep threading through `->`.
+
+When you want both directions (alert + all-clear), `transition` is the
+condensed form: one rule, one boolean, one shared `prev` slot, two
+branches.
 
 ```edn
-; Alert once when the 60-sample moving average crosses above 28°C.
+; Alert on cross-up, all-clear on cross-down, in a single rule.
 (on "temp.*.*"
-  (-> (> (moving-avg 60 payload-float) 28.0)
-      (rising-edge)
-      (publish-to (subject-append "alert"))))
-
-; All-clear once when it drops back below.
-(on "temp.*.*"
-  (-> (> (moving-avg 60 payload-float) 28.0)
-      (falling-edge)
-      (publish-to (subject-append "ok"))))
+  (transition (> (moving-avg 60 payload-float) 28.0)
+    (publish-to (subject-append "alert") "hot")
+    (publish-to (subject-append "ok")    "cool")))
 ```
+
+Compared to pairing two edge-gate rules, this evaluates the predicate
+once, keeps one `moving-avg` ring instead of two, and doesn't renumber
+when you later add or remove rules around it.

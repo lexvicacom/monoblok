@@ -234,7 +234,7 @@ fn evalSymbol(ctx: *Context, name: []const u8) EvalError!Value {
     return error.UnknownSymbol;
 }
 
-const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread };
+const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread, transition };
 
 const special_form_map = std.StaticStringMap(SpecialForm).initComptime(.{
     .{ "if", .@"if" },
@@ -243,6 +243,7 @@ const special_form_map = std.StaticStringMap(SpecialForm).initComptime(.{
     .{ "or", .@"or" },
     .{ "do", .do },
     .{ "->", .thread },
+    .{ "transition", .transition },
 });
 
 const Op = enum {
@@ -307,6 +308,7 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .@"or" => evalOr(ctx, args),
         .do => evalDo(ctx, args),
         .thread => evalThread(ctx, args),
+        .transition => evalTransition(ctx, args),
     };
 
     const tag = op_map.get(op) orelse return error.UnknownSymbol;
@@ -757,6 +759,40 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
     };
     if (!fired) rule.publishes_suppressed += 1;
     return if (fired) args[0] else .nil;
+}
+
+/// `(transition BOOL RISING-BRANCH FALLING-BRANCH)` — one boolean edge
+/// detector that dispatches both directions. Evaluates BOOL, compares to
+/// the prior value stored per (rule, subject), and evaluates exactly one
+/// branch: RISING-BRANCH on false→true, FALLING-BRANCH on true→false.
+/// Returns nil (and leaves both branches unevaluated) on first sight or
+/// no-change. State key is distinct from rising-edge/falling-edge so the
+/// three can coexist without aliasing.
+fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 3) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const now = (try eval(ctx, args[0])).isTruthy();
+
+    const key = try std.fmt.allocPrint(ctx.arena, "transition:{s}", .{ctx.subject});
+    const gop = try rule.state.getOrPut(ctx.gpa, key);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
+        gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+    const prev = switch (gop.value_ptr.*) {
+        .number => |n| n != 0,
+        else => blk: {
+            gop.value_ptr.deinit(ctx.gpa);
+            break :blk now;
+        },
+    };
+    gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+    if (!prev and now) return eval(ctx, args[1]);
+    if (prev and !now) return eval(ctx, args[2]);
+    rule.publishes_suppressed += 1;
+    return .nil;
 }
 
 const MovingKind = enum { avg, sum, max, min };
@@ -1306,6 +1342,39 @@ test "rising-edge and falling-edge fire once per transition" {
     try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
     try testing.expectEqualStrings("sensors.temp.alert", tp.buf.items[0].subject);
     try testing.expectEqualStrings("sensors.temp.ok", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("sensors.temp.alert", tp.buf.items[2].subject);
+}
+
+test "transition dispatches rising and falling in one rule" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (transition (> payload-float 10.0)
+        \\    (publish-to (subject-append "alert") "up")
+        \\    (publish-to (subject-append "ok") "down")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const feed = [_][]const u8{ "5", "6", "15", "20", "8", "7", "12" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "sensors.temp",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+    try testing.expectEqualStrings("sensors.temp.alert", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("up", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("sensors.temp.ok", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("down", tp.buf.items[1].payload);
     try testing.expectEqualStrings("sensors.temp.alert", tp.buf.items[2].subject);
 }
 
