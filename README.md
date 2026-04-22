@@ -233,7 +233,7 @@ For one-off use, reference it inline in a prompt with
 Once it's loaded, describe the stream you have and the stream you
 want. For example:
 
-> Write a `patchbay.edn` for a noisy market ticker on `MARKET.<SYM>`.
+> Write a patchbay rule file `ticker.edn` for a noisy market ticker on `MARKET.<SYM>`.
 > Round the price to 3 decimal places and only re-emit when the
 > rounded value changes. Also fan out big jumps to an alerts subject,
 > and bridge those alerts out to a real NATS server at
@@ -242,6 +242,8 @@ want. For example:
 <p align="center">
   <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
 </p>
+
+Drop `ticker.edn` into a convenient place and run it with `monoblock --patchbay ticker.edn`
 
 ## `$LVC.*`: last-value stream
 
