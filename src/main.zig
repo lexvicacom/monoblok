@@ -10,7 +10,9 @@ pub const rules = @import("rules.zig");
 pub const router = @import("router.zig");
 pub const server = @import("server.zig");
 
-const Flag = enum { port, patchbay, no_lvc, stats, help };
+const manifest = @import("manifest");
+
+const Flag = enum { port, patchbay, no_lvc, stats, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -21,6 +23,8 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--stats", .stats },
     .{ "--help", .help },
     .{ "-h", .help },
+    .{ "--version", .version },
+    .{ "-V", .version },
 });
 
 pub fn main(init: std.process.Init) !void {
@@ -48,6 +52,10 @@ pub fn main(init: std.process.Init) !void {
             .stats => stats_enabled = true,
             .help => {
                 printUsage();
+                return;
+            },
+            .version => {
+                printVersion();
                 return;
             },
         }
@@ -135,6 +143,15 @@ fn printUsage() void {
         \\                   under threshold.
         \\
     , .{});
+}
+
+fn printVersion() void {
+    std.debug.print("monoblok {s} (zig {d}.{d}.{d})\n", .{
+        manifest.version,
+        builtin.zig_version.major,
+        builtin.zig_version.minor,
+        builtin.zig_version.patch,
+    });
 }
 
 test {
