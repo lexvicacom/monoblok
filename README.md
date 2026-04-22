@@ -312,90 +312,36 @@ bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
 
 ## Benchmarks
 
-Fair warning before the numbers: `nats-server` is a mature, battle-tested
-Go codebase with a decade of production history behind it. It's doing
-substantially more than monoblok: accounting, logging, metrics, slow-consumer
-detection, account isolation, clustering, JetStream, TLS, auth, any of
-which has a non-zero runtime cost even when unused. monoblok is a
-comparative toy implementing a tiny slice of that. Treat these numbers as
-informational, not as a claim of "faster than nats-server."
+`nats-server` is a mature Go codebase doing a lot more than monoblok
+(accounting, metrics, slow-consumer detection, clustering, JetStream,
+TLS, auth). These numbers are informational, not a "faster than
+nats-server" claim. monoblok is benchmarked with an **empty patchbay**,
+so this is raw PUB/SUB + fan-out only; a real patchbay adds work per
+matching publish.
 
-Also: **monoblok was benchmarked with an empty patchbay** (no
-`--patchbay` flag). The numbers measure raw PUB/SUB + fan-out; they
-say nothing about rule-evaluation cost. A realistic patchbay adds
-work on every matching publish (s-expr tree walk, arena allocations,
-stateful-op hashmap lookups), so expect throughput to drop from these
-figures in proportion to how much your rules do.
+Both columns are msgs/sec from `nats bench`, single run each. monoblok
+built ReleaseSafe (via `zig build dist`), vs `nats-server` v2.12.7.
 
-M2 MacBook Air (8-core, 16 GB), Zig 0.16, libxev kqueue backend,
-vs `nats-server` 2.9.6 on the same machine. `nats bench` as the load
-generator. Single run each: indicative, not rigorous. monoblok built
-with `--release=safe` (what `zig build dist` produces).
+**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Hetzner Linux**
+(2-core AMD EPYC KVM, 4 GB, Ubuntu 24.04, io_uring):
 
-Publish-only:
+| workload            |    M4 monoblok |     M4 nats |   M4 Δ | Linux monoblok | Linux nats | Linux Δ |
+|---------------------|---------------:|------------:|-------:|---------------:|-----------:|--------:|
+| 1 pub × 500k × 64B  |       6.46M/s  |    7.14M/s  |    −9% |       3.66M/s  |   3.39M/s  |     +8% |
+| 2 pub × 10k × 64B   |       7.35M/s  |    5.97M/s  |   +23% |       3.08M/s  |   3.09M/s  |     −0% |
+| 8 pub × 50k × 128B  |      11.83M/s  |    8.17M/s  |   +45% |       2.83M/s  |   2.90M/s  |     −2% |
+| 1 pub → 1 sub       |       4.27M/s  |    3.93M/s  |    +9% |       0.73M/s  |   1.09M/s  |    −33% |
+| 1 pub → 10 subs     |      12.60M/s  |    4.95M/s  |  +155% |       3.31M/s  |   2.59M/s  |    +28% |
+| 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       3.98M/s  |   3.05M/s  |    +30% |
 
-| workload | monoblok | nats-server |
-|---|---:|---:|
-| 1 × 500k × 64B | 6.12M msg/s | 6.18M msg/s |
-| 2 × 10k × 64B | 4.57M msg/s | 5.19M msg/s |
-| 8 × 50k × 128B | 4.64M msg/s | 10.29M msg/s |
-
-Fan-out (1 pub, N subs, aggregated sub rate):
-
-| subs | monoblok | nats-server |
-|---|---:|---:|
-| 1 | 2.04M msg/s | 2.99M msg/s |
-| 10 | 7.03M msg/s | 6.76M msg/s |
-| 50 | 8.01M msg/s | 6.70M msg/s |
-
-Single-publisher parity; multi-publisher nats-server pulls ahead
-(their sublist is a token-keyed radix tree, ours is linear).
-`--release=fast` gains roughly 10–15% if you want to poke at the ceiling.
-
-### M4 Mac Mini
-
-M4 Mac Mini (10-core, 16 GB), macOS 26.2, Zig 0.16, libxev kqueue backend,
-vs `nats-server` v2.12.7. ReleaseSafe.
-
-| workload             |   monoblok | nats-server |       Δ |
-|----------------------|-----------:|------------:|--------:|
-| 1 pub × 500k × 64B   |  6.46M/s   |   7.14M/s   |    −9%  |
-| 2 pub × 10k × 64B    |  7.35M/s   |   5.97M/s   |  **+23%** |
-| 8 pub × 50k × 128B   | 11.83M/s   |   8.17M/s   |  **+45%** |
-| 1 pub → 1 sub        |  4.27M/s   |   3.93M/s   |   **+9%** |
-| 1 pub → 10 subs      | 12.60M/s   |   4.95M/s   | **+155%** |
-| 1 pub → 50 subs      | 17.52M/s   |   4.82M/s   | **+264%** |
-
-Fanout shows the largest delta, though see the caveat above about what
-nats-server is doing that monoblok isn't.
-
-### Linux
-
-Ubuntu 24.04 (2-core AMD EPYC KVM VM, 4 GB), Zig 0.16, libxev
-io_uring backend, vs `nats-server` v2.12.7 on the same machine.
-ReleaseSafe (via `zig build dist`). I think this is the second cheapest machine Hetzner sell.
-
-Publish-only:
-
-| workload | monoblok | nats-server |
-|---|---:|---:|
-| 1 × 500k × 64B | 2.77M msg/s | 3.79M msg/s |
-| 2 × 10k × 64B | 2.74M msg/s | 2.38M msg/s |
-| 8 × 50k × 128B | 3.40M msg/s | 3.50M msg/s |
-
-Fan-out:
-
-| subs | monoblok | nats-server |
-|---|---:|---:|
-| 1 | 0.65M msg/s | 1.57M msg/s |
-| 10 | 2.87M msg/s | 3.01M msg/s |
-| 50 | 4.51M msg/s | 3.28M msg/s |
-
-Numbers are lower than the M2 MBA as expected for a 2-vCPU cheap cloud VM.
-io_uring works cleanly end-to-end. Single-subscriber fan-out is weak;
-the 1-sub workload is dominated by scheduling on a 2-vCPU box and our
-profile differs from nats-server's there; ~10 subs onward it levels
-out.
+Fan-out is where monoblok pulls ahead on both platforms. The single-
+subscriber workload is the one regression that flips sign between
+platforms (likely io_uring completion batching behaving differently
+under low concurrency). Multi-publisher wins on the M4 collapse to
+parity on the 2-vCPU box, since a single-threaded loop can't scale
+past one core while nats-server spreads across both.
+`--release=fast` adds roughly 10–15% on top if you want to poke the
+ceiling.
 
 ## Why libxev
 
