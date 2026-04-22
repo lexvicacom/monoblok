@@ -322,6 +322,16 @@ matching publish.
 Both columns are msgs/sec from `nats bench`, single run each. monoblok
 built ReleaseSafe (via `zig build dist`), vs `nats-server` v2.12.7.
 
+`scripts/bench.sh` drives the numbers: it starts monoblok on `$NATS_URL`
+(default `127.0.0.1:4222`), runs the six `nats bench` workloads in the
+table below against it, stops it, then (if `nats-server` is on `PATH`)
+starts it on the same port and reruns the same workloads. Servers are
+benched sequentially, never concurrently. Pub workloads use `nats bench
+pub`, fan-out workloads spawn a `nats bench sub` with N clients and
+then a single publisher on the same subject. The script scrapes the
+`publisher stats` / `subscriber stats` line from each run and prints
+the msgs/sec table at the end.
+
 **M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Hetzner Linux**
 (2-core AMD EPYC KVM, 4 GB, Ubuntu 24.04, io_uring):
 
