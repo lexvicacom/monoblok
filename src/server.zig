@@ -35,6 +35,15 @@ const stats_prefix = "$STATS.";
 /// Wall-clock tick for `$STATS.*` publishes.
 const stats_tick_ms: u64 = 60_000;
 
+/// Shared-layout view of the bridge's counter struct. Server reads from a
+/// *const BridgeStats without importing bridge.zig directly (so the -Dbridge=false
+/// build still compiles server.zig unchanged). bridge.Stats starts with these
+/// fields in this order.
+pub const BridgeStats = extern struct {
+    published: u64 = 0,
+    dropped: u64 = 0,
+};
+
 pub const Server = struct {
     gpa: Allocator,
     loop: *xev.Loop,
@@ -59,6 +68,11 @@ pub const Server = struct {
     /// Cumulative total of inbound client PUBs since server start. Published
     /// on the `$STATS.*` tick.
     total_pubs: u64 = 0,
+
+    /// Optional pointer to the bridge's running counters. `emitStats` reads
+    /// these on the stats tick to publish `$STATS.bridge.*`. Avoids pulling
+    /// bridge.zig into server.zig directly.
+    bridge_stats: ?*const BridgeStats = null,
 
     /// Periodic `$STATS.*` publisher state. Timer fires every
     /// `stats_tick_ms` and re-arms itself from the callback.
@@ -127,6 +141,11 @@ pub const Server = struct {
 
             const supp_subj = try std.fmt.bufPrint(&subj_buf, "$STATS.rules.{d}.suppressed", .{i});
             try self.publishStat(supp_subj, rule.publishes_suppressed);
+        }
+
+        if (self.bridge_stats) |s| {
+            try self.publishStat("$STATS.bridge.published", s.published);
+            try self.publishStat("$STATS.bridge.dropped", s.dropped);
         }
     }
 

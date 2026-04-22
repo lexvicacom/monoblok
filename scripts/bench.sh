@@ -13,12 +13,12 @@
 # Usage: ./scripts/bench.sh
 #
 # NOTE: If numbers seem low, ensure you're running a release build:
-#   zig build --release=safe   (recommended, what dist/ ships)
+#   zig build --release=safe   (recommended, what release artifacts ship)
 #   zig build --release=fast   (slightly faster, no safety checks)
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# Binary lives next to the script on deployed boxes (dist/<triple>/);
+# Binary lives next to the script on deployed boxes (release tarballs);
 # fall back to zig-out/bin when run out of a source checkout.
 if [ -x "$HERE/monoblok" ]; then
     MB_BIN="$HERE/monoblok"

@@ -7,60 +7,100 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+  test:
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
-
+      - name: Install OpenSSL
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
       - name: Run tests
         run: zig build test --summary all
 
-      - name: Cross-compile dist artifacts
-        run: zig build dist
+  build-linux-x86_64:
+    needs: test
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      PLATFORM: linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
 
-      - name: Package artifacts
+      - name: Install OpenSSL
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Resolve version
+        id: ver
         run: |
           set -eu
           ref="${GITHUB_REF##*/}"
           case "$ref" in
-            v*) version="$ref" ;;
-            *)  version="$(git rev-parse --short HEAD)" ;;
+            v*) v="$ref" ;;
+            *)  v="$(git rev-parse --short HEAD)" ;;
           esac
-          cd dist
-          for d in */; do
-            triple="${d%/}"
-            case "$triple" in
-              x86_64-linux-musl)   pretty="linux-x86_64" ;;
-              aarch64-linux-musl)  pretty="linux-aarch64" ;;
-              x86_64-windows-gnu)  pretty="windows-x86_64" ;;
-              aarch64-windows-gnu) pretty="windows-aarch64" ;;
-              *)                   pretty="$triple" ;;
-            esac
-            name="monoblok-${version}-${pretty}"
-            mv "$triple" "$name"
-            case "$pretty" in
-              windows-*) zip -r "${name}.zip" "$name" ;;
-              *)         tar -czf "${name}.tar.gz" "$name" ;;
-            esac
-          done
-          ls -la
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build + package (bridge on)
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM" on
+
+      - name: Build + package (bridge off)
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM" off
 
       - name: Create release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
+          files: dist/*.tar.gz
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux-aarch64:
+    needs: test
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: write
+    env:
+      PLATFORM: linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install OpenSSL
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -eu
+          ref="${GITHUB_REF##*/}"
+          case "$ref" in
+            v*) v="$ref" ;;
+            *)  v="$(git rev-parse --short HEAD)" ;;
+          esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build + package (bridge on)
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM" on
+
+      - name: Build + package (bridge off)
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM" off
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -68,49 +108,43 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
+    needs: test
     runs-on: macos-latest
     permissions:
       contents: write
-
+    env:
+      PLATFORM: macos-aarch64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
-      - name: Build (aarch64-macos, ReleaseSafe)
-        run: |
-          set -eu
-          triple="aarch64-macos"
-          out="dist/${triple}"
-          mkdir -p "$out"
-          zig build -Dtarget="$triple" -Doptimize=ReleaseSafe
-          cp zig-out/bin/monoblok "$out/"
-          cp patchbay.edn "$out/"
-          cp scripts/bench.sh "$out/"
+      - name: Install OpenSSL
+        run: brew install openssl@3 pkg-config
 
-      - name: Package artifact
+      - name: Resolve version
+        id: ver
         run: |
           set -eu
           ref="${GITHUB_REF##*/}"
           case "$ref" in
-            v*) version="$ref" ;;
-            *)  version="$(git rev-parse --short HEAD)" ;;
+            v*) v="$ref" ;;
+            *)  v="$(git rev-parse --short HEAD)" ;;
           esac
-          cd dist
-          name="monoblok-${version}-macos-aarch64"
-          mv "aarch64-macos" "$name"
-          zip -r "${name}.zip" "$name"
-          ls -la
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build + package (bridge on)
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM" on
+
+      - name: Build + package (bridge off)
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM" off
 
       - name: Create release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: dist/*.tar.gz
           draft: false
           prerelease: false
           generate_release_notes: true

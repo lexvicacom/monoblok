@@ -90,6 +90,11 @@ pub const Router = struct {
     subs: std.ArrayList(Subscription) = .empty,
     lvc_enabled: bool,
     last_value: std.StringHashMap(std.ArrayList(u8)),
+    /// Optional export hook (the NATS bridge). Called once per publish after
+    /// normal fan-out. The bridge decides internally whether the subject
+    /// matches any export filter; router doesn't care.
+    bridge_ctx: ?*anyopaque = null,
+    bridge_fn: ?*const fn (ctx: *anyopaque, subject: []const u8, payload: []const u8) void = null,
 
     pub fn init(gpa: Allocator, lvc_enabled: bool) Router {
         return .{
@@ -266,6 +271,12 @@ pub const Router = struct {
             c.kick();
             last = c;
         }
+
+        // Bridge: export-side fan-out. Bridge filters are checked inside the
+        // hook; we call it once per publish regardless of what matched
+        // locally. Kept after local fan-out so a blocked remote can't
+        // starve local subscribers.
+        if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
     }
 
     fn storeLast(self: *Router, subject: []const u8, payload: []const u8) !void {
