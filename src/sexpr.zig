@@ -6,6 +6,7 @@ pub const Value = union(enum) {
     boolean: bool,
     number: f64,
     symbol: []const u8,
+    keyword: []const u8, // EDN-style :foo — used in config forms like (bridge :servers [...])
     string: []const u8,
     list: []const Value,
 
@@ -129,6 +130,7 @@ const Parser = struct {
         if (std.mem.eql(u8, tok, "false")) return .{ .boolean = false };
 
         if (parseNumberToken(tok)) |n| return .{ .number = n };
+        if (tok[0] == ':' and tok.len > 1) return .{ .keyword = tok[1..] };
         return .{ .symbol = tok };
     }
 };
@@ -161,6 +163,20 @@ test "parse atoms" {
     try testing.expect(vs[4].boolean);
     try testing.expect(!vs[5].boolean);
     try testing.expectEqual(Value.nil, vs[6]);
+}
+
+test "parse keywords" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const vs = try parseAll(arena, "(bridge :servers \"a\" :tls true)");
+    const top = vs[0].list;
+    try testing.expectEqualStrings("bridge", top[0].symbol);
+    try testing.expectEqualStrings("servers", top[1].keyword);
+    try testing.expectEqualStrings("a", top[2].string);
+    try testing.expectEqualStrings("tls", top[3].keyword);
+    try testing.expect(top[4].boolean);
 }
 
 test "parse nested list" {

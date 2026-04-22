@@ -13,10 +13,36 @@ zig build --release=safe
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
 ```
 
-Builds for the current platform. For other targets or shipping
-binaries for several platforms at once, see [Cross-compile](#cross-compile).
-Prebuilt Mac (ARM only), Linux and Windows binaries are on the
+Builds for the current platform. For how release binaries are produced,
+see [Building for release](#building-for-release). Prebuilt Mac (ARM
+only) and Linux (x86_64 + aarch64) binaries are on the
 [latest release page](https://github.com/lexvicacom/monoblok/releases/latest).
+Each platform ships two tarballs: the default (includes the
+[outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the
+target box) and a `-nobridge` variant with no external runtime
+dependencies — grab whichever fits your use case.
+
+### Dependencies
+
+OpenSSL (dynamically linked) is required when the NATS bridge is enabled,
+which is the default. Install it with:
+
+```
+# macOS
+brew install openssl@3
+
+# Debian / Ubuntu
+sudo apt install libssl-dev pkg-config
+
+# Fedora / RHEL
+sudo dnf install openssl-devel pkgconf-pkg-config
+
+# Arch
+sudo pacman -S openssl pkgconf
+```
+
+If you don't want the bridge (or don't want to install OpenSSL), build with
+`zig build -Dbridge=false`.
 
 Any NATS client works:
 
@@ -215,6 +241,8 @@ subscribe.
 | `$STATS.global.pubs`             | total inbound client PUBs since server start      |
 | `$STATS.rules.<i>.emitted`       | successful `publish` / `publish-to` calls by rule |
 | `$STATS.rules.<i>.suppressed`    | gate suppressions (squelch, deadband, changed?, rising-edge, falling-edge) by rule |
+| `$STATS.bridge.published`        | publishes forwarded to the remote NATS cluster (if the bridge is configured) |
+| `$STATS.bridge.dropped`          | publishes the bridge failed to forward (connection closed, subject too long, remote error) |
 
 Rules are indexed by position in the patchbay file, 0-based. Client
 publishes to `$STATS.*` are rejected (read-only, like `$LVC.*`).
@@ -223,6 +251,88 @@ publishes to `$STATS.*` are rejected (read-only, like `$LVC.*`).
 SUB $LVC.$STATS.rules.0.suppressed   ; -> immediately receives current count
 SUB $STATS.global.pubs               ; -> live ticks every second
 ```
+
+## Outbound NATS bridge
+
+monoblok can forward a subset of local publishes to a real NATS cluster,
+so it can sit in front of (or alongside) a NATS deployment and hand off
+selected traffic. **Export-only**: nothing flows in from the remote.
+TLS and `.creds` files are supported; the upstream connection uses
+vendored [nats.c](https://github.com/nats-io/nats.c) and dyn-linked
+OpenSSL.
+
+Typical shape:
+
+- Local clients publish to short, cheap subjects on monoblok.
+- Patchbay rules condition the signal (round, deadband, squelch, moving
+  averages, etc.).
+- The bridge forwards only the subjects you want (raw sensor reads, or
+  just the derived stable ones, or both) to a remote NATS cluster —
+  Synadia NGS, a managed cluster, a self-hosted cluster, etc.
+- Nothing else leaves the box. Everything off-path stays local.
+
+### Config
+
+Zero or one `(bridge ...)` form in the patchbay file configures it:
+
+```
+(bridge
+  :servers  ("tls://connect.ngs.global:4222")
+  :creds    "/etc/monoblok/ngs.creds"
+  :tls      true
+  :name     "monoblok-prod-1"
+  :export   ("telemetry.>" "alerts.>"))
+```
+
+Full keyword reference:
+
+| keyword                     | type            | notes                                             |
+|-----------------------------|-----------------|---------------------------------------------------|
+| `:servers`                  | list of strings | **required**. `nats://` or `tls://` URLs.         |
+| `:export`                   | list of strings | subject filters (wildcards allowed). Local publishes matching any of these are forwarded. |
+| `:name`                     | string          | client name shown in the remote's monitoring      |
+| `:creds`                    | path            | JWT + NKey credentials file (NGS / operator mode) |
+| `:user` / `:password`       | string          | basic auth                                        |
+| `:token`                    | string          | bearer-token auth                                 |
+| `:tls`                      | bool            | enable TLS. Required if any `:servers` URL is `tls://`. |
+| `:tls-ca`                   | path            | CA bundle (PEM)                                   |
+| `:tls-cert` / `:tls-key`    | path            | client cert + private key (mTLS)                  |
+| `:tls-skip-verify`          | bool            | **dev only**. Accepts any server cert.            |
+| `:connect-timeout-ms`       | number          | initial-connect timeout                           |
+| `:ping-interval-ms`         | number          | keepalive ping cadence                            |
+| `:max-reconnect`            | number          | `-1` for unlimited                                |
+| `:reconnect-wait-ms`        | number          | base delay between reconnect attempts             |
+
+Auth precedence: `:creds` > `:user`/`:password` > `:token`. If TLS is on
+but `:tls-ca` isn't set, nats.c falls back to the system trust store.
+
+### Semantics
+
+A local publish (from a NATS client or from a patchbay rule) whose
+subject matches **any** `:export` filter is forwarded to the remote
+as-is. Subjects that don't match any filter never leave the daemon.
+Fan-out is: local subscribers served first, bridge second — so a slow
+or reconnecting remote can't starve local delivery.
+
+Reconnects are handled by nats.c internally. During the reconnect
+window, publishes are buffered up to the library default; once the
+buffer is full, further publishes count as dropped.
+
+### Counters
+
+Published on the `$STATS.*` tick (1/sec):
+
+| subject                          | value                                                |
+|----------------------------------|------------------------------------------------------|
+| `$STATS.bridge.published`        | successful `natsConnection_Publish` calls            |
+| `$STATS.bridge.dropped`          | failures: remote closed, buffer full, subject >=512B |
+
+### Disabling
+
+The bridge is on by default. Turn it off at build time with
+`zig build -Dbridge=false`, which also removes the OpenSSL link
+dependency. Both variants are published to each release as `-nobridge`
+and (default) tarballs — pick whichever fits the target box.
 
 ## Observability
 
@@ -294,7 +404,7 @@ so this is raw PUB/SUB + fan-out only; a real patchbay adds work per
 matching publish.
 
 Both columns are msgs/sec from `nats bench`, single run each. monoblok
-built ReleaseSafe (via `zig build dist`), vs `nats-server` v2.12.7.
+built `--release=safe`, vs `nats-server` v2.12.7.
 
 `scripts/bench.sh` drives the numbers: it starts monoblok on `$NATS_URL`
 (default `127.0.0.1:4222`), runs the six `nats bench` workloads in the
@@ -336,36 +446,32 @@ for me on 0.16 (could well be me holding it wrong, the API is still
 shifting). libxev gives us a proper single-loop model on
 kqueue/io_uring/epoll/IOCP, so that's what we use. It's great.
 
-## Cross-compile
+## Building for release
 
-Zig cross-compiles out of the box. The `dist` build step produces
-ReleaseSafe binaries for common targets into `dist/<triple>/`,
-alongside `patchbay.edn` and the bench script:
+Release binaries are built natively on each target architecture, not
+cross-compiled. The `.github/workflows/release.yml` pipeline uses three
+runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), and
+`macos-latest` (aarch64). Each runs `zig build --release=safe` with
+OpenSSL installed locally. The binaries dyn-link against the target's
+glibc + OpenSSL, so a reasonably current distro (Debian 12+, Ubuntu
+22.04+, any current macOS) is required. glibc 2.35 is the floor — that's
+Ubuntu 22.04's libc.
 
-```
-zig build dist
-# dist/x86_64-linux-musl/   → monoblok (static musl ELF)
-# dist/aarch64-linux-musl/  → monoblok (static musl ELF, ARM64)
-# dist/x86_64-windows-gnu/  → monoblok.exe
-```
+Native per-arch rather than cross-compile is a deliberate choice: it
+dodges the pain of sourcing target-OS OpenSSL headers/libs on a foreign
+build host, and the GHA runners are free.
 
-macOS arm64 binaries are built natively on a macOS runner during the
-release workflow (see below), not via `zig build dist`.
+Each release ships **two variants per platform**: with the NATS bridge
+(requires OpenSSL on the target box) and without (`-nobridge` suffix, no
+runtime deps). Grab the bridge variant if you want to forward traffic to
+a real NATS cluster; grab the `-nobridge` variant if you just want a
+standalone pub/sub broker with no external deps.
 
-Pick one and `scp` it anywhere. The Linux binaries are statically
-linked against musl so there's no glibc dependency. Easy enough to
-add to a tiny container image if that's your jam.
-
-For an ad-hoc one-off target that isn't in the dist set, the vanilla
-Zig flag still works:
-
-```
-zig build --release=safe -Dtarget=x86_64-linux-gnu
-```
+To build locally for your own machine, just `zig build --release=safe`
+(or `-Dbridge=false` to skip the OpenSSL dependency).
 
 libxev picks the right backend at comptime: `io_uring` on Linux,
-`kqueue` on macOS, `iocp` on Windows. The daemon logs which backend
-it's using at startup.
+`kqueue` on macOS. The daemon logs which backend it's using at startup.
 
 ## License
 

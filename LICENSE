@@ -27,3 +27,12 @@ Third-party components:
 - libxev (https://github.com/mitchellh/libxev) — MIT License,
   Copyright (c) Mitchell Hashimoto. Used as the event loop / networking
   backend.
+
+- nats.c (https://github.com/nats-io/nats.c) — Apache License 2.0,
+  Copyright (c) The NATS Authors. Vendored under `vendor/nats.c/` and
+  statically linked into the outbound NATS bridge (when built with the
+  default `-Dbridge=true`). Full license text at `vendor/nats.c/LICENSE`.
+
+- OpenSSL (https://www.openssl.org/) — Apache License 2.0,
+  Copyright (c) The OpenSSL Project Authors. Dynamically linked at
+  runtime when the bridge is enabled; not redistributed by this project.

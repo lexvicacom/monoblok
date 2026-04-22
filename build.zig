@@ -4,12 +4,19 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Bridge (outbound NATS connection via nats.c). Default on; disable with
+    // -Dbridge=false if you don't have OpenSSL installed.
+    const bridge = b.option(bool, "bridge", "Build the outbound NATS bridge (requires system OpenSSL)") orelse true;
+
     const libxev_dep = b.dependency("libxev", .{
         .target = target,
         .optimize = optimize,
     });
 
     const manifest_mod = b.createModule(.{ .root_source_file = b.path("build.zig.zon") });
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "bridge", bridge);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -23,8 +30,11 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "xev", .module = libxev_dep.module("xev") },
             .{ .name = "manifest", .module = manifest_mod },
+            .{ .name = "build_options", .module = build_options.createModule() },
         },
     });
+
+    if (bridge) addNatsC(b, exe_mod);
 
     const exe = b.addExecutable(.{
         .name = "monoblok",
@@ -45,55 +55,52 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
 
-    // `zig build dist` — ReleaseSafe cross-compiles for common targets,
-    // staged into dist/<triple>/ alongside patchbay.edn and the bench script.
-    // Safe (not Fast) because these are the shippable binaries — network
-    // input shouldn't silently miscompute on an overflow.
-    const dist_step = b.step("dist", "Cross-compile release binaries for common targets into dist/");
-    const dist_targets = [_][]const u8{
-        "x86_64-linux-musl",
-        "aarch64-linux-musl",
-        "x86_64-windows-gnu",
+}
+
+fn addNatsC(b: *std.Build, mod: *std.Build.Module) void {
+    const nats_src = b.path("vendor/nats.c/src");
+
+    // Core sources. We drop stan (#if NATS_HAS_STREAMING is never defined, so
+    // it's inert) and the win/ subdir. js/jsm/kv/object/micro are compiled
+    // because conn.c / sub.c / dispatch.c reference their symbols; we just
+    // don't expose those APIs from Zig.
+    const core_sources = [_][]const u8{
+        "asynccb.c",        "buf.c",         "comsock.c",          "conn.c",
+        "crypto.c",         "dispatch.c",    "hash.c",             "js.c",
+        "jsm.c",            "kv.c",          "micro.c",            "micro_client.c",
+        "micro_endpoint.c", "micro_error.c", "micro_monitoring.c", "micro_request.c",
+        "msg.c",            "nats.c",        "natstime.c",         "nkeys.c",
+        "nuid.c",           "object.c",      "opts.c",             "parser.c",
+        "pub.c",            "srvpool.c",     "stats.c",            "status.c",
+        "sub.c",            "timer.c",       "url.c",              "util.c",
     };
-    for (dist_targets) |triple| {
-        addDistTarget(b, libxev_dep, manifest_mod, dist_step, triple);
-    }
+    const glib_sources = [_][]const u8{
+        "glib/glib.c",               "glib/glib_async_cb.c",
+        "glib/glib_dispatch_pool.c", "glib/glib_gc.c",
+        "glib/glib_last_error.c",    "glib/glib_ssl.c",
+        "glib/glib_timer.c",
+    };
+    const unix_sources = [_][]const u8{
+        "unix/cond.c", "unix/mutex.c", "unix/sock.c", "unix/thread.c",
+    };
+
+    const c_flags = [_][]const u8{
+        "-D_REENTRANT",
+        "-DNATS_STATIC",
+        "-DNATS_HAS_TLS",
+        "-Wno-deprecated-declarations",
+    };
+
+    mod.addCSourceFiles(.{ .root = nats_src, .files = &core_sources, .flags = &c_flags });
+    mod.addCSourceFiles(.{ .root = nats_src, .files = &glib_sources, .flags = &c_flags });
+    mod.addCSourceFiles(.{ .root = nats_src, .files = &unix_sources, .flags = &c_flags });
+
+    mod.addIncludePath(nats_src);
+    mod.addIncludePath(b.path("vendor/nats.c/src/include"));
+    mod.addIncludePath(b.path("vendor/nats.c/src/unix"));
+    mod.addIncludePath(b.path("vendor/nats.c/src/glib"));
+
+    // Dyn-link OpenSSL via pkg-config (Homebrew on macOS, pkgconf on Linux).
+    mod.linkSystemLibrary("openssl", .{ .use_pkg_config = .force });
 }
 
-fn addDistTarget(
-    b: *std.Build,
-    libxev_dep: *std.Build.Dependency,
-    manifest_mod: *std.Build.Module,
-    dist_step: *std.Build.Step,
-    triple: []const u8,
-) void {
-    const query = std.Target.Query.parse(.{ .arch_os_abi = triple }) catch @panic("bad target triple");
-    const resolved = b.resolveTargetQuery(query);
-
-    const mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = resolved,
-        .optimize = .ReleaseSafe,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "xev", .module = libxev_dep.module("xev") },
-            .{ .name = "manifest", .module = manifest_mod },
-        },
-    });
-
-    const exe = b.addExecutable(.{
-        .name = "monoblok",
-        .root_module = mod,
-    });
-
-    const install = b.addInstallArtifact(exe, .{
-        .dest_dir = .{ .override = .{ .custom = b.fmt("../dist/{s}", .{triple}) } },
-    });
-    dist_step.dependOn(&install.step);
-
-    const install_patchbay = b.addInstallFile(b.path("patchbay.edn"), b.fmt("../dist/{s}/patchbay.edn", .{triple}));
-    dist_step.dependOn(&install_patchbay.step);
-
-    const install_bench = b.addInstallFile(b.path("scripts/bench.sh"), b.fmt("../dist/{s}/bench.sh", .{triple}));
-    dist_step.dependOn(&install_bench.step);
-}

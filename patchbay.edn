@@ -66,3 +66,35 @@
       (moving-avg 10)
       (deadband 1.0)
       (publish-to (subject-append "smoothed"))))
+
+; --- Outbound NATS bridge (example, commented out) ----------------------
+;
+; Zero or one `(bridge ...)` form, at top level. Forwards local publishes
+; whose subject matches any `:export` filter to a remote NATS cluster via
+; nats.c. Export-only: nothing flows in from the remote.
+;
+; Keywords:
+;   :servers            list of server URLs (nats:// or tls://)
+;   :name               optional client name (shown in remote monitoring)
+;   :creds              path to a .creds file (JWT+NKey, as used with NGS)
+;   :user / :password   basic auth
+;   :token              bearer token auth
+;   :tls                true/false. Required for tls:// URLs.
+;   :tls-ca             path to a CA cert (PEM)
+;   :tls-cert / :tls-key  client cert + private key (mTLS)
+;   :tls-skip-verify    true/false. Dev only. Insecure.
+;   :connect-timeout-ms / :ping-interval-ms
+;   :max-reconnect      -1 for unlimited
+;   :reconnect-wait-ms
+;   :export             list of subject filters (wildcards allowed) to
+;                       forward. Subject is sent to the remote as-is.
+;
+; Counters are published to `$STATS.bridge.published` / `.dropped` on the
+; normal $STATS tick.
+;
+; (bridge
+;   :servers  ("tls://a.example:4222" "tls://b.example:4222")
+;   :creds    "/etc/monoblok/ngs.creds"
+;   :tls      true
+;   :name     "monoblok-prod-1"
+;   :export   ("telemetry.>" "alerts.>"))

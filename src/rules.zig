@@ -153,7 +153,10 @@ pub fn loadRules(arena: Allocator, source: []const u8) LoadError![]Rule {
         if (f != .list) return error.InvalidRuleForm;
         const items = f.list;
         if (items.len < 2 or items[0] != .symbol) return error.UnknownTopLevel;
-        if (!std.mem.eql(u8, items[0].symbol, "on")) return error.UnknownTopLevel;
+        // Other modules own their own top-level forms (e.g. `bridge`). Skip
+        // anything we don't recognize as a rule — the other loader will
+        // claim it and raise its own error if malformed.
+        if (!std.mem.eql(u8, items[0].symbol, "on")) continue;
         if (items.len != 3 or items[1] != .string) return error.InvalidRuleForm;
         try subject_mod.validateFilter(items[1].string);
         try out.append(arena, .{ .filter = items[1].string, .body = items[2] });
@@ -217,6 +220,7 @@ fn eval(ctx: *Context, v: Value) EvalError!Value {
         .nil, .boolean, .number, .string => v,
         .symbol => |s| evalSymbol(ctx, s),
         .list => |items| evalCall(ctx, items),
+        .keyword => error.UnknownSymbol, // keywords are config-only, not rule body values
     };
 }
 
@@ -457,7 +461,7 @@ fn coercePayload(arena: Allocator, v: Value) EvalError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list => error.TypeMismatch,
+        .list, .keyword => error.TypeMismatch,
     };
 }
 
@@ -846,7 +850,7 @@ fn encodeForState(arena: Allocator, v: Value) EvalError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list => error.TypeMismatch,
+        .list, .keyword => error.TypeMismatch,
     };
 }
 
@@ -909,6 +913,7 @@ fn valueEql(a: Value, b: Value) bool {
         .boolean => |x| x == b.boolean,
         .number => |x| x == b.number,
         .symbol => |s| std.mem.eql(u8, s, b.symbol),
+        .keyword => |s| std.mem.eql(u8, s, b.keyword),
         .string => |s| std.mem.eql(u8, s, b.string),
         .list => false, // lists aren't comparable in our dialect
     };

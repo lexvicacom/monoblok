@@ -5,12 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and test
 
 ```
-zig build                    # debug build
+zig build                    # debug build (bridge on, requires system OpenSSL)
+zig build -Dbridge=false     # debug build without the NATS bridge
+zig build --release=safe     # release build (what CI ships)
 zig build --release=fast     # release build (use this for any benchmarking)
-zig build test               # unit tests (proto, subject, sexpr, rules)
-zig build dist               # ReleaseSafe cross-compile for linux-musl (x86_64, aarch64) and windows-gnu into dist/<triple>/
+zig build test               # unit tests (proto, subject, sexpr, rules, bridge)
 bash scripts/smoke.sh        # end-to-end test: spins up daemon, drives over raw TCP with nc
+bash scripts/bridge-smoke.sh # end-to-end bridge test: spins up a real nats-server, monoblok, and verifies local->remote forwarding
 ```
+
+Release binaries are built natively on per-arch runners (see `.github/workflows/release.yml`): one each for linux-x86_64 (ubuntu-22.04), linux-aarch64 (ubuntu-22.04-arm), and macos-aarch64. There is no cross-compile step; each job just runs `zig build --release=safe` with OpenSSL installed from the local package manager. This is deliberate — dyn-linking against system OpenSSL is much simpler per-arch than cross-compiling it.
+
+The bridge requires OpenSSL headers/libs at build time. On macOS: `brew install openssl@3`. On Debian/Ubuntu: `apt install libssl-dev`. Resolved via pkg-config.
 
 There is no separate test runner. Individual unit tests live in `test "..."` blocks at the bottom of each source file; `zig build test` runs them all. To focus on one file's tests during development, comment the others out of `src/main.zig`'s trailing `test {}` block — there's no `--test-filter` wired in.
 
@@ -63,6 +69,20 @@ An `xev.Timer` in the Server fires every `stats_tick_ms` (1s) and calls `emitSta
 Top-level forms are `(on SUBJECT-FILTER BODY)`. The evaluator sees these bound symbols: `subject`, `payload`, `payload-float`. Functions: `publish`, `publish-to`, `subject-append`, `str-concat`, `contains?`, `not`, arithmetic (`+ - * /`), comparisons (`= < <= > >=`), numeric transforms (`round`, `quantize`), stateful gates (`squelch`, `deadband` — each per-rule-per-subject, stored in `Rule.state`), windowed aggregates (`moving-avg`, `moving-sum`, `moving-max`, `moving-min` — fixed-size ring per `(rule, subject, op)` slot), and edge gates (`rising-edge`, `falling-edge` — fire once per boolean transition, keyed per `(rule, op, subject)`, first sight never fires). Special forms: `if`, `when`, `and`, `or`, `do`, `->`, `transition` (fires a rising-branch on false→true, a falling-branch on true→false, nil otherwise; one shared `prev` slot per (rule, subject), distinct from `rising-edge`/`falling-edge` state). **Messages published from the patchbay go through normal fan-out but do not re-enter the DSL** (no loops). See `patchbay.edn` and the README for examples.
 
 `(-> X f1 f2 ...)` threads X as the **last** argument of each form (last-arg, like Clojure's `->>`). Last-arg fits this dialect because the stateful/transform ops (`round`, `quantize`, `moving-*`, `squelch`, `deadband`) all take the value last. Gates (`squelch`, `deadband`) pass the value through on success and return `nil` on suppress. `publish-to` is a no-op on `nil`, which is what makes `(-> payload-float (round 1) (squelch) (publish-to (subject-append "stable")))` read top-to-bottom as "round, dedupe, emit."
+
+## Outbound NATS bridge (`src/bridge.zig`)
+
+Optional. Forwards local publishes whose subject matches one of the configured `:export` filters to a remote NATS cluster, via vendored nats.c. **Export-only** — nothing flows back. Configured via a single `(bridge :servers [...] :export [...] ...)` top-level form in the patchbay file (see `patchbay.edn` for the full keyword list).
+
+Build: `-Dbridge=true` (default on, forced off for `zig build dist` because cross-compiling against OpenSSL for musl is out of scope). Dyn-links system OpenSSL via pkg-config (`brew install openssl@3` on macOS, `libssl-dev` on Linux). nats.c itself is vendored under `vendor/nats.c/src/`.
+
+Why hand-written bindings (`src/nats_c.zig`) rather than `@cImport(nats.h)`: Zig 0.16.0's translate-c choked on the nats.h chain — same issue hit in `~/Experiments/zigxll-nats`, where the fix was also hand-writing the small subset we actually call.
+
+Integration is a single hook: `Router` has a nullable `bridge_fn` that fan-out calls once per publish after local delivery. The bridge does its own subject-filter match internally (not via the subscription table). `nats.c` runs its own socket threads, but its `natsConnection_Publish` is thread-safe and non-blocking (buffers internally), so we can call it straight from the loop thread. No xev.Async thread-hop needed because we don't subscribe on the remote.
+
+Counters published on the `$STATS.*` tick: `$STATS.bridge.published` and `$STATS.bridge.dropped`. Dropped includes connection-closed, long-subject-rejection (>= 512 bytes), and any other `natsConnection_Publish` failure.
+
+Vendored nats.c layout: we keep `src/`, `unix/`, `glib/`; we drop `stan/`, `win/`, `adapters/`. The top-level nats.c sources for js/jsm/kv/object/micro are compiled (conn.c / sub.c / dispatch.c reference their symbols) but the APIs aren't exposed from Zig. STAN is off because `NATS_HAS_STREAMING` is never defined — its headers would need `protobuf-c/protobuf-c.h`, which we don't want to pull in.
 
 ## NATS protocol scope
 
