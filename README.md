@@ -204,7 +204,7 @@ On by default; `--no-lvc` disables (~2–4% overhead when enabled).
 
 ## `$STATS.*`: live counters
 
-The server publishes cumulative counters to `$STATS.*` on a 1-second
+The server publishes cumulative counters to `$STATS.*` on a 1-minute
 wall-clock tick. Values are u64 decimals; subscribers compute their own
 rates across ticks. The stream goes through normal fan-out, so it's
 cached by LVC and `SUB $LVC.$STATS.>` gives the current value on
