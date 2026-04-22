@@ -212,6 +212,37 @@ gating on `payload-float` and per-(rule, subject) state (`squelch`,
 The full DSL reference (syntax, bound symbols, every operator, all the
 tables and worked pipelines) lives in [PATCHBAY.md](./PATCHBAY.md).
 
+### Using with Claude Code
+
+[CLAUDE_PATCHBAY.md](./CLAUDE_PATCHBAY.md) is a self-contained system
+prompt that teaches Claude the DSL. Append it to your project's
+`CLAUDE.md` so Claude Code picks it up automatically when editing
+`.edn` rule files:
+
+```sh
+# project-scoped (recommended)
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ./CLAUDE.md
+
+# or user-global
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ~/.claude/CLAUDE.md
+```
+
+For one-off use, reference it inline in a prompt with
+`@CLAUDE_PATCHBAY.md` (Claude Code inlines `@path` refs).
+
+Once it's loaded, describe the stream you have and the stream you
+want. For example:
+
+> Write a `patchbay.edn` for a noisy market ticker on `MARKET.<SYM>`.
+> Round the price to 3 decimal places and only re-emit when the
+> rounded value changes. Also fan out big jumps to an alerts subject,
+> and bridge those alerts out to a real NATS server at
+> `nats://127.0.0.1:4222`.
+
+<p align="center">
+  <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
+</p>
+
 ## `$LVC.*`: last-value stream
 
 Every subject has an implicit last-value cache. Subscribing to
