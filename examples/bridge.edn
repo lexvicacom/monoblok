@@ -1,0 +1,22 @@
+;; Forward every `telemetry.>` publish to a remote NATS server, and also
+;; republish each one locally under a `.echoed` suffix (which, since it
+;; matches `telemetry.>` too, the bridge will forward as well).
+;;
+;; Point `:servers` at a reachable nats-server. The port here matches
+;; scripts/bridge-smoke.sh; override it to wherever your remote actually lives.
+;;
+;; Start a local remote to point at:
+;;   nats-server -p 14888
+;; Then run monoblok against this file:
+;;   ./zig-out/bin/monoblok --port 4222 --patchbay examples/bridge.edn
+;; And watch forwarded messages on the remote:
+;;   nats -s nats://127.0.0.1:14888 sub 'telemetry.>'
+;; Publish into monoblok to drive the bridge:
+;;   nats --no-context -s nats://127.0.0.1:4222 pub telemetry.troubledwater 1
+(bridge
+  :servers ("nats://127.0.0.1:14888")
+  :name    "monoblok-bridge-example"
+  :export  ("telemetry.>"))
+
+(on "telemetry.*"
+  (publish (subject-append "echoed") payload))
