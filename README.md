@@ -285,6 +285,10 @@ SUB $STATS.global.pubs               ; -> live ticks every second
 
 ## Outbound NATS bridge
 
+<p align="center">
+  <img src="bridge.png" alt="bridge" width="720">
+</p>
+
 monoblok can forward a subset of local publishes to a real NATS cluster,
 so it can sit in front of (or alongside) a NATS deployment and hand off
 selected traffic. **Export-only**: nothing flows in from the remote.
