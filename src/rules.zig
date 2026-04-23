@@ -646,7 +646,8 @@ fn callSquelch(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const encoded = try encodeForState(ctx.arena, args[0]);
-    const changed = try stateEqualsOrStore(ctx.gpa, rule, ctx.subject, encoded);
+    const key = try stateKey(ctx.arena, "squelch", ctx.subject);
+    const changed = try stateEqualsOrStore(ctx.gpa, rule, key, encoded);
     if (!changed) rule.publishes_suppressed += 1;
     return if (changed) args[0] else .nil;
 }
@@ -662,25 +663,18 @@ fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
     const x = try asNumber(args[1]);
     if (delta < 0) return error.TypeMismatch;
 
-    const gop = try rule.state.getOrPut(ctx.gpa, ctx.subject);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try ctx.gpa.dupe(u8, ctx.subject);
-        gop.value_ptr.* = .{ .number = x };
+    const key = try stateKey(ctx.arena, "deadband", ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    if (!slot.found_existing) {
+        slot.value_ptr.* = .{ .number = x };
         return .{ .number = x };
     }
-    const last = switch (gop.value_ptr.*) {
-        .number => |n| n,
-        else => {
-            gop.value_ptr.deinit(ctx.gpa);
-            gop.value_ptr.* = .{ .number = x };
-            return .{ .number = x };
-        },
-    };
+    const last = slot.value_ptr.number;
     if (@abs(x - last) < delta) {
         rule.publishes_suppressed += 1;
         return .nil;
     }
-    gop.value_ptr.* = .{ .number = x };
+    slot.value_ptr.* = .{ .number = x };
     return .{ .number = x };
 }
 
@@ -693,7 +687,7 @@ fn callChanged(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const encoded = try encodeForState(ctx.arena, args[0]);
-    const key = try std.fmt.allocPrint(ctx.arena, "changed?:{s}", .{ctx.subject});
+    const key = try stateKey(ctx.arena, "changed?", ctx.subject);
     const changed = try stateEqualsOrStore(ctx.gpa, rule, key, encoded);
     if (!changed) rule.publishes_suppressed += 1;
     return .{ .boolean = changed };
@@ -707,21 +701,14 @@ fn callDelta(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const x = try asNumber(args[0]);
-    const key = try std.fmt.allocPrint(ctx.arena, "delta:{s}", .{ctx.subject});
-    const gop = try rule.state.getOrPut(ctx.gpa, key);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
-        gop.value_ptr.* = .{ .number = x };
+    const key = try stateKey(ctx.arena, "delta", ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    if (!slot.found_existing) {
+        slot.value_ptr.* = .{ .number = x };
         return .{ .number = 0 };
     }
-    const last = switch (gop.value_ptr.*) {
-        .number => |n| n,
-        else => blk: {
-            gop.value_ptr.deinit(ctx.gpa);
-            break :blk x;
-        },
-    };
-    gop.value_ptr.* = .{ .number = x };
+    const last = slot.value_ptr.number;
+    slot.value_ptr.* = .{ .number = x };
     return .{ .number = x - last };
 }
 
@@ -741,22 +728,15 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
         .rising => "rising-edge",
         .falling => "falling-edge",
     };
-    const key = try std.fmt.allocPrint(ctx.arena, "{s}:{s}", .{ op_name, ctx.subject });
-    const gop = try rule.state.getOrPut(ctx.gpa, key);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
-        gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+    const key = try stateKey(ctx.arena, op_name, ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    if (!slot.found_existing) {
+        slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
         rule.publishes_suppressed += 1;
         return .nil;
     }
-    const prev = switch (gop.value_ptr.*) {
-        .number => |n| n != 0,
-        else => blk: {
-            gop.value_ptr.deinit(ctx.gpa);
-            break :blk now;
-        },
-    };
-    gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+    const prev = slot.value_ptr.number != 0;
+    slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
     const fired = switch (kind) {
         .rising => !prev and now,
         .falling => prev and !now,
@@ -777,22 +757,15 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const now = (try eval(ctx, args[0])).isTruthy();
 
-    const key = try std.fmt.allocPrint(ctx.arena, "transition:{s}", .{ctx.subject});
-    const gop = try rule.state.getOrPut(ctx.gpa, key);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
-        gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+    const key = try stateKey(ctx.arena, "transition", ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    if (!slot.found_existing) {
+        slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
         rule.publishes_suppressed += 1;
         return .nil;
     }
-    const prev = switch (gop.value_ptr.*) {
-        .number => |n| n != 0,
-        else => blk: {
-            gop.value_ptr.deinit(ctx.gpa);
-            break :blk now;
-        },
-    };
-    gop.value_ptr.* = .{ .number = if (now) 1 else 0 };
+    const prev = slot.value_ptr.number != 0;
+    slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
     if (!prev and now) return eval(ctx, args[1]);
     if (prev and !now) return eval(ctx, args[2]);
     rule.publishes_suppressed += 1;
@@ -821,16 +794,12 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
         .max => "moving-max",
         .min => "moving-min",
     };
-    const key = try std.fmt.allocPrint(ctx.arena, "{s}:{s}", .{ op_name, ctx.subject });
-    const gop = try rule.state.getOrPut(ctx.gpa, key);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try ctx.gpa.dupe(u8, key);
-        gop.value_ptr.* = .{ .ring = try Ring.init(ctx.gpa, n) };
+    const key = try stateKey(ctx.arena, op_name, ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    if (!slot.found_existing) {
+        slot.value_ptr.* = .{ .ring = try Ring.init(ctx.gpa, n) };
     }
-    const ring = switch (gop.value_ptr.*) {
-        .ring => |*r| r,
-        else => return error.TypeMismatch,
-    };
+    const ring = &slot.value_ptr.ring;
     try ring.push(ctx.gpa, x);
 
     return .{ .number = switch (kind) {
@@ -854,39 +823,59 @@ fn encodeForState(arena: Allocator, v: Value) EvalError![]const u8 {
     };
 }
 
-/// Look up (or create) a bytes-typed state slot for `subject`. Returns
-/// true iff the slot was absent or differed from `encoded` — and updates
-/// it to `encoded` in either case. The backing ArrayList is reused
-/// across messages (clear + appendSlice, not free + dupe).
+/// Build a state-table key `"op:subject"` in the per-message arena. Every
+/// stateful op namespaces its keys by op name so distinct ops on the same
+/// subject cannot alias each other's state slot.
+fn stateKey(arena: Allocator, op_name: []const u8, subject: []const u8) EvalError![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}:{s}", .{ op_name, subject });
+}
+
+/// Look up (or create) a state slot. On insert the key is dup'd into `gpa`
+/// before calling `getOrPut`, so the map never holds a pointer into the
+/// caller's per-message arena (avoids a UAF if a later alloc fails between
+/// `getOrPut` and an overwrite, and makes map iteration safe across the
+/// next arena reset).
+const StateSlot = struct {
+    value_ptr: *StateEntry,
+    found_existing: bool,
+};
+
+fn getOrPutStateSlot(gpa: Allocator, rule: *Rule, key: []const u8) EvalError!StateSlot {
+    if (rule.state.getEntry(key)) |entry| {
+        return .{ .value_ptr = entry.value_ptr, .found_existing = true };
+    }
+    const owned_key = try gpa.dupe(u8, key);
+    errdefer gpa.free(owned_key);
+    const gop = try rule.state.getOrPut(gpa, owned_key);
+    // getEntry missed, so getOrPut can only be !found_existing here.
+    std.debug.assert(!gop.found_existing);
+    gop.key_ptr.* = owned_key;
+    gop.value_ptr.* = .empty;
+    return .{ .value_ptr = gop.value_ptr, .found_existing = false };
+}
+
+/// Look up (or create) a bytes-typed state slot. Returns true iff the slot
+/// was absent or differed from `encoded` — and updates it to `encoded` in
+/// either case. The backing ArrayList is reused across messages
+/// (clear + appendSlice, not free + dupe).
 fn stateEqualsOrStore(
     gpa: Allocator,
     rule: *Rule,
-    subject: []const u8,
+    key: []const u8,
     encoded: []const u8,
 ) EvalError!bool {
-    const gop = try rule.state.getOrPut(gpa, subject);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try gpa.dupe(u8, subject);
+    const slot = try getOrPutStateSlot(gpa, rule, key);
+    if (!slot.found_existing) {
         var buf: std.ArrayList(u8) = .empty;
         try buf.appendSlice(gpa, encoded);
-        gop.value_ptr.* = .{ .bytes = buf };
+        slot.value_ptr.* = .{ .bytes = buf };
         return true;
     }
-    switch (gop.value_ptr.*) {
-        .bytes => |*prev| {
-            if (std.mem.eql(u8, prev.items, encoded)) return false;
-            prev.clearRetainingCapacity();
-            try prev.appendSlice(gpa, encoded);
-            return true;
-        },
-        else => {
-            gop.value_ptr.deinit(gpa);
-            var buf: std.ArrayList(u8) = .empty;
-            try buf.appendSlice(gpa, encoded);
-            gop.value_ptr.* = .{ .bytes = buf };
-            return true;
-        },
-    }
+    const prev = &slot.value_ptr.bytes;
+    if (std.mem.eql(u8, prev.items, encoded)) return false;
+    prev.clearRetainingCapacity();
+    try prev.appendSlice(gpa, encoded);
+    return true;
 }
 
 fn asString(v: Value) EvalError![]const u8 {
@@ -1553,6 +1542,40 @@ test "changed? fires only on distinct values" {
     ctx.payload = "a";
     try run(rules, &ctx);
     try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+}
+
+test "squelch and deadband on same subject do not alias" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Both gates on the same subject: squelch on the raw payload, deadband
+    // on the float. Before the per-op key prefix, they shared one slot and
+    // clobbered each other's state on every message.
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (when (and (squelch payload) (deadband 0.5 payload-float))
+        \\    (publish "hit" payload)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    // 10.0 first → emit
+    // 10.0 same string → squelch suppresses
+    // 10.2 → squelch passes (changed), deadband suppresses (|0.2|<0.5)
+    // 10.6 → squelch passes, deadband emits (|0.6|>=0.5)
+    const feed = [_][]const u8{ "10.0", "10.0", "10.2", "10.6" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "sensors.temp",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
 }
 
 test "delta returns difference from last value" {

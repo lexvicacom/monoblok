@@ -1,7 +1,8 @@
 //! libxev-based TCP server. Single-threaded event loop; per-connection state
 //! machine: on each read completion, parse as many complete ops as possible
 //! from the rx buffer, dispatch them, then re-arm read. Writes are serialised
-//! per-connection via xev.WriteQueue.
+//! per-connection via a single-in-flight guard (`write_in_flight`); see the
+//! comment on the write-side fields for why we don't use xev.WriteQueue.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const xev = @import("xev");
@@ -28,8 +29,10 @@ const stats_interval: u64 = 10_000;
 
 /// Reserved prefix for the stats stream. Client publishes to `$STATS.*`
 /// are rejected (same rule as `$LVC.*`); the server emits to it on a
-/// wall-clock tick. Subscribers read via `$LVC.$STATS.>` for last-value
-/// or `$STATS.>` for live deltas.
+/// wall-clock tick. Subscribers read via `$STATS.>` for live deltas; the
+/// stream is deliberately NOT cached by the LVC (router.publish skips
+/// storeLast for this prefix) because a tick-driven snapshot is stale
+/// the moment the next tick fires.
 const stats_prefix = "$STATS.";
 
 /// Wall-clock tick for `$STATS.*` publishes.
@@ -134,6 +137,8 @@ pub const Server = struct {
     fn emitStats(self: *Server) !void {
         try self.publishStat("$STATS.global.pubs", self.total_pubs);
 
+        // Reusing subj_buf across both bufPrints is safe because
+        // publishStat -> router.publish copies the subject before returning.
         var subj_buf: [64]u8 = undefined;
         for (self.rules, 0..) |*rule, i| {
             const emit_subj = try std.fmt.bufPrint(&subj_buf, "$STATS.rules.{d}.emitted", .{i});
@@ -434,12 +439,10 @@ const Conn = struct {
         }
         self.router_conn.out_hwm = 0;
 
-        const gpa = self.server.gpa;
         // Swap the router's out buffer with the (empty) in_flight buffer.
         // After the write completes we reuse the now-empty buffer we just
         // handed off, so both keep their capacity.
         std.mem.swap(std.ArrayList(u8), &self.router_conn.out, &self.in_flight_buf);
-        _ = gpa;
 
         self.write_in_flight = true;
         self.tcp.write(
@@ -472,6 +475,9 @@ const Conn = struct {
         if (written < total) {
             // Partial write: resubmit with the remainder on the same
             // completion. We're still "in flight"; don't clear state.
+            // buf.slice[written..] is only valid because in_flight_buf is
+            // not mutated while write_in_flight is true (maybeKickWrite
+            // bails early). Don't break that invariant.
             self.tcp.write(
                 loop,
                 &self.write_completion,

@@ -126,16 +126,13 @@ fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Parse
     if (after_header.len < nbytes + 1) return error.NeedMoreData;
     const payload = after_header[0..nbytes];
     const tail = after_header[nbytes..];
-    var trailer_len: usize = undefined;
-    if (tail.len >= 2 and tail[0] == '\r' and tail[1] == '\n') {
-        trailer_len = 2;
-    } else if (tail.len >= 1 and tail[0] == '\n') {
-        trailer_len = 1;
-    } else if (tail.len < 2) {
-        return error.NeedMoreData;
-    } else {
-        return error.MalformedOp;
-    }
+    const trailer_len: usize = switch (tail[0]) {
+        '\r' => if (tail.len < 2) return error.NeedMoreData
+                else if (tail[1] == '\n') 2
+                else return error.MalformedOp,
+        '\n' => 1,
+        else => return error.MalformedOp,
+    };
 
     return .{
         .op = .{ .pub_msg = .{ .subject = subject, .reply = reply, .payload = payload } },
