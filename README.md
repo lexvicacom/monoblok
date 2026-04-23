@@ -251,15 +251,15 @@ One `xev.Loop` owns accept, per-connection read/write completions, router state,
 
 ### Single-threaded, on purpose
 
-Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still gets to use your other cores for actual I/O, but once a byte arrives it's single file through monoblok. No thread pool. No work queue. One thread.
+Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still gets to use your other cores for actual I/O, but once a byte arrives it's single file through monoblok on a single thread.
 
-That's a deliberate choice, not a TODO. It's what lets the whole thing skip locks entirely, keep refcounts as plain `u32`s, reuse LVC buffers in place instead of reallocating, and have fan-out alias directly into caller buffers without copying. The moment you add a second thread, every one of those shortcuts turns into a bug.
+That's a deliberate choice, not a WTF. It's what lets the whole thing skip locks entirely. Adding a second thread breaks our top tenet of simplicity and squanders potential performance tricks added.
 
-The trade is a one-core ceiling. A heavy rule on a hot subject, or a giant fan-out, will stall every other connection while it runs. monoblok is aimed at signal-conditioning patchbays sitting in front of modest pub/sub traffic, which fits comfortably inside one core. If you outgrow that, the answer isn't threading the loop, it's **sharding**: N loops — more later.
+The cost is a one-core cap. A heavy rule on a hot subject, or a giant fan-out, will stall every other connection while it runs. monoblok is aimed at signal-conditioning patchbays sitting in front of modest pub/sub traffic, which fits comfortably inside one core. If you outgrow that, meh. There's probably something in sharding but I haven't given it much thought. This is still a toy.
 
 ### Why libxev
 
-Zig 0.16's `std.Io` works, but not in a way that fits a single-threaded event loop: the macOS `Dispatch` backend is thread-per-connection, and the other backends I tried (`Kqueue`, `Uring`) didn't compile cleanly for me on 0.16 (could well be me holding it wrong; the API is still shifting). libxev gives us a proper single-loop model on kqueue / io_uring / epoll / IOCP, picked at comptime. The daemon logs which backend it's using at startup.
+Zig 0.16's `std.Io` works, but not in a way that fits a single-threaded event loop: the macOS `Dispatch` backend is thread-per-connection, and the other backends I tried (`Kqueue`, `Uring`) didn't compile cleanly for me on 0.16 (could well be me holding it wrong; or maybe it is too low level for my small brain). libxev gives us a proper single-loop model on kqueue / io_uring / epoll / IOCP, picked at comptime. The daemon logs which backend it's using at startup.
 
 ## Tests
 
