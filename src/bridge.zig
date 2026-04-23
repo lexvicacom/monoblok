@@ -62,17 +62,53 @@ pub fn loadConfig(arena: Allocator, source: []const u8) ConfigError!?Config {
     const forms = try sexpr.parseAll(arena, source);
     var found: ?Config = null;
     for (forms) |f| {
-        if (f != .list) continue;
-        const items = f.list;
-        if (items.len == 0) continue;
-        if (items[0] != .symbol) continue;
-        if (!std.mem.eql(u8, items[0].symbol, "bridge")) continue;
+        if (f != .list or f.list.len == 0) continue;
+        const head = f.list[0];
+        if (head != .symbol or !std.mem.eql(u8, head.symbol, "bridge")) continue;
 
         if (found != null) return error.DuplicateBridge;
-        found = try parseBridgeForm(arena, items[1..]);
+        found = try parseBridgeForm(arena, f.list[1..]);
     }
     return found;
 }
+
+const BridgeKey = enum {
+    servers,
+    name,
+    creds,
+    user,
+    password,
+    token,
+    tls,
+    tls_ca,
+    tls_cert,
+    tls_key,
+    tls_skip_verify,
+    connect_timeout_ms,
+    ping_interval_ms,
+    max_reconnect,
+    reconnect_wait_ms,
+    @"export",
+};
+
+const keyword_map = std.StaticStringMap(BridgeKey).initComptime(.{
+    .{ "servers", .servers },
+    .{ "name", .name },
+    .{ "creds", .creds },
+    .{ "user", .user },
+    .{ "password", .password },
+    .{ "token", .token },
+    .{ "tls", .tls },
+    .{ "tls-ca", .tls_ca },
+    .{ "tls-cert", .tls_cert },
+    .{ "tls-key", .tls_key },
+    .{ "tls-skip-verify", .tls_skip_verify },
+    .{ "connect-timeout-ms", .connect_timeout_ms },
+    .{ "ping-interval-ms", .ping_interval_ms },
+    .{ "max-reconnect", .max_reconnect },
+    .{ "reconnect-wait-ms", .reconnect_wait_ms },
+    .{ "export", .@"export" },
+});
 
 fn parseBridgeForm(arena: Allocator, kvs: []const sexpr.Value) ConfigError!Config {
     if (kvs.len % 2 != 0) return error.InvalidBridgeForm;
@@ -89,47 +125,33 @@ fn parseBridgeForm(arena: Allocator, kvs: []const sexpr.Value) ConfigError!Confi
         const k = kvs[i].keyword;
         const v = kvs[i + 1];
 
-        if (std.mem.eql(u8, k, "servers")) {
-            cfg.servers = try stringList(arena, v);
-        } else if (std.mem.eql(u8, k, "name")) {
-            cfg.name = try asString(v);
-        } else if (std.mem.eql(u8, k, "creds")) {
-            cfg.creds = try asString(v);
-        } else if (std.mem.eql(u8, k, "user")) {
-            cfg.user = try asString(v);
-        } else if (std.mem.eql(u8, k, "password")) {
-            cfg.password = try asString(v);
-        } else if (std.mem.eql(u8, k, "token")) {
-            cfg.token = try asString(v);
-        } else if (std.mem.eql(u8, k, "tls")) {
-            cfg.tls = try asBool(v);
-        } else if (std.mem.eql(u8, k, "tls-ca")) {
-            cfg.tls_ca = try asString(v);
-        } else if (std.mem.eql(u8, k, "tls-cert")) {
-            cfg.tls_cert = try asString(v);
-        } else if (std.mem.eql(u8, k, "tls-key")) {
-            cfg.tls_key = try asString(v);
-        } else if (std.mem.eql(u8, k, "tls-skip-verify")) {
-            cfg.tls_skip_verify = try asBool(v);
-        } else if (std.mem.eql(u8, k, "connect-timeout-ms")) {
-            cfg.connect_timeout_ms = try asI64(v);
-        } else if (std.mem.eql(u8, k, "ping-interval-ms")) {
-            cfg.ping_interval_ms = try asI64(v);
-        } else if (std.mem.eql(u8, k, "max-reconnect")) {
-            cfg.max_reconnect = @intCast(try asI64(v));
-        } else if (std.mem.eql(u8, k, "reconnect-wait-ms")) {
-            cfg.reconnect_wait_ms = try asI64(v);
-        } else if (std.mem.eql(u8, k, "export")) {
-            const filters = try stringList(arena, v);
-            const toks = try arena.alloc([]const []const u8, filters.len);
-            for (filters, 0..) |filt, ix| {
-                subject_mod.validateFilter(filt) catch return error.InvalidBridgeForm;
-                toks[ix] = try splitTokens(arena, filt);
-            }
-            cfg.exports = toks;
-            cfg.export_filters = filters;
-        } else {
-            return error.UnknownKeyword;
+        const tag = keyword_map.get(k) orelse return error.UnknownKeyword;
+        switch (tag) {
+            .servers => cfg.servers = try stringList(arena, v),
+            .name => cfg.name = try asString(v),
+            .creds => cfg.creds = try asString(v),
+            .user => cfg.user = try asString(v),
+            .password => cfg.password = try asString(v),
+            .token => cfg.token = try asString(v),
+            .tls => cfg.tls = try asBool(v),
+            .tls_ca => cfg.tls_ca = try asString(v),
+            .tls_cert => cfg.tls_cert = try asString(v),
+            .tls_key => cfg.tls_key = try asString(v),
+            .tls_skip_verify => cfg.tls_skip_verify = try asBool(v),
+            .connect_timeout_ms => cfg.connect_timeout_ms = try asI64(v),
+            .ping_interval_ms => cfg.ping_interval_ms = try asI64(v),
+            .max_reconnect => cfg.max_reconnect = @intCast(try asI64(v)),
+            .reconnect_wait_ms => cfg.reconnect_wait_ms = try asI64(v),
+            .@"export" => {
+                const filters = try stringList(arena, v);
+                const toks = try arena.alloc([]const []const u8, filters.len);
+                for (filters, 0..) |filt, ix| {
+                    subject_mod.validateFilter(filt) catch return error.InvalidBridgeForm;
+                    toks[ix] = try splitTokens(arena, filt);
+                }
+                cfg.exports = toks;
+                cfg.export_filters = filters;
+            },
         }
     }
 

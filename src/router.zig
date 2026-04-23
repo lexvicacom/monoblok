@@ -122,6 +122,7 @@ pub const Router = struct {
     }
 
     pub const lvc_prefix = "$LVC.";
+    pub const stats_prefix = "$STATS.";
 
     pub fn subscribe(
         self: *Router,
@@ -132,10 +133,12 @@ pub const Router = struct {
         try subject_mod.validateFilter(filter);
 
         const is_lvc = std.mem.startsWith(u8, filter, lvc_prefix);
-        if (is_lvc and !self.lvc_enabled) return error.LvcDisabled;
         const match_filter = if (is_lvc) filter[lvc_prefix.len..] else filter;
-        if (is_lvc and match_filter.len == 0) return error.EmptyToken;
-        if (is_lvc) try subject_mod.validateFilter(match_filter);
+        if (is_lvc) {
+            if (!self.lvc_enabled) return error.LvcDisabled;
+            if (match_filter.len == 0) return error.EmptyToken;
+            try subject_mod.validateFilter(match_filter);
+        }
 
         const sid_owned = try self.gpa.dupe(u8, sid);
         errdefer self.gpa.free(sid_owned);
@@ -153,6 +156,11 @@ pub const Router = struct {
             .max_msgs = null,
             .delivered = 0,
         });
+        // If anything after the append fails (e.g. emitCached OOM), roll the
+        // subscription back so the client doesn't end up silently subscribed
+        // to something after we reported failure. swapRemove is O(1) and
+        // safe on the just-appended tail.
+        errdefer _ = self.subs.pop();
 
         if (is_lvc) try self.emitCached(conn, match_filter, sid);
 
@@ -217,7 +225,12 @@ pub const Router = struct {
         var sub_tokens_buf: [subject_mod.max_tokens][]const u8 = undefined;
         const sub_tokens = splitInto(subject, &sub_tokens_buf);
 
-        if (self.lvc_enabled) try self.storeLast(subject, payload);
+        // $STATS.* is excluded from the LVC: it's a periodic system stream
+        // (one burst every stats_tick_ms), caching it only bloats the cache
+        // and pins a snapshot that's stale the moment the next tick fires.
+        if (self.lvc_enabled and !std.mem.startsWith(u8, subject, stats_prefix)) {
+            try self.storeLast(subject, payload);
+        }
 
         // Scratch for the LVC-subject prefixing; freed in one shot.
         var scratch_state: std.heap.ArenaAllocator = .init(self.gpa);
@@ -248,12 +261,10 @@ pub const Router = struct {
                 }
                 kicks.append(scratch, s.conn) catch {};
                 s.delivered += 1;
-                if (s.max_msgs) |m| {
-                    if (s.delivered >= m) {
-                        self.freeSub(s);
-                        _ = self.subs.swapRemove(i);
-                        continue;
-                    }
+                if (s.max_msgs != null and s.delivered >= s.max_msgs.?) {
+                    self.freeSub(s);
+                    _ = self.subs.swapRemove(i);
+                    continue;
                 }
             }
             i += 1;
