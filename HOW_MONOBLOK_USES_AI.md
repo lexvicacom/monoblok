@@ -63,6 +63,8 @@ survive get prototyped by me. Treating Claude as a
 rubber duck that pushes back is probably where I get the most value
 out of it day to day.
 
+**First stab at docs** AI is well-placed to give the skeleton/framework of documentation, which again, might get neglected in favour of writing code. Both are important.
+
 A caveat on all of the above: these models are trained to be helpful,
 which shades into sycophancy more often than is useful. Nothing Mr.
 Claude says is taken as gospel. He (they?) gets sworn at frequently,
