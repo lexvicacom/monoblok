@@ -16,17 +16,16 @@ zig build --release=safe
 Any NATS client works:
 
 ```
-nats pub sensors.temp 42.5
 nats sub 'sensors.*'
+(new shell)
+nats pub sensors.temp 42.5
 ```
-
-Subjects are alphanumerics plus `- _ $`; `*` is a single token, `>` is a trailing wildcard. Core protocol only: no auth, TLS, queue groups, headers, or JetStream.
 
 Prebuilt Mac (ARM) and Linux (x86_64 + aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Each platform ships two `.tar.gz` archives: the default (includes the [outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the target box) and a `-nobridge` variant with no external runtime dependencies.
 
 ### Dependencies
 
-OpenSSL (dynamically linked) is required when the NATS bridge is enabled, which is the default:
+OpenSSL is required when the NATS bridge is enabled, which is the default:
 
 ```
 # macOS
@@ -34,12 +33,6 @@ brew install openssl@3
 
 # Debian / Ubuntu
 sudo apt install libssl-dev pkg-config
-
-# Fedora / RHEL
-sudo dnf install openssl-devel pkgconf-pkg-config
-
-# Arch
-sudo pacman -S openssl pkgconf
 ```
 
 If you don't want the bridge (or don't want to install OpenSSL), build with `zig build -Dbridge=false`.
@@ -100,13 +93,13 @@ patchbay is a small S-expression DSL describing how every incoming publish gets 
     (publish "events.alerts" (str-concat subject ": " payload))))
 ```
 
-### Wait, signal conditioning?
+### Wait, what is signal conditioning?
 
 Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate and practically useless; you want "22.0, and tell me when it actually changes."
 
 patchbay does the software version of that, at the broker, before your subscribers ever see the message. `round` snaps to decimals, `quantize` snaps to a step size, `squelch` drops repeats, `deadband` ignores changes below a threshold, `moving-avg` smooths a window. Chain them together and a chatty sensor becomes a well-behaved "change-only" stream, so subscribers don't have to deal with the noise themselves and can stay simple: they get a clean signal.
 
-### Why the electronics vocabulary
+### Why the electronics vocabulary?
 
 Because the operations already have names, and the names already mean the right thing. `squelch` on a radio suppresses the channel until signal strength changes; here it suppresses the message until the value changes. `deadband` on an industrial controller ignores input movement smaller than a threshold; here it ignores payload changes smaller than a threshold. A "patchbay" in a studio is a grid of jacks you physically wire between sources and destinations, which is exactly what the DSL looks like on the page: subject filters on the left, sends on the right.
 
@@ -124,11 +117,11 @@ Filtering, routing, light payload rewriting, and signal conditioning at the brok
 
 nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/subject_mapping) rewrite subjects with wildcards but can't see the payload or keep state. If all you want is "rename `bar.a.b` to `baz.b.a`," use those; patchbay is for gating on `payload-float` and per-(rule, subject) state (`squelch`, `deadband`, `moving-avg`).
 
-### Reference
+### Patchbay in depth
 
 The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [PATCHBAY.md](./PATCHBAY.md).
 
-## `$LVC.*`: last-value stream
+## `$LVC.*`: the last-value-cache stream
 
 Every subject has an implicit last-value cache. Subscribing to `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value first (if any), then every subsequent publish. Wildcards work. `PUB $LVC.*` is rejected.
 
@@ -196,9 +189,6 @@ Full keyword reference:
 | `:user` / `:password`       | string          | basic auth                                        |
 | `:token`                    | string          | bearer-token auth                                 |
 | `:tls`                      | bool            | enable TLS. Required if any `:servers` URL is `tls://`. |
-| `:tls-ca`                   | path            | CA bundle (PEM)                                   |
-| `:tls-cert` / `:tls-key`    | path            | client cert + private key (mTLS)                  |
-| `:tls-skip-verify`          | bool            | **dev only**. Accepts any server cert.            |
 | `:connect-timeout-ms`       | number          | initial-connect timeout                           |
 | `:ping-interval-ms`         | number          | keepalive ping cadence                            |
 | `:max-reconnect`            | number          | `-1` for unlimited                                |
@@ -212,9 +202,9 @@ A local publish (from a NATS client or from a patchbay rule) whose subject match
 
 Reconnects are handled by nats.c internally. During the reconnect window, publishes are buffered up to the library default; once the buffer is full, further publishes count as dropped. Counters are published on the `$STATS.*` tick as `$STATS.bridge.published` and `$STATS.bridge.dropped`.
 
-### Disabling
+### Disabling the bridge
 
-The bridge is on by default. Turn it off at build time with `zig build -Dbridge=false`, which also removes the OpenSSL link dependency. Both variants are published to each release as `-nobridge` and (default) archives — pick whichever fits the target box.
+The bridge is on by default. Turn it off at build time with `zig build -Dbridge=false`, which also removes the OpenSSL link dependency. Both variants are published to each release as `-nobridge` and (default) archives — pick whichever fits the target box. Or simply do not add a `bridge` form to your config if you do not need it.
 
 ## Using with Claude Code
 
@@ -298,13 +288,11 @@ Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--
 | 1 pub → 10 subs     |      12.60M/s  |    4.95M/s  |  +155% |       3.31M/s  |   2.59M/s  |    +28% |
 | 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       3.98M/s  |   3.05M/s  |    +30% |
 
-Fan-out is where monoblok pulls ahead on both platforms. The single-subscriber workload is the one regression that flips sign between platforms (likely io_uring completion batching behaving differently under low concurrency). Multi-publisher wins on the M4 collapse to parity on the 2-vCPU box, since a single-threaded loop can't scale past one core while nats-server spreads across both. `--release=fast` adds roughly 10–15% on top if you want to poke the ceiling.
+Fan-out is where monoblok pulls ahead on both platforms. The single-subscriber workload is the one regression that flips sign between platforms (likely io_uring completion batching behaving differently under low concurrency). Multi-publisher wins on the M4 collapse to parity on the 2-vCPU box, since a single-threaded loop can't scale past one core while nats-server spreads across both. `--release=fast` adds roughly 10–15% on top if you want to poke the ceiling. Take this all with a pinch of salt, it isn't that deep and the numbers could well be off.
 
 ## Building for release
 
-Release binaries are built natively on each target architecture, not cross-compiled. The `.github/workflows/release.yml` pipeline uses three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), and `macos-latest` (aarch64). Each runs `zig build --release=safe` with OpenSSL installed locally. The binaries dyn-link against the target's glibc + OpenSSL, so a reasonably current distro (Debian 12+, Ubuntu 22.04+, any current macOS) is required. glibc 2.35 is the floor — that's Ubuntu 22.04's libc.
-
-Native per-arch rather than cross-compile is a deliberate choice: it dodges the pain of sourcing target-OS OpenSSL headers/libs on a foreign build host, and the GHA runners are free.
+Release binaries are built natively on each target architecture, not cross-compiled. The `.github/workflows/release.yml` pipeline uses three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), and `macos-latest` (aarch64). Each runs `zig build --release=safe` assuming OpenSSL is installed locally..
 
 Each release ships **two variants per platform**: with the NATS bridge (requires OpenSSL on the target box) and without (`-nobridge` suffix, no runtime deps). Grab the bridge variant if you want to forward traffic to a real NATS cluster; grab the `-nobridge` variant if you just want a standalone pub/sub broker with no external deps.
 
