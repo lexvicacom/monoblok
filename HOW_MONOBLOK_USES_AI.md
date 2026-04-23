@@ -6,9 +6,20 @@ where the line sits.
 
 Short version: I use Claude Code. I can't imagine not using it. Sosumi.
 
-## The tool
+The interesting parts of monoblok are the bits bolted onto the
+NATS-shaped core (the patchbay DSL, `$LVC.*` last-value streams,
+`$STATS.*`, the export-only bridge) and the fact that it sort of holds up
+performance-wise against the real thing on a single thread. Some of
+that may turn into something less toy-shaped at some point, who knows.
+Either way, if the additions are the pitch and the perf numbers are
+the evidence. The design of those additions is mine; the numbers are
+measured; Claude's job is to help make the ideas happen and catch the bugs I wrote on the way there.
 
-Everything AI-shaped in this repo goes through [Claude
+If you see any AI BS or suspected slop, let me know.
+
+## Claude
+
+I use [Claude
 Code](https://claude.com/claude-code) running **Claude Opus 4.7 (1M
 context)**.
 
@@ -77,15 +88,3 @@ real source wins, every time.
   machine. If you see a number, it was measured.
 - **Security or production-readiness claims.** monoblok is an expreriment.
 
-## Why bother writing this
-
-The interesting parts of monoblok are the bits bolted onto the
-NATS-shaped core (the patchbay DSL, `$LVC.*` last-value streams,
-`$STATS.*`, the export-only bridge) and the fact that it sort of holds up
-performance-wise against the real thing on a single thread. Some of
-that may turn into something less toy-shaped at some point, who knows.
-Either way, if the additions are the pitch and the perf numbers are
-the evidence. The design of those additions is mine; the numbers are
-measured; Claude's job is to help make the ideas happen and catch the bugs I wrote on the way there.
-
-If you see any AI BS or suspected slop, let me know.
