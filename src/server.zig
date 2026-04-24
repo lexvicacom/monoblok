@@ -178,6 +178,7 @@ pub const Server = struct {
             std.log.warn("conn init failed: {s}", .{@errorName(err)});
             return .disarm;
         };
+        std.log.info("conn {d} accepted", .{conn_state.router_conn.id});
         conn_state.start(loop);
         return .disarm;
     }
@@ -498,6 +499,7 @@ const Conn = struct {
 
     fn beginClose(self: *Conn, loop: *xev.Loop) void {
         if (self.closing) return;
+        std.log.info("conn {d} closed", .{self.router_conn.id});
         self.closing = true;
         self.router_conn.markClosed();
         self.server.router.removeAllFor(self.router_conn);
