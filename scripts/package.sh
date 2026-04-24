@@ -30,6 +30,13 @@ mkdir -p "dist/${name}"
 cp zig-out/bin/monoblok "dist/${name}/"
 cp patchbay.edn "dist/${name}/"
 cp scripts/bench.sh "dist/${name}/"
+# systemd unit + installer are Linux-only.
+case "$PLATFORM" in
+    linux-*)
+        cp scripts/monoblok.service "dist/${name}/"
+        cp scripts/install-systemd.sh "dist/${name}/"
+        ;;
+esac
 cp -r examples "dist/${name}/"
 # Tarball on all platforms — no .zip on mac.
 tar -czf "dist/${name}.tar.gz" -C dist "${name}"

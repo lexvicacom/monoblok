@@ -1,0 +1,36 @@
+[Unit]
+Description=monoblok NATS-compatible server with patchbay routing
+Documentation=https://github.com/lexvicacom/monoblok
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=monoblok
+Group=monoblok
+ExecStart=/usr/local/bin/monoblok --port 4222 --patchbay /etc/monoblok/patchbay.edn
+Restart=on-failure
+RestartSec=2s
+
+# stdout/stderr go to the journal; view with:
+#   journalctl -u monoblok -f
+StandardOutput=journal
+StandardError=journal
+
+# Hardening (single-binary, reads one config file, binds one TCP port).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadOnlyPaths=/etc/monoblok
+
+[Install]
+WantedBy=multi-user.target

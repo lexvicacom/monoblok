@@ -37,6 +37,18 @@ sudo apt install libssl-dev pkg-config
 
 If you don't want the bridge (or don't want to install OpenSSL), build with `zig build -Dbridge=false`.
 
+### Running as a systemd service (Ubuntu / Debian)
+
+A unit file and installer ship in [scripts/](./scripts/) and inside the Linux release tarballs (the macOS tarball omits them):
+
+```
+sudo bash scripts/install-systemd.sh
+sudo systemctl enable --now monoblok
+journalctl -u monoblok -f
+```
+
+The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, creates a `monoblok` system user, and registers the unit. stdout/stderr land in the systemd journal (`journalctl -u monoblok`), so log rotation, structured fields, and `--since`/`--until` filtering are free.
+
 ## Driving the demo patchbay
 
 The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the server, then in another shell subscribe so you can watch the derived traffic show up:
@@ -231,6 +243,8 @@ Once it's loaded, describe the stream you have and the stream you want. For exam
 Drop `ticker.edn` into a convenient place and run it with `monoblok --patchbay ticker.edn`.
 
 ## Observability
+
+Every accepted and closed connection logs a line at info level (`conn 42 accepted` / `conn 42 closed`), keyed by the same connection id used in the warn lines below. Most NATS clients hold one long-lived TCP connection, so this is normally O(clients) not O(messages).
 
 Two always-on warn thresholds fire if something's off:
 
