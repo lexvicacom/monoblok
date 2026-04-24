@@ -9,12 +9,13 @@ pub const sexpr = @import("sexpr.zig");
 pub const rules = @import("rules.zig");
 pub const router = @import("router.zig");
 pub const server = @import("server.zig");
+pub const snapshot = @import("snapshot.zig");
 pub const bridge = if (build_options.bridge) @import("bridge.zig") else {};
 
 const manifest = @import("manifest");
 const build_options = @import("build_options");
 
-const Flag = enum { port, patchbay, no_lvc, stats, help, version };
+const Flag = enum { port, patchbay, no_lvc, stats, snapshot, snapshot_every, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -23,6 +24,8 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--rules", .patchbay },
     .{ "--no-lvc", .no_lvc },
     .{ "--stats", .stats },
+    .{ "--snapshot", .snapshot },
+    .{ "--snapshot-every", .snapshot_every },
     .{ "--help", .help },
     .{ "-h", .help },
     .{ "--version", .version },
@@ -38,6 +41,8 @@ pub fn main(init: std.process.Init) !void {
     var patchbay_path: ?[]const u8 = null;
     var lvc_enabled = true;
     var stats_enabled = false;
+    var snapshot_path: ?[]const u8 = null;
+    var snapshot_every_s: u32 = 0;
 
     var it = try init.minimal.args.iterateAllocator(gpa);
     defer it.deinit();
@@ -52,6 +57,11 @@ pub fn main(init: std.process.Init) !void {
             .patchbay => patchbay_path = it.next() orelse fatal("--patchbay requires a path"),
             .no_lvc => lvc_enabled = false,
             .stats => stats_enabled = true,
+            .snapshot => snapshot_path = it.next() orelse fatal("--snapshot requires a path"),
+            .snapshot_every => {
+                const v = it.next() orelse fatal("--snapshot-every requires a value in seconds");
+                snapshot_every_s = std.fmt.parseInt(u32, v, 10) catch fatal("invalid --snapshot-every value");
+            },
             .help => {
                 printUsage();
                 return;
@@ -79,6 +89,28 @@ pub fn main(init: std.process.Init) !void {
 
     var r = router.Router.init(gpa, lvc_enabled);
     defer r.deinit();
+
+    // Snapshot: optional LVC warm-start. If `--snapshot PATH` is given and
+    // the file exists, populate the cache before we accept any connections
+    // so the first `SUB $LVC.*` sees the restored state.
+    if (snapshot_path) |sp| {
+        if (!lvc_enabled) {
+            std.log.warn("snapshot: --snapshot ignored because --no-lvc is set", .{});
+        } else if (readFile(fsio, arena, sp)) |bytes| {
+            snapshot.loadInto(gpa, bytes, &r, loaded_rules) catch |err| {
+                std.log.warn("snapshot: load failed ({s}): {s}", .{ sp, @errorName(err) });
+            };
+            var rs_total: usize = 0;
+            for (loaded_rules) |*rule| rs_total += rule.state.count();
+            std.log.info(
+                "snapshot: loaded {d} lvc / {d} rule-state entries from {s}",
+                .{ r.last_value.count(), rs_total, sp },
+            );
+        } else |err| switch (err) {
+            error.FileNotFound => std.log.info("snapshot: {s} not found, starting empty", .{sp}),
+            else => std.log.warn("snapshot: read failed ({s}): {s}", .{ sp, @errorName(err) }),
+        }
+    }
 
     // Bridge: optional outbound NATS connection. Parsed from the patchbay
     // file's top-level `(bridge :servers [...] :export [...] ...)` form.
@@ -129,6 +161,13 @@ pub fn main(init: std.process.Init) !void {
             @ptrCast(&bridge_runtime.?.stats)
         else
             null,
+        .snapshot_path = if (lvc_enabled) snapshot_path else null,
+        .snapshot_every_ms = if (lvc_enabled and snapshot_path != null)
+            @as(u64, snapshot_every_s) * 1000
+        else
+            0,
+        .snapshot_io = fsio,
+        .shutdown_enabled = true,
     };
 
     const address: std.Io.net.IpAddress = .{ .ip4 = .unspecified(port) };
@@ -136,7 +175,36 @@ pub fn main(init: std.process.Init) !void {
     defer srv.deinit();
     std.log.info("monoblok listening on {f} id={s}", .{ address, server_id });
 
+    // SIGINT / SIGTERM -> graceful shutdown with a final snapshot. The
+    // handler only touches the atomic server pointer and notifies the
+    // loop's xev.Async; all real work happens on the loop thread in
+    // onShutdown.
+    shutdown_server_ptr.store(&srv, .release);
+    installShutdownSignals();
+
     try loop.run(.until_done);
+}
+
+/// Published by the main thread before the signal handlers are installed,
+/// read by the signal handler (which may fire on any thread). Pointer
+/// stores on aligned memory are atomic on every real CPU, but using an
+/// explicit atomic keeps it portable-correct and documents intent.
+var shutdown_server_ptr: std.atomic.Value(?*server.Server) = .init(null);
+
+fn installShutdownSignals() void {
+    const act: std.posix.Sigaction = .{
+        .handler = .{ .handler = onSignalRequestShutdown },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(.INT, &act, null);
+    std.posix.sigaction(.TERM, &act, null);
+}
+
+fn onSignalRequestShutdown(_: std.posix.SIG) callconv(.c) void {
+    // Async-signal-safe: notify() does a non-blocking write to an
+    // eventfd / mach port. No allocation, no locks, no stdio.
+    if (shutdown_server_ptr.load(.acquire)) |srv| srv.requestShutdown();
 }
 
 fn bridgePublishTrampoline(ctx: *anyopaque, subj: []const u8, payload: []const u8) void {
@@ -163,7 +231,7 @@ fn fatal(msg: []const u8) noreturn {
 
 fn printUsage() void {
     std.debug.print(
-        \\Usage: monoblok [--port PORT] [--patchbay FILE] [--no-lvc]
+        \\Usage: monoblok [--port PORT] [--patchbay FILE] [--no-lvc] [--snapshot FILE]
         \\
         \\A NATS-compatible server with an S-expression routing and signal conditioning DSL ("patchbay").
         \\
@@ -177,6 +245,13 @@ fn printUsage() void {
         \\                   rule-publishes-per-input and max per-conn
         \\                   outbound hwm. Useful for spotting headroom
         \\                   under threshold.
+        \\  --snapshot FILE  LVC snapshot path. Loaded on startup if it
+        \\                   exists. Combine with --snapshot-every to also
+        \\                   dump periodically.
+        \\  --snapshot-every SECONDS
+        \\                   Write the snapshot every SECONDS (atomic
+        \\                   write via .tmp + rename). 0 or omitted =
+        \\                   load-only. Requires --snapshot.
         \\
     , .{});
 }
@@ -195,5 +270,6 @@ test {
     _ = proto;
     _ = sexpr;
     _ = rules;
+    _ = snapshot;
     if (build_options.bridge) _ = bridge;
 }

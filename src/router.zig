@@ -290,6 +290,13 @@ pub const Router = struct {
         if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
     }
 
+    /// Public wrapper for snapshot loaders. Same semantics as the internal
+    /// publish-path call; exposed so `snapshot.zig` can populate the cache
+    /// without duplicating the dup+append logic.
+    pub fn storeLastPublic(self: *Router, subject: []const u8, payload: []const u8) !void {
+        return self.storeLast(subject, payload);
+    }
+
     fn storeLast(self: *Router, subject: []const u8, payload: []const u8) !void {
         const gop = try self.last_value.getOrPut(subject);
         if (!gop.found_existing) {
