@@ -1,0 +1,70 @@
+;; Public demo patchbay for monoblok.rtd.pub:4222.
+;;
+;; Everything is scoped under `demo.>` so visitors can't stomp on server
+;; internals or each other's namespaces. Each rule below is an example
+;; of one patchbay primitive; see DEMO.md for the companion walkthrough.
+
+;; 1. Squelch: round to 1dp, only emit when the rounded value changes.
+;;    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.stable`.
+(on "demo.sensors.*"
+  (-> payload-float
+      (round 1)
+      (squelch)
+      (publish-to (subject-append "stable"))))
+
+;; 2. Deadband: analog-style suppression; ignore moves smaller than 0.5.
+;;    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.delta`.
+(on "demo.sensors.*"
+  (-> payload-float
+      (deadband 0.5)
+      (publish-to (subject-append "delta"))))
+
+;; 3. Moving average + deadband: smooth a noisy stream over 10 samples
+;;    and only emit when the smoothed value drifts by at least 1.0.
+;;    Watch `demo.sensors.*.smoothed`.
+(on "demo.sensors.*"
+  (-> payload-float
+      (moving-avg 10)
+      (deadband 1.0)
+      (publish-to (subject-append "smoothed"))))
+
+;; 4. Delta + squelch: emit the per-tick change, but only when it
+;;    differs from the last delta (so a stream of identical values
+;;    doesn't produce a stream of zeros). 0 on first sight.
+;;    Watch `demo.sensors.*.delta-abs`.
+(on "demo.sensors.*"
+  (-> (delta payload-float)
+      (squelch)
+      (publish-to (subject-append "delta-abs"))))
+
+;; 5. Transition: one rule covers both edges of a threshold. Fires
+;;    "hot" once on crossing > 28, "cool" once on crossing back.
+;;    Watch `demo.sensors.*.alert` and `demo.sensors.*.ok`.
+(on "demo.sensors.*"
+  (transition (> payload-float 28.0)
+    (publish-to (subject-append "alert") "hot")
+    (publish-to (subject-append "ok")    "cool")))
+
+;; 6. Hold-off: leading-edge rate gate. While above 40, emit at most
+;;    once every 2s. Publish faster than that and extra publishes are
+;;    dropped silently. Watch `demo.sensors.*.overload`.
+(on "demo.sensors.*"
+  (when (> payload-float 40.0)
+    (-> payload
+        (hold-off 2000)
+        (publish-to (subject-append "overload")))))
+
+;; 7. Rising-edge: only fire on the false-to-true transition. Useful
+;;    when you care about "went high" but not "is high."
+;;    Watch `demo.sensors.*.spike`.
+(on "demo.sensors.*"
+  (-> (rising-edge (> payload-float 50.0))
+      (publish-to (subject-append "spike"))))
+
+;; 8. Alert mirror: anything on `demo.log.*` whose payload contains
+;;    "alert" is copied to `demo.alerts`. Subject-token demo too:
+;;    `(subject-token 2)` is the third dot-separated token.
+(on "demo.log.*"
+  (when (contains? payload "alert")
+    (publish "demo.alerts"
+      (str-concat "[" (subject-token 1) "] " payload))))

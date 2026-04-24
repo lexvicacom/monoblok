@@ -21,6 +21,11 @@
 ;                                         last X seen (nil otherwise)
 ;   (deadband DELTA X)                  - pass X through iff changed by >= DELTA
 ;                                         (nil otherwise)
+;   (hold-off MS X)                     - pass X through on first sight, then
+;                                         suppress any further X for MS ms
+;                                         (radar term: re-arm timer). Time is
+;                                         the ingress wall-clock stamped once
+;                                         per incoming publish.
 ;   (moving-avg N X)                    - running mean over last N samples
 ;   (moving-sum N X)                    - running sum over last N samples
 ;   (moving-max N X) / (moving-min N X) - window extremes
@@ -33,6 +38,8 @@
 ;   (publish-to SUBJECT VALUE)          - like publish with args flipped,
 ;                                         no-op when VALUE is nil. Numbers
 ;                                         are formatted canonically.
+
+
 
 ; Fan high temperature readings out to a dedicated sub-subject.
 (on "sensors.*"
@@ -86,8 +93,10 @@
 ;   :connect-timeout-ms / :ping-interval-ms
 ;   :max-reconnect      -1 for unlimited
 ;   :reconnect-wait-ms
-;   :export             list of subject filters (wildcards allowed) to
-;                       forward. Subject is sent to the remote as-is.
+;   :export             list of subject filters to forward. Standard
+;                       NATS wildcards: `*` is one token, `>` is tail-
+;                       only and matches one or more. Subject is sent
+;                       to the remote as-is.
 ;
 ; Counters are published to `$STATS.bridge.published` / `.dropped` on the
 ; normal $STATS tick.

@@ -30,6 +30,7 @@ mkdir -p "dist/${name}"
 cp zig-out/bin/monoblok "dist/${name}/"
 cp patchbay.edn "dist/${name}/"
 cp scripts/bench.sh "dist/${name}/"
+cp -r examples "dist/${name}/"
 # Tarball on all platforms — no .zip on mac.
 tar -czf "dist/${name}.tar.gz" -C dist "${name}"
 

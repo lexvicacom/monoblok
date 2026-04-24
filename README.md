@@ -4,7 +4,7 @@
 
 # monoblok
 
-An experimental toy: a partially NATS-compatible pub/sub daemon with last-value streams and an S-expression signal-routing and conditioning DSL called **patchbay**. [Read the introduction post.](https://alexjreid.dev/posts/monoblok/)
+An experimental toy: a partially NATS-compatible pub/sub server with last-value streams and an S-expression routing and signal conditioning DSL called **patchbay**. [Read the introduction post.](https://alexjreid.dev/posts/monoblok/)
 
 ## Build & run
 
@@ -39,7 +39,7 @@ If you don't want the bridge (or don't want to install OpenSSL), build with `zig
 
 ## Driving the demo patchbay
 
-The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the daemon, then in another shell subscribe so you can watch the derived traffic show up:
+The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the server, then in another shell subscribe so you can watch the derived traffic show up:
 
 ```
 nats sub 'sensors.>'       # in one shell
@@ -77,11 +77,11 @@ nats sub 'events.>'        # in another (for the alert rule)
    done
    ```
 
-Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the daemon's lifetime; restart the daemon to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
+Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
 
 ## Patchbay
 
-patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Think of it as a wiring diagram: jacks (subject filters) at the top, filter chains in the middle (`round`, `squelch`, `deadband`, `moving-avg`, ...), and sends (`publish-to`) at the bottom. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER` (normal `*` / `>` wildcards apply). Messages a patchbay form publishes fan out normally but **do not** re-enter the DSL, so there are no cycles.
+patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Think of it as a wiring diagram: jacks (subject filters) at the top, filter chains in the middle (`round`, `squelch`, `deadband`, `moving-avg`, ...), and sends (`publish-to`) at the bottom. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are the usual NATS ones: `*` matches one token, `>` matches one-or-more tokens and must be the tail (so `foo.*.*` is exactly three tokens, `foo.>` is three-or-more). Messages a patchbay form publishes fan out normally but **do not** re-enter the DSL, so there are no cycles.
 
 ```edn
 (on "sensors.*"
@@ -183,7 +183,7 @@ Full keyword reference:
 | keyword                     | type            | notes                                             |
 |-----------------------------|-----------------|---------------------------------------------------|
 | `:servers`                  | list of strings | **required**. `nats://` or `tls://` URLs.         |
-| `:export`                   | list of strings | subject filters (wildcards allowed). Local publishes matching any of these are forwarded. |
+| `:export`                   | list of strings | subject filters. Same `*` / `>` semantics as `(on ...)` and NATS `SUB`: `*` is one token, `>` is tail-only and matches one-or-more. Local publishes matching any filter are forwarded. |
 | `:name`                     | string          | client name shown in the remote's monitoring      |
 | `:creds`                    | path            | JWT + NKey credentials file (NGS / operator mode) |
 | `:user` / `:password`       | string          | basic auth                                        |
@@ -198,7 +198,7 @@ Auth precedence: `:creds` > `:user`/`:password` > `:token`. If TLS is on but `:t
 
 ### Semantics
 
-A local publish (from a NATS client or from a patchbay rule) whose subject matches **any** `:export` filter is forwarded to the remote as-is. Subjects that don't match any filter never leave the daemon. Fan-out order is: local subscribers served first, bridge second — so a slow or reconnecting remote can't starve local delivery.
+A local publish (from a NATS client or from a patchbay rule) whose subject matches **any** `:export` filter is forwarded to the remote as-is. Subjects that don't match any filter never leave the server. Fan-out order is: local subscribers served first, bridge second — so a slow or reconnecting remote can't starve local delivery.
 
 Reconnects are handled by nats.c internally. During the reconnect window, publishes are buffered up to the library default; once the buffer is full, further publishes count as dropped. Counters are published on the `$STATS.*` tick as `$STATS.bridge.published` and `$STATS.bridge.dropped`.
 
@@ -259,7 +259,7 @@ The cost is a one-core cap. A heavy rule on a hot subject, or a giant fan-out, w
 
 ### Why libxev
 
-Zig 0.16's `std.Io` works, but not in a way that fits a single-threaded event loop: the macOS `Dispatch` backend is thread-per-connection, and the other backends I tried (`Kqueue`, `Uring`) didn't compile cleanly for me on 0.16 (could well be me holding it wrong; or maybe it is too low level for my small brain). libxev gives us a proper single-loop model on kqueue / io_uring / epoll / IOCP, picked at comptime. The daemon logs which backend it's using at startup.
+Zig 0.16's `std.Io` works, but not in a way that fits a single-threaded event loop: the macOS `Dispatch` backend is thread-per-connection, and the other backends I tried (`Kqueue`, `Uring`) didn't compile cleanly for me on 0.16 (could well be me holding it wrong; or maybe it is too low level for my small brain). libxev gives us a proper single-loop model on kqueue / io_uring / epoll / IOCP, picked at comptime. The server logs which backend it's using at startup.
 
 ## Tests
 
