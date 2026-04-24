@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Install monoblok as a systemd service on Ubuntu/Debian.
 #
-# Usage (from a release tarball or repo checkout containing the binary):
-#   sudo bash scripts/install-systemd.sh [PATH_TO_BINARY] [PATH_TO_PATCHBAY]
+# Works from either:
+#   * an unpacked release tarball (binary + patchbay + service unit all sit
+#     next to this script), or
+#   * a repo checkout (binary under zig-out/bin, patchbay + unit in the repo).
 #
-# Defaults:
-#   PATH_TO_BINARY   = ./zig-out/bin/monoblok (or ./monoblok if present)
-#   PATH_TO_PATCHBAY = ./patchbay.edn
+# Usage:
+#   sudo bash install-systemd.sh [PATH_TO_PATCHBAY]
+#
+# The binary is always picked up from a known location (tarball-relative
+# first, repo-relative second); overriding it is not supported.
 #
 # Idempotent: safe to re-run to upgrade the binary or refresh the unit.
 
@@ -19,21 +23,36 @@ fi
 
 here="$(cd "$(dirname "$0")" && pwd)"
 
-# Pick the binary.
-if [ "${1:-}" != "" ]; then
-    bin_src="$1"
+# Pick the binary. Tarball layout (next to this script) wins; otherwise
+# fall back to a repo checkout's zig-out.
+if [ -x "$here/monoblok" ]; then
+    bin_src="$here/monoblok"
 elif [ -x "$here/../zig-out/bin/monoblok" ]; then
     bin_src="$here/../zig-out/bin/monoblok"
-elif [ -x "$here/../monoblok" ]; then
-    bin_src="$here/../monoblok"
 else
-    echo "could not find monoblok binary; pass its path as the first argument" >&2
+    echo "could not find monoblok binary next to the installer or in zig-out/bin" >&2
     exit 2
 fi
 
-patchbay_src="${2:-$here/../patchbay.edn}"
-if [ ! -f "$patchbay_src" ]; then
-    echo "patchbay file not found: $patchbay_src" >&2
+# Pick the patchbay. Explicit arg wins, else tarball, else repo.
+if [ "${1:-}" != "" ]; then
+    patchbay_src="$1"
+elif [ -f "$here/patchbay.edn" ]; then
+    patchbay_src="$here/patchbay.edn"
+elif [ -f "$here/../patchbay.edn" ]; then
+    patchbay_src="$here/../patchbay.edn"
+else
+    echo "could not find patchbay.edn; pass its path as the first argument" >&2
+    exit 2
+fi
+
+# Pick the service unit (tarball has it flat; repo has it under scripts/).
+if [ -f "$here/monoblok.service" ]; then
+    service_src="$here/monoblok.service"
+elif [ -f "$here/../scripts/monoblok.service" ]; then
+    service_src="$here/../scripts/monoblok.service"
+else
+    echo "could not find monoblok.service next to this installer" >&2
     exit 2
 fi
 
@@ -56,7 +75,7 @@ else
     echo "installed /etc/monoblok/patchbay.edn"
 fi
 
-install -m 0644 "$here/monoblok.service" /etc/systemd/system/monoblok.service
+install -m 0644 "$service_src" /etc/systemd/system/monoblok.service
 systemctl daemon-reload
 echo "installed /etc/systemd/system/monoblok.service"
 

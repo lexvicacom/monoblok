@@ -47,7 +47,7 @@ sudo systemctl enable --now monoblok
 journalctl -u monoblok -f
 ```
 
-The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, creates a `monoblok` system user, and registers the unit. stdout/stderr land in the systemd journal (`journalctl -u monoblok`), so log rotation, structured fields, and `--since`/`--until` filtering are free.
+The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, creates a `monoblok` system user, and registers the unit. Snapshots live under `/var/lib/monoblok/state.mblk` (created by systemd's `StateDirectory=`, owned by the service user) and are written every 10 seconds, plus once on `systemctl stop`. stdout/stderr land in the systemd journal (`journalctl -u monoblok`), so log rotation, structured fields, and `--since`/`--until` filtering are free.
 
 ## Driving the demo patchbay
 
@@ -145,6 +145,20 @@ PUB foo.bar 13      ; -> subscriber receives 13
 ```
 
 On by default; `--no-lvc` disables (~2–4% overhead when enabled).
+
+### Snapshots
+
+Warm-start from disk so restarts don't lose the cache or the state inside gates and windows (`deadband`, `squelch`, `moving-avg`, `rising-edge`, etc).
+
+```
+monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
+```
+
+- `--snapshot PATH`: loaded on startup if it exists (missing file is fine, you start empty).
+- `--snapshot-every SECONDS`: periodic background dump (atomic temp-file + rename, runs on a worker thread so the event loop stays responsive). Omit for load-only.
+- `SIGINT` / `SIGTERM` always writes a final snapshot before exiting.
+
+If the patchbay file changes between runs, LVC entries still load; rule state for any rule whose filter no longer matches at its recorded position is skipped with a warning.
 
 ## `$STATS.*`: live counters
 
