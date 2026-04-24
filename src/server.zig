@@ -4,6 +4,7 @@
 //! per-connection via a single-in-flight guard (`write_in_flight`); see the
 //! comment on the write-side fields for why we don't use xev.WriteQueue.
 const std = @import("std");
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const xev = @import("xev");
 
@@ -11,6 +12,7 @@ const proto = @import("proto.zig");
 const router_mod = @import("router.zig");
 const rules_mod = @import("rules.zig");
 const subject_mod = @import("subject.zig");
+const snapshot_mod = @import("snapshot.zig");
 
 const rx_initial = 32 * 1024;
 const rx_max = proto.max_control_line + proto.max_payload + 64;
@@ -82,6 +84,29 @@ pub const Server = struct {
     stats_timer: xev.Timer = undefined,
     stats_completion: xev.Completion = undefined,
 
+    /// LVC snapshot config. If `snapshot_path` is null, no periodic dump
+    /// runs. If set, `snapshot_every_ms > 0` enables the dump timer.
+    /// `snapshot_io` is required when dumping is enabled (the worker
+    /// thread does its file I/O through it).
+    snapshot_path: ?[]const u8 = null,
+    snapshot_every_ms: u64 = 0,
+    snapshot_io: ?Io = null,
+    snapshot_timer: xev.Timer = undefined,
+    snapshot_completion: xev.Completion = undefined,
+    /// Serialises dumps so a slow disk can't stack up multiple threads.
+    /// Set from loop thread before spawn; cleared from worker thread on
+    /// exit. Atomic so the worker's clear is observable.
+    snapshot_in_flight: std.atomic.Value(bool) = .init(false),
+
+    /// Shutdown hook: a signal handler (installed by main) calls
+    /// `shutdown_async.notify()`, which fires `onShutdown` on the loop
+    /// thread. That callback writes a final synchronous snapshot (if
+    /// configured) and stops the loop. Optional — only initialised if
+    /// `shutdown_enabled` is true.
+    shutdown_enabled: bool = false,
+    shutdown_async: xev.Async = undefined,
+    shutdown_completion: xev.Completion = undefined,
+
     fn recordPub(self: *Server, rule_publishes: u32) void {
         if (rule_publishes > self.stats_max_rule_publishes) {
             self.stats_max_rule_publishes = rule_publishes;
@@ -107,10 +132,85 @@ pub const Server = struct {
 
         self.stats_timer = try xev.Timer.init();
         self.stats_timer.run(self.loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
+
+        if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
+            self.snapshot_timer = try xev.Timer.init();
+            self.snapshot_timer.run(
+                self.loop,
+                &self.snapshot_completion,
+                self.snapshot_every_ms,
+                Server,
+                self,
+                onSnapshotTick,
+            );
+        }
+
+        if (self.shutdown_enabled) {
+            self.shutdown_async = try xev.Async.init();
+            self.shutdown_async.wait(
+                self.loop,
+                &self.shutdown_completion,
+                Server,
+                self,
+                onShutdown,
+            );
+        }
     }
 
     pub fn deinit(self: *Server) void {
         self.stats_timer.deinit();
+        if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
+            self.snapshot_timer.deinit();
+        }
+        if (self.shutdown_enabled) self.shutdown_async.deinit();
+    }
+
+    /// Exposed for the signal-handler trampoline in main.zig. Safe to call
+    /// from a signal handler: `Async.notify` only does a small non-blocking
+    /// write to an eventfd / mach port.
+    pub fn requestShutdown(self: *Server) void {
+        if (!self.shutdown_enabled) return;
+        self.shutdown_async.notify() catch {};
+    }
+
+    fn onShutdown(
+        self_opt: ?*Server,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        r: xev.Async.WaitError!void,
+    ) xev.CallbackAction {
+        _ = r catch {};
+        const self = self_opt.?;
+        // Single-threaded loop invariant: while this callback is running,
+        // no read/parse/publish can interleave. Any PUB bytes that arrive
+        // on the wire during the snapshot sit in the kernel buffer and are
+        // dropped when the process exits — same semantics as any ungraceful
+        // NATS shutdown (PUBs are unacked).
+        std.log.info("shutdown: writing final snapshot...", .{});
+        self.snapshotSync() catch |err| {
+            std.log.warn("shutdown: snapshot failed: {s}", .{@errorName(err)});
+        };
+        loop.stop();
+        return .disarm;
+    }
+
+    /// Synchronous snapshot: collect entries and write inline on the loop
+    /// thread. Used only at shutdown, when blocking the loop is fine (we
+    /// are exiting). No-op if no snapshot path is configured.
+    fn snapshotSync(self: *Server) !void {
+        const path = self.snapshot_path orelse return;
+        const io = self.snapshot_io orelse return;
+
+        var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const snap = try snapshot_mod.collect(arena, self.router, self.rules);
+        try snapshot_mod.writeFileAtomic(self.gpa, io, path, snap);
+        std.log.info(
+            "shutdown: wrote {d} lvc / {d} rule-state entries",
+            .{ snap.lvc.len, snap.rule_state.len },
+        );
     }
 
     fn onStatsTick(
@@ -152,6 +252,100 @@ pub const Server = struct {
             try self.publishStat("$STATS.bridge.published", s.published);
             try self.publishStat("$STATS.bridge.dropped", s.dropped);
         }
+    }
+
+    fn onSnapshotTick(
+        self_opt: ?*Server,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        r: xev.Timer.RunError!void,
+    ) xev.CallbackAction {
+        _ = r catch {};
+        const self = self_opt.?;
+
+        self.kickSnapshot() catch |err| {
+            std.log.warn("snapshot: tick failed: {s}", .{@errorName(err)});
+        };
+
+        self.snapshot_timer.run(
+            loop,
+            &self.snapshot_completion,
+            self.snapshot_every_ms,
+            Server,
+            self,
+            onSnapshotTick,
+        );
+        return .disarm;
+    }
+
+    /// Take a point-in-time copy of the LVC on the loop thread, then hand
+    /// it off to a worker thread for serialization + fsync + atomic
+    /// rename. The copy keeps the loop-side pause bounded (memcpy-only,
+    /// no I/O). If a prior dump is still writing we skip this tick.
+    ///
+    /// Invariant: `collect` runs on the loop thread, so no publish can
+    /// interleave with it (single-threaded loop). The worker thread only
+    /// touches the arena it was given — a private copy — so subsequent
+    /// mutations of `router.last_value` and `rule.state` are safe.
+    fn kickSnapshot(self: *Server) !void {
+        const path = self.snapshot_path orelse return;
+        const io = self.snapshot_io orelse return;
+
+        if (self.snapshot_in_flight.swap(true, .acquire)) {
+            std.log.warn("snapshot: previous dump still running, skipping tick", .{});
+            return;
+        }
+        errdefer self.snapshot_in_flight.store(false, .release);
+
+        // The worker owns this arena: all bytes it touches live here,
+        // and it frees the whole arena when done. Using the gpa backing
+        // means no cross-thread arena ownership issues.
+        const arena_ptr = try self.gpa.create(std.heap.ArenaAllocator);
+        errdefer self.gpa.destroy(arena_ptr);
+        arena_ptr.* = .init(self.gpa);
+        errdefer arena_ptr.deinit();
+        const arena = arena_ptr.allocator();
+
+        const snap = try snapshot_mod.collect(arena, self.router, self.rules);
+        const path_copy = try arena.dupe(u8, path);
+
+        const Job = struct {
+            server: *Server,
+            arena_ptr: *std.heap.ArenaAllocator,
+            io: Io,
+            path: []const u8,
+            snap: snapshot_mod.Snapshot,
+
+            fn run(job: *@This()) void {
+                snapshot_mod.writeFileAtomic(job.server.gpa, job.io, job.path, job.snap) catch |err| {
+                    std.log.warn("snapshot: write failed: {s}", .{@errorName(err)});
+                };
+                std.log.info(
+                    "snapshot: wrote {d} lvc / {d} rule-state entries",
+                    .{ job.snap.lvc.len, job.snap.rule_state.len },
+                );
+
+                const ap = job.arena_ptr;
+                const gpa = job.server.gpa;
+                job.server.snapshot_in_flight.store(false, .release);
+                ap.deinit();
+                gpa.destroy(ap);
+                gpa.destroy(job);
+            }
+        };
+
+        const job = try self.gpa.create(Job);
+        errdefer self.gpa.destroy(job);
+        job.* = .{
+            .server = self,
+            .arena_ptr = arena_ptr,
+            .io = io,
+            .path = path_copy,
+            .snap = snap,
+        };
+
+        const t = try std.Thread.spawn(.{}, Job.run, .{job});
+        t.detach();
     }
 
     fn publishStat(self: *Server, subject: []const u8, value: u64) !void {

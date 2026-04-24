@@ -8,9 +8,15 @@ Wants=network-online.target
 Type=simple
 User=monoblok
 Group=monoblok
-ExecStart=/usr/local/bin/monoblok --port 4222 --patchbay /etc/monoblok/patchbay.edn
+ExecStart=/usr/local/bin/monoblok --port 4222 --patchbay /etc/monoblok/patchbay.edn --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
 Restart=on-failure
 RestartSec=2s
+
+# systemd creates /var/lib/monoblok owned by the service user. Writes to
+# it are permitted by the hardening below via StateDirectory. SIGTERM
+# (sent by `systemctl stop`) triggers a final snapshot before exit.
+StateDirectory=monoblok
+StateDirectoryMode=0750
 
 # stdout/stderr go to the journal; view with:
 #   journalctl -u monoblok -f
