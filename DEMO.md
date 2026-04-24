@@ -16,7 +16,7 @@ retention.
 > **Small VPS.** This is a single low-spec box with no rate limiting
 > and no backpressure beyond the OS. A tight publish loop or
 > hundreds of concurrent subscribers will knock it over. If it's
-> dead when you try it, wait a bit and try again — or spin up your
+> dead when you try it, wait a bit and try again, or spin up your
 > own: `./zig-out/bin/monoblok --port 4222 --patchbay examples/demo.edn`.
 
 ## Quick start
@@ -46,7 +46,7 @@ Subject names starting with `$` (like `$LVC.*`) need single-quoting
 so the shell doesn't try to expand them as a variable.
 
 You'll see derived publishes on `demo.sensors.temp.stable`,
-`.delta`, `.smoothed`, `.delta-abs` etc. — each produced by a
+`.delta`, `.smoothed`, `.delta-abs` etc., each produced by a
 different patchbay rule.
 
 ## Subject map
@@ -56,8 +56,8 @@ input subject plus a suffix.
 
 | Publish here                         | Watch here                                  | What the rule does                                        |
 |--------------------------------------|---------------------------------------------|-----------------------------------------------------------|
-| `demo.sensors.<name>` (a number)     | `demo.sensors.<name>.stable`                | `round 1` then `squelch` — emit when rounded value moves  |
-|                                      | `demo.sensors.<name>.delta`                 | `deadband 0.5` — suppress moves smaller than 0.5          |
+| `demo.sensors.<name>` (a number)     | `demo.sensors.<name>.stable`                | `round 1` then `squelch` (emit when rounded value moves)  |
+|                                      | `demo.sensors.<name>.delta`                 | `deadband 0.5` (suppress moves smaller than 0.5)          |
 |                                      | `demo.sensors.<name>.smoothed`              | `moving-avg 10` then `deadband 1.0`                       |
 |                                      | `demo.sensors.<name>.delta-abs`             | per-tick numeric `delta` (0 on first sight)               |
 |                                      | `demo.sensors.<name>.alert` / `.ok`         | `transition` across 28.0: "hot" rising, "cool" falling    |
@@ -68,13 +68,13 @@ input subject plus a suffix.
 State (`squelch` last values, `moving-avg` rings, `transition`
 previous state) is **per rule, per subject**, for the server's
 lifetime. Two people both publishing to `demo.sensors.temp` share
-the same state — that's a feature of the demo, not a bug.
+the same state (that's a feature of the demo, not a bug).
 
-## `$LVC.*` — last-value cache
+## `$LVC.*` (last-value cache)
 
 Independent of any patchbay rule, monoblok caches the **last value
 seen** on every subject. Subscribing to `$LVC.<subject>` gets you
-that cached value immediately, then live updates — even if you
+that cached value immediately, then live updates, even if you
 subscribed long after the publisher disconnected. No JetStream, no
 persistence, just "what was the most recent value."
 
@@ -89,10 +89,10 @@ nats sub '$LVC.demo.>'
 
 Useful for late joiners: a dashboard that connects after an event
 still sees the right state. `$LVC.*` is read-only; publishing to it
-is rejected. The cache lives in memory only — a server restart
-wipes it.
+is rejected. The cache lives in memory only (a server restart
+wipes it).
 
-## `$STATS.*` — live counters
+## `$STATS.*` (live counters)
 
 Every minute the server emits cumulative totals on `$STATS.>`:
 global publishes, per-rule emit/suppress counts, bridge
