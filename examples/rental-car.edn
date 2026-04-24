@@ -12,7 +12,11 @@
       (deadband 1.0)
       (publish-to (subject-append "stable"))))
 
-;; Over-rev alert: sustained above 7500rpm across a 20-sample window
+;; Over-rev alert: sustained above 7500rpm across a 20-sample window.
+;; Hold off for 5s between alerts so one long stretch of redline doesn't
+;; spam the downstream log once per incoming sample.
 (on "car.*.rpm"
   (when (> (moving-avg 20 payload-float) 7500.0)
-    (publish (subject-append "alert") payload)))
+    (-> payload
+        (hold-off 5000)
+        (publish-to (subject-append "alert")))))

@@ -165,7 +165,7 @@ fn printUsage() void {
     std.debug.print(
         \\Usage: monoblok [--port PORT] [--patchbay FILE] [--no-lvc]
         \\
-        \\A NATS-compatible daemon with an S-expression routing DSL ("patchbay").
+        \\A NATS-compatible server with an S-expression routing and signal conditioning DSL ("patchbay").
         \\
         \\Options:
         \\  --port PORT      TCP port to listen on (default 4222)

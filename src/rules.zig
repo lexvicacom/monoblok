@@ -204,6 +204,12 @@ pub const Context = struct {
     /// Incremented by `callPublish` / `callPublishTo`. Read by the server
     /// after `run()` returns to detect rule-amplification blow-ups.
     rule_publishes: u32 = 0,
+    /// Ingress wall-clock in milliseconds, stamped once by the server per
+    /// inbound PUB so every op in this evaluation sees a consistent "now".
+    /// Used by time-based gates like `hold-off`. Defaults to 0 so
+    /// router-internal `run()` paths (e.g. no time-gated rules) don't need
+    /// to care; tests inject a value directly.
+    now_ms: i64 = 0,
 };
 
 pub fn run(rules: []Rule, ctx: *Context) !void {
@@ -256,7 +262,7 @@ const Op = enum {
     add, sub, mul, div,
     contains, starts_with, ends_with, subject_token,
     round, quantize, clamp, min, max, abs, sign,
-    squelch, deadband, changed, delta,
+    squelch, deadband, changed, delta, hold_off,
     moving_avg, moving_sum, moving_max, moving_min,
     rising_edge, falling_edge,
 };
@@ -291,6 +297,7 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "deadband", .deadband },
     .{ "changed?", .changed },
     .{ "delta", .delta },
+    .{ "hold-off", .hold_off },
     .{ "moving-avg", .moving_avg },
     .{ "moving-sum", .moving_sum },
     .{ "moving-max", .moving_max },
@@ -350,6 +357,7 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .deadband => callDeadband(ctx, evaled),
         .changed => callChanged(ctx, evaled),
         .delta => callDelta(ctx, evaled),
+        .hold_off => callHoldOff(ctx, evaled),
         .moving_avg => callMoving(ctx, evaled, .avg),
         .moving_sum => callMoving(ctx, evaled, .sum),
         .moving_max => callMoving(ctx, evaled, .max),
@@ -710,6 +718,34 @@ fn callDelta(ctx: *Context, args: []const Value) EvalError!Value {
     const last = slot.value_ptr.number;
     slot.value_ptr.* = .{ .number = x };
     return .{ .number = x - last };
+}
+
+/// `(hold-off MS X)` (radar term: after firing, ignore further triggers
+/// for MS milliseconds). Passes X through on first sight and on any
+/// subsequent call that arrives at least MS ms after the previous pass;
+/// returns nil otherwise. Time source is `ctx.now_ms`, stamped once per
+/// ingress by the server, so every op in one evaluation sees the same
+/// "now". Per (rule, subject). Composes with `->` the same as `squelch`.
+fn callHoldOff(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 2) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const ms = try asNumber(args[0]);
+    if (ms < 0) return error.TypeMismatch;
+    const now: f64 = @floatFromInt(ctx.now_ms);
+
+    const key = try stateKey(ctx.arena, "hold-off", ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    if (!slot.found_existing) {
+        slot.value_ptr.* = .{ .number = now };
+        return args[1];
+    }
+    const last = slot.value_ptr.number;
+    if (now - last < ms) {
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+    slot.value_ptr.* = .{ .number = now };
+    return args[1];
 }
 
 const EdgeKind = enum { rising, falling };
@@ -1606,4 +1642,81 @@ test "delta returns difference from last value" {
     try testing.expectEqualStrings("0", tp.buf.items[0].payload);
     try testing.expectEqualStrings("3", tp.buf.items[1].payload);
     try testing.expectEqualStrings("-1", tp.buf.items[2].payload);
+}
+
+test "hold-off suppresses rapid re-fires within the interval" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (-> payload-float
+        \\      (hold-off 500)
+        \\      (publish-to (subject-append "gated"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+
+    const Frame = struct { now_ms: i64, payload: []const u8 };
+    const feed = [_]Frame{
+        .{ .now_ms = 1000, .payload = "1" }, // first → emit
+        .{ .now_ms = 1100, .payload = "2" }, // +100ms → suppress
+        .{ .now_ms = 1499, .payload = "3" }, // +499ms → suppress
+        .{ .now_ms = 1500, .payload = "4" }, // +500ms exactly → emit
+        .{ .now_ms = 1700, .payload = "5" }, // +200ms → suppress
+        .{ .now_ms = 2001, .payload = "6" }, // +501ms → emit
+    };
+    for (feed) |f| {
+        var ctx: Context = .{
+            .subject = "sensors.temp",
+            .payload = f.payload,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+            .now_ms = f.now_ms,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+    try testing.expectEqualStrings("1", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("4", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("6", tp.buf.items[2].payload);
+}
+
+test "hold-off state is per-subject" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (-> payload-float
+        \\      (hold-off 500)
+        \\      (publish-to (subject-append "gated"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+
+    const Frame = struct { subject: []const u8, now_ms: i64 };
+    const feed = [_]Frame{
+        .{ .subject = "sensors.a", .now_ms = 1000 }, // a first → emit
+        .{ .subject = "sensors.b", .now_ms = 1050 }, // b first → emit, unaffected by a
+        .{ .subject = "sensors.a", .now_ms = 1200 }, // a +200 → suppress
+        .{ .subject = "sensors.b", .now_ms = 1600 }, // b +550 → emit
+    };
+    for (feed) |f| {
+        var ctx: Context = .{
+            .subject = f.subject,
+            .payload = "1",
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+            .now_ms = f.now_ms,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
 }

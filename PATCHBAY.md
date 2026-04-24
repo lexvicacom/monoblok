@@ -88,6 +88,25 @@ so it threads).
 | `(ends-with? haystack needle)`   | boolean suffix check                                |
 | `(subject-token N [S])`          | Nth dot-separated token (0-indexed) of `S` (default: current subject); nil if out of range |
 
+## Subject filters
+
+Filters on `(on FILTER ...)` forms and in `SUB` subjects follow the
+NATS convention:
+
+| token | meaning                                                       |
+|-------|---------------------------------------------------------------|
+| `*`   | exactly one token in this position (any characters)           |
+| `>`   | one or more tokens, matches the rest of the subject           |
+
+`*` can appear in any position; `>` must be the **last** token and
+consumes everything after it. `foo.>` matches `foo.a` and
+`foo.a.b.c.d`. `foo.*` matches `foo.a` only — a filter with N tokens
+and no `>` requires exactly N tokens in the subject. If you need
+"anything starting with `bip` with at least three tokens after it,"
+that's `bip.*.*.*` or `bip.*.*.*.>`, not `bip.>` (which matches
+`bip.a` too). Putting `>` anywhere except the tail is a validation
+error, not a silent reinterpretation.
+
 ## Side effects
 
 `(publish SUBJECT PAYLOAD)` validates `SUBJECT` as a publishable
@@ -166,6 +185,46 @@ and the first message a rule sees on a new subject always passes.
   (-> payload-float
       (deadband 0.5)
       (publish-to (subject-append "delta"))))
+```
+
+## Time-based gates
+
+Where `squelch` and `deadband` dedupe by *value*, `hold-off` dedupes by
+*time*: fire once, then ignore further triggers for a fixed interval.
+Radar term for the same idea (the re-arm timer after a pulse). Useful
+when the upstream is chatty at a faster cadence than downstream
+consumers want, and you don't care which of the suppressed samples you
+drop.
+
+| form                 | behavior                                                                     |
+|----------------------|------------------------------------------------------------------------------|
+| `(hold-off MS X)`    | pass `X` through on first sight, then suppress further `X` for `MS` ms       |
+
+Time source is the ingress wall-clock (monotonic ms from the event
+loop), stamped once per incoming publish, so every op in one evaluation
+sees the same "now." This means `hold-off` is only evaluated when a
+message arrives (it's not a ticking timer): a stream that goes silent
+will stay silent, not fire a delayed trailing emit. Per (rule, subject),
+same as the other gates.
+
+```edn
+; Alert is noisy during a transient; emit at most once per 2s.
+(on "sensors.*"
+  (when (> payload-float 80.0)
+    (-> payload
+        (hold-off 2000)
+        (publish-to (subject-append "alert")))))
+```
+
+Stacks cleanly with value-based gates when you want both: "only if the
+value changed, and at most once per 500ms."
+
+```edn
+(-> payload-float
+    (round 1)
+    (squelch)
+    (hold-off 500)
+    (publish-to (subject-append "stable")))
 ```
 
 ## Windowed aggregates

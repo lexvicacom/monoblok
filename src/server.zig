@@ -398,6 +398,7 @@ const Conn = struct {
                     .publisher = router_mod.rulesPublisher(router),
                     .arena = arena,
                     .gpa = gpa,
+                    .now_ms = self.server.loop.now(),
                 };
                 rules_mod.run(self.server.rules, &ctx) catch |err| {
                     std.log.warn("rule error: {s}", .{@errorName(err)});
