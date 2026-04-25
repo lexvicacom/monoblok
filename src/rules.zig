@@ -225,24 +225,221 @@ pub const Context = struct {
     /// router-internal `run()` paths (e.g. no time-gated rules) don't need
     /// to care; tests inject a value directly.
     now_ms: i64 = 0,
+    /// `--trace` mode. When true, `run` switches to the traced eval path
+    /// (`evalTraced`) which prints each form, its result, and elapsed
+    /// time to stderr. Branched once per `run` (top of the function), not
+    /// per node, via `eval_fn` below.
+    trace: bool = false,
+    /// Indirect-dispatch slot for the evaluator. `run` picks `evalNormal`
+    /// or `evalTraced` based on `trace` and writes it here once. All
+    /// recursive eval calls go through `ctx.eval_fn(...)` so the choice
+    /// propagates without each form having to branch.
+    eval_fn: *const fn (ctx: *Context, v: Value) EvalError!Value = evalNormal,
+    /// Indent level for trace output (one level per recursive eval). Reset
+    /// by `run` per rule body.
+    trace_depth: u8 = 0,
+    /// Recorded emissions for trace output. Each side-effecting op (publish,
+    /// publish-to, count, json-demux, ohlc-bar) appends `(subject, payload)`
+    /// here when `trace` is on, so `evalTraced` can show what was actually
+    /// published instead of the bare `nil` those ops return. Strings live in
+    /// `arena`. Only populated under trace; left at .empty otherwise.
+    trace_emissions: std.ArrayListUnmanaged(TraceEmit) = .empty,
+};
+
+pub const TraceEmit = struct {
+    subject: []const u8,
+    payload: []const u8,
 };
 
 pub fn run(rules: []Rule, ctx: *Context) !void {
-    for (rules) |*rule| {
+    ctx.eval_fn = if (ctx.trace) evalTraced else evalNormal;
+    // The per-message arena is reset between PUBs by the server, which frees
+    // any prior backing storage for `trace_emissions`. Reset the list so we
+    // don't carry over a stale capacity pointer into freed memory.
+    ctx.trace_emissions = .empty;
+    if (ctx.trace) {
+        std.debug.print("trace: {s} {s}\n", .{ ctx.subject, ctx.payload });
+    }
+    const t_pub_start: u64 = if (ctx.trace) monotonicNs() else 0;
+    for (rules, 0..) |*rule, i| {
         if (!subject_mod.matches(rule.filter, ctx.subject)) continue;
         ctx.current_rule = rule;
-        _ = try eval(ctx, rule.body);
+        ctx.trace_depth = 0;
+        if (ctx.trace) {
+            std.debug.print("  rule {d} (on \"{s}\") matched\n", .{ i, rule.filter });
+            ctx.trace_depth = 1;
+            const t_start = monotonicNs();
+            _ = try ctx.eval_fn(ctx, rule.body);
+            const ns = monotonicNs() -| t_start;
+            std.debug.print("  rule {d} done [{s}]\n", .{ i, formatNs(ns) });
+        } else {
+            _ = try ctx.eval_fn(ctx, rule.body);
+        }
     }
     ctx.current_rule = null;
+    if (ctx.trace) {
+        const ns = monotonicNs() -| t_pub_start;
+        std.debug.print("total [{s}]\n", .{formatNs(ns)});
+    }
 }
 
-fn eval(ctx: *Context, v: Value) EvalError!Value {
+fn evalNormal(ctx: *Context, v: Value) EvalError!Value {
     return switch (v) {
         .nil, .boolean, .number, .string => v,
         .symbol => |s| evalSymbol(ctx, s),
         .list => |items| evalCall(ctx, items),
         .keyword => error.UnknownSymbol, // keywords are config-only, not rule body values
     };
+}
+
+/// Trace wrapper: prints each list-form (call) with its result and elapsed
+/// time. Atoms and bare symbols pass straight through to `evalNormal` —
+/// timing them would add noise without insight.
+///
+/// Side-effecting ops (publish, publish-to, count, json-demux, ohlc-bar) all
+/// return `nil`. To distinguish "I emitted something" from "I was suppressed",
+/// we snapshot `ctx.trace_emissions.items.len` before recursing; any new
+/// entries belong to this form's subtree. If the form added emissions AND
+/// returned nil, we print `=> published "subj" payload` instead of the bare
+/// `=> nil`. We only consume the leaf-level emission (the parent of a `(->)`
+/// chain shows aggregate timing only); we leave the full list in place so
+/// outer forms aren't fooled into re-printing the same emissions.
+fn evalTraced(ctx: *Context, v: Value) EvalError!Value {
+    if (v != .list or v.list.len == 0) return evalNormal(ctx, v);
+
+    indentTrace(ctx.trace_depth);
+    formatValue(v);
+    std.debug.print("\n", .{});
+
+    const emit_before = ctx.trace_emissions.items.len;
+    ctx.trace_depth +|= 1;
+    const t_start = monotonicNs();
+    const result = try evalNormal(ctx, v);
+    const ns = monotonicNs() -| t_start;
+    ctx.trace_depth -|= 1;
+    const new_emits = ctx.trace_emissions.items[emit_before..];
+
+    indentTrace(ctx.trace_depth +| 1);
+    if (result == .nil and new_emits.len > 0 and isLeafEmitter(v)) {
+        if (new_emits.len == 1) {
+            std.debug.print("=> published \"{s}\" {s} [{s}]\n", .{ new_emits[0].subject, new_emits[0].payload, formatNs(ns) });
+        } else {
+            std.debug.print("=> published {d} subjects [{s}]\n", .{ new_emits.len, formatNs(ns) });
+            for (new_emits) |e| {
+                indentTrace(ctx.trace_depth +| 2);
+                std.debug.print("\"{s}\" {s}\n", .{ e.subject, e.payload });
+            }
+        }
+    } else if (result == .nil) {
+        if (suppressionHint(v)) |hint| {
+            std.debug.print("=> nil ({s}) [{s}]\n", .{ hint, formatNs(ns) });
+        } else {
+            std.debug.print("=> nil [{s}]\n", .{formatNs(ns)});
+        }
+    } else {
+        std.debug.print("=> ", .{});
+        formatValue(result);
+        std.debug.print(" [{s}]\n", .{formatNs(ns)});
+    }
+    return result;
+}
+
+/// Best-effort hint for why a form returned `nil`. Static dispatch on the
+/// head symbol — doesn't know the actual reason (e.g. `rising-edge` returns
+/// nil for both "first sight" and "stayed false"), just gives a generic gloss
+/// so readers don't have to remember each op's suppression semantics. Returns
+/// null for forms whose nil is unremarkable (atoms, unknown ops, wrappers
+/// that already showed their children).
+fn suppressionHint(v: Value) ?[]const u8 {
+    if (v != .list or v.list.len == 0) return null;
+    if (v.list[0] != .symbol) return null;
+    const head = v.list[0].symbol;
+    const map = .{
+        .{ "squelch", "squelched" },
+        .{ "deadband", "within deadband" },
+        .{ "hold-off", "rate-limited" },
+        .{ "rising-edge", "no rising edge" },
+        .{ "falling-edge", "no falling edge" },
+        .{ "transition", "no transition" },
+        .{ "changed?", "unchanged" },
+        .{ "when", "branch not taken" },
+        .{ "if", "branch not taken" },
+        .{ "ohlc-bar", "bar in progress" },
+        .{ "json-get", "key missing" },
+    };
+    inline for (map) |entry| {
+        if (std.mem.eql(u8, head, entry[0])) return entry[1];
+    }
+    return null;
+}
+
+/// True for the side-effecting ops that publish their own subjects (and
+/// therefore record emissions). Wrapper forms like `->`, `do`, `when`, `if`
+/// also return nil and may have emissions in their subtree — but their
+/// children already printed the `published ...` line, so we keep the wrapper
+/// at `=> nil` to show timing without duplicating the emission line.
+fn isLeafEmitter(v: Value) bool {
+    if (v != .list or v.list.len == 0) return false;
+    if (v.list[0] != .symbol) return false;
+    const head = v.list[0].symbol;
+    return std.mem.eql(u8, head, "publish") or
+        std.mem.eql(u8, head, "publish-to") or
+        std.mem.eql(u8, head, "count") or
+        std.mem.eql(u8, head, "json-demux") or
+        std.mem.eql(u8, head, "ohlc-bar");
+}
+
+fn indentTrace(depth: u8) void {
+    var i: u8 = 0;
+    while (i < depth) : (i += 1) std.debug.print("  ", .{});
+}
+
+/// CLOCK_MONOTONIC in nanoseconds. Used only on the trace path; we go
+/// straight to `posix.system.clock_gettime` because `std.time.Timer`
+/// doesn't exist in Zig 0.16 and the `std.Io` clock API requires an
+/// `Io` instance we don't carry through `Context`. Identical syscall to
+/// what xev's loop uses internally.
+fn monotonicNs() u64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
+    const sec: u64 = @intCast(ts.sec);
+    const nsec: u64 = @intCast(ts.nsec);
+    return sec *| std.time.ns_per_s +| nsec;
+}
+
+/// Returns a pretty elapsed-time string ("180ns", "12µs", "3ms"). The
+/// returned slice points into `tls_ns_buf` and is invalidated by the next
+/// call from this thread; trace output is single-threaded (loop thread)
+/// so the buffer reuse is safe.
+threadlocal var tls_ns_buf: [32]u8 = undefined;
+fn formatNs(ns: u64) []const u8 {
+    if (ns < 1_000) return std.fmt.bufPrint(&tls_ns_buf, "{d}ns", .{ns}) catch "?";
+    if (ns < 1_000_000) return std.fmt.bufPrint(&tls_ns_buf, "{d}µs", .{ns / 1_000}) catch "?";
+    if (ns < 1_000_000_000) return std.fmt.bufPrint(&tls_ns_buf, "{d}ms", .{ns / 1_000_000}) catch "?";
+    return std.fmt.bufPrint(&tls_ns_buf, "{d}s", .{ns / 1_000_000_000}) catch "?";
+}
+
+/// Print a Value back in its source-level shape. Used only by the trace
+/// path; not a general pretty-printer (no escape handling on strings, no
+/// keyword support, since trace input is rule bodies and rule bodies
+/// don't contain keywords).
+fn formatValue(v: Value) void {
+    switch (v) {
+        .nil => std.debug.print("nil", .{}),
+        .boolean => |b| std.debug.print("{s}", .{if (b) "true" else "false"}),
+        .number => |n| std.debug.print("{d}", .{n}),
+        .symbol => |s| std.debug.print("{s}", .{s}),
+        .keyword => |s| std.debug.print(":{s}", .{s}),
+        .string => |s| std.debug.print("\"{s}\"", .{s}),
+        .list => |items| {
+            std.debug.print("(", .{});
+            for (items, 0..) |it, i| {
+                if (i > 0) std.debug.print(" ", .{});
+                formatValue(it);
+            }
+            std.debug.print(")", .{});
+        },
+    }
 }
 
 fn evalSymbol(ctx: *Context, name: []const u8) EvalError!Value {
@@ -347,7 +544,7 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
     const tag = op_map.get(op) orelse return error.UnknownSymbol;
 
     const evaled = try ctx.arena.alloc(Value, args.len);
-    for (args, 0..) |a, i| evaled[i] = try eval(ctx, a);
+    for (args, 0..) |a, i| evaled[i] = try ctx.eval_fn(ctx, a);
 
     return switch (tag) {
         .publish => callPublish(ctx, evaled),
@@ -395,25 +592,25 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
 
 fn evalIf(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len < 2 or args.len > 3) return error.ArityMismatch;
-    const cond = try eval(ctx, args[0]);
-    if (cond.isTruthy()) return eval(ctx, args[1]);
-    if (args.len == 3) return eval(ctx, args[2]);
+    const cond = try ctx.eval_fn(ctx, args[0]);
+    if (cond.isTruthy()) return ctx.eval_fn(ctx, args[1]);
+    if (args.len == 3) return ctx.eval_fn(ctx, args[2]);
     return .nil;
 }
 
 fn evalWhen(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len < 2) return error.ArityMismatch;
-    const cond = try eval(ctx, args[0]);
+    const cond = try ctx.eval_fn(ctx, args[0]);
     if (!cond.isTruthy()) return .nil;
     var last: Value = .nil;
-    for (args[1..]) |a| last = try eval(ctx, a);
+    for (args[1..]) |a| last = try ctx.eval_fn(ctx, a);
     return last;
 }
 
 fn evalAnd(ctx: *Context, args: []const Value) EvalError!Value {
     var last: Value = .{ .boolean = true };
     for (args) |a| {
-        last = try eval(ctx, a);
+        last = try ctx.eval_fn(ctx, a);
         if (!last.isTruthy()) return last;
     }
     return last;
@@ -422,7 +619,7 @@ fn evalAnd(ctx: *Context, args: []const Value) EvalError!Value {
 fn evalOr(ctx: *Context, args: []const Value) EvalError!Value {
     var last: Value = .{ .boolean = false };
     for (args) |a| {
-        last = try eval(ctx, a);
+        last = try ctx.eval_fn(ctx, a);
         if (last.isTruthy()) return last;
     }
     return last;
@@ -430,7 +627,7 @@ fn evalOr(ctx: *Context, args: []const Value) EvalError!Value {
 
 fn evalDo(ctx: *Context, args: []const Value) EvalError!Value {
     var last: Value = .nil;
-    for (args) |a| last = try eval(ctx, a);
+    for (args) |a| last = try ctx.eval_fn(ctx, a);
     return last;
 }
 
@@ -442,7 +639,7 @@ fn evalDo(ctx: *Context, args: []const Value) EvalError!Value {
 /// value as their final argument.
 fn evalThread(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len == 0) return error.ArityMismatch;
-    var acc = try eval(ctx, args[0]);
+    var acc = try ctx.eval_fn(ctx, args[0]);
     for (args[1..]) |form| {
         const call_items = switch (form) {
             .list => |items| items,
@@ -456,9 +653,23 @@ fn evalThread(ctx: *Context, args: []const Value) EvalError!Value {
         // Safe because eval() on .nil/.boolean/.number/.string is identity,
         // and prior evals never yield a .symbol.
         rebuilt[call_items.len] = acc;
-        acc = try evalCall(ctx, rebuilt);
+        acc = try ctx.eval_fn(ctx, .{ .list = rebuilt });
     }
     return acc;
+}
+
+/// Record an emission for trace output. No-op when not tracing. Strings are
+/// expected to live in `ctx.arena` so they remain valid until the per-message
+/// arena reset.
+///
+/// FIXME: not happy with this — every side-effecting op has to remember to
+/// call this, which is exactly the kind of tight coupling a tracer should
+/// avoid. The cleaner shape is to wrap `ctx.publisher` for the duration of
+/// `run` so the spy lives in one place and ops stay oblivious. Left inline
+/// for now to keep the diff small.
+fn recordTraceEmit(ctx: *Context, subject: []const u8, payload: []const u8) void {
+    if (!ctx.trace) return;
+    ctx.trace_emissions.append(ctx.arena, .{ .subject = subject, .payload = payload }) catch {};
 }
 
 fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
@@ -469,6 +680,7 @@ fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
     ctx.rule_publishes += 1;
     if (ctx.current_rule) |r| r.publishes_emitted += 1;
+    recordTraceEmit(ctx, subj, payload);
     return .nil;
 }
 
@@ -486,6 +698,7 @@ fn callPublishTo(ctx: *Context, args: []const Value) EvalError!Value {
     ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
     ctx.rule_publishes += 1;
     if (ctx.current_rule) |r| r.publishes_emitted += 1;
+    recordTraceEmit(ctx, subj, payload);
     return .nil;
 }
 
@@ -817,7 +1030,7 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
 fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 3) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const now = (try eval(ctx, args[0])).isTruthy();
+    const now = (try ctx.eval_fn(ctx, args[0])).isTruthy();
 
     const key = try stateKey(ctx.arena, "transition", ctx.subject);
     const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
@@ -828,8 +1041,8 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
     }
     const prev = slot.value_ptr.number != 0;
     slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
-    if (!prev and now) return eval(ctx, args[1]);
-    if (prev and !now) return eval(ctx, args[2]);
+    if (!prev and now) return ctx.eval_fn(ctx, args[1]);
+    if (prev and !now) return ctx.eval_fn(ctx, args[2]);
     rule.publishes_suppressed += 1;
     return .nil;
 }
@@ -931,6 +1144,7 @@ fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
         ctx.publisher.publish(subj, out) catch return error.PublishFailed;
         ctx.rule_publishes += 1;
         rule.publishes_emitted += 1;
+        recordTraceEmit(ctx, subj, out);
     }
     bar.count = 0;
     return .nil;
@@ -966,6 +1180,7 @@ fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
     ctx.publisher.publish(subj, out) catch return error.PublishFailed;
     ctx.rule_publishes += 1;
     rule.publishes_emitted += 1;
+    recordTraceEmit(ctx, subj, out);
     return .nil;
 }
 
@@ -1007,6 +1222,7 @@ fn callJsonDemux(ctx: *Context, args: []const Value) EvalError!Value {
         ctx.publisher.publish(subj, out) catch return error.PublishFailed;
         ctx.rule_publishes += 1;
         if (ctx.current_rule) |r| r.publishes_emitted += 1;
+        recordTraceEmit(ctx, subj, out);
     }
     return .nil;
 }

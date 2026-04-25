@@ -63,6 +63,12 @@ pub const Server = struct {
     listen_host: []const u8,
     listen_port: u16,
 
+    /// `--trace` mode: print each rule evaluation step (form, result,
+    /// elapsed time) to stderr. Read once per inbound PUB and copied into
+    /// `rules.Context.trace`; the rules module flips its eval path based
+    /// on the flag.
+    trace_enabled: bool = false,
+
     /// `--stats` mode: print running-max summaries every `stats_interval`
     /// PUBs. Counters are reset each time the line is printed.
     stats_enabled: bool = false,
@@ -594,6 +600,7 @@ const Conn = struct {
                     .arena = arena,
                     .gpa = gpa,
                     .now_ms = self.server.loop.now(),
+                    .trace = self.server.trace_enabled,
                 };
                 rules_mod.run(self.server.rules, &ctx) catch |err| {
                     std.log.warn("rule error: {s}", .{@errorName(err)});
