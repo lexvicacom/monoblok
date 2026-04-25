@@ -6,13 +6,7 @@
 
 An experimental, partially NATS-compatible pub/sub server written in Zig, with last-value streams and a routing and signal conditioning DSL called **patchbay**. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
-monoblok is a single, small binary. Local clients publish to short subjects; patchbay rules round, deadband, squelch, and re-emit on derived subjects; subscribers see a clean signal. `$LVC.*` gives you last-value replay on subscribe, snapshots persist that across restarts, and an optional bridge forwards selected subjects on to a real NATS cluster. NATS-compatible wire protocol, so any `nats` client works.
-
-## What is signal conditioning?
-
-Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate but annoying to work with; you want "22.0, and tell me when it actually changes."
-
-monoblok does the software version of that, at the broker, before your subscribers ever see the message. `round` snaps to decimals, `quantize` snaps to a step size, `squelch` drops repeats, `deadband` ignores changes below a threshold, `moving-avg` smooths a window. Chain them together and a chatty sensor becomes a clean **"change-only" stream of interesting events**, so subscribers don't have to deal with the noise themselves and can stay simple: **they get a clean signal.**
+monoblok is a single small binary. Local clients publish to short subjects; patchbay rules condition the signal (round, deadband, squelch, moving-avg) and re-emit on derived subjects, so subscribers don't each re-implement the same rounding, deduping, and smoothing. It uses the NATS wire protocol, so any `nats` client works.
 
 ## Try it out with no install
 
@@ -111,6 +105,12 @@ nats sub 'events.>'        # in another (for the alert rule)
 
 Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
 
+## What is signal conditioning?
+
+Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate but annoying to work with; you want "22.0, and tell me when it actually changes."
+
+monoblok does the software version of that, at the broker, before your subscribers ever see the message. `round` snaps to decimals, `quantize` snaps to a step size, `squelch` drops repeats, `deadband` ignores changes below a threshold, `moving-avg` smooths a window. Chain them together and a chatty sensor becomes a clean **"change-only" stream of interesting events**, so subscribers don't have to deal with the noise themselves and can stay simple: **they get a clean signal.**
+
 ## Patchbay
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Think of it as a wiring diagram: jacks (subject filters) at the top, filter chains in the middle (`round`, `squelch`, `deadband`, `moving-avg`, ...), and sends (`publish-to`) at the bottom. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are the usual NATS ones: `*` matches one token, `>` matches one-or-more tokens and must be the tail (so `foo.*.*` is exactly three tokens, `foo.>` is three-or-more).
@@ -134,6 +134,8 @@ Reaching for "filter chain" or "stream transform" works, but they're generic nam
 It's also just more fun than calling everything `FilterOperatorImpl`.
 
 ### What it can be used for
+
+Anywhere you'd otherwise write a small consumer that subscribes, filters or rounds or dedupes, and re-publishes: that consumer becomes a few lines of patchbay, declared once and shared by every downstream subscriber.
 
 Filtering, routing, light payload rewriting, and signal conditioning at the broker. A form inspects an incoming message and can `publish` zero or more derived messages on other subjects; think "threshold this numeric stream onto a `.high` sub-subject," "mirror anything mentioning `alert` into `events.alerts`," "split a firehose into per-tenant subjects," or "deadband a jittery sensor so only meaningful changes hit downstream."
 
@@ -294,6 +296,43 @@ info: stats: pubs=10000 max_rule_publishes=0 max_out_hwm=41160B
 ```
 
 Useful for seeing how much headroom you have under the warn thresholds. No output when `--stats` is off.
+
+### `--trace`: per-evaluation patchbay debugger
+
+`--trace` prints every patchbay form the evaluator visits to stderr, with the form's result and the elapsed time spent inside it. One line per inbound PUB lists the subject and payload; each matching rule prints its filter, then the body is unrolled with one indented line per call, and a `=> result [duration]` line per call afterwards. Per-rule and per-form timings include nested calls. After all rules run, a `total [duration]` line shows the wall time across the whole PUB.
+
+Side-effecting ops (`publish`, `publish-to`, `count`, `json-demux`, `ohlc-bar`) all return `nil`, so the trace replaces the bare `=> nil` at the leaf with `=> published "subj" payload [duration]` so you can tell "did the thing" from "was suppressed". Forms that returned `nil` because a gate stopped the flow get a parenthetical hint: `=> nil (squelched)`, `=> nil (within deadband)`, `=> nil (no rising edge)`, `=> nil (branch not taken)`, etc. The hint is a static gloss on the head symbol (it doesn't know the precise reason — `rising-edge` shows the same hint on first sight and on stayed-false), but it's enough to disambiguate suppression from successful side-effects in most cases.
+
+```
+$ monoblok --port 4222 --patchbay patchbay.edn --trace
+warning: --trace enabled: every patchbay evaluation will be printed to stderr (loud, do not run in production)
+...
+trace: sensors.temp 42.5
+  rule 0 (on "sensors.*") matched
+  (when (> payload-float 30) (publish (subject-append "high") payload))
+    (> payload-float 30)
+      => true [124µs]
+    (publish (subject-append "high") payload)
+      (subject-append "high")
+        => "sensors.temp.high" [113µs]
+      => published "sensors.temp.high" 42.5 [549µs]
+    => nil [921µs]
+  rule 0 done [1ms]
+  rule 2 (on "sensors.*") matched
+  (-> payload-float (round 1) (squelch) (publish-to (subject-append "stable")))
+    (round 1 42.5)
+      => 42.5 [2µs]
+    (squelch 42.5)
+      => nil (squelched) [237µs]
+    ...
+total [3ms]
+```
+
+Use it to figure out why a rule isn't firing (gate suppressed, predicate false), or to spot which form in a `->` pipeline is dominating evaluation time. The evaluator picks a traced or non-traced path once per `run`, so the flag-off cost is zero (no per-node branching).
+
+Loud by design (every PUB prints), so this is a debugging tool, not a production observability surface. Pipe stderr to a file (`monoblok --trace 2>trace.log`) when investigating.
+
+Tracing also adds per-form overhead (two `clock_gettime` calls and a stderr write at every node, plus the leaf-emission bookkeeping), so the timings you see under `--trace` are inflated relative to a normal run. Don't use traced timings for benchmarking, and don't read a 1ms PUB under `--trace` as 1ms in production — bench with `--release=fast` and the flag off.
 
 ## Architecture
 

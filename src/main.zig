@@ -15,7 +15,7 @@ pub const bridge = if (build_options.bridge) @import("bridge.zig") else {};
 const manifest = @import("manifest");
 const build_options = @import("build_options");
 
-const Flag = enum { port, patchbay, no_lvc, stats, snapshot, snapshot_every, help, version };
+const Flag = enum { port, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -24,6 +24,7 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--rules", .patchbay },
     .{ "--no-lvc", .no_lvc },
     .{ "--stats", .stats },
+    .{ "--trace", .trace },
     .{ "--snapshot", .snapshot },
     .{ "--snapshot-every", .snapshot_every },
     .{ "--help", .help },
@@ -41,6 +42,7 @@ pub fn main(init: std.process.Init) !void {
     var patchbay_path: ?[]const u8 = null;
     var lvc_enabled = true;
     var stats_enabled = false;
+    var trace_enabled = false;
     var snapshot_path: ?[]const u8 = null;
     var snapshot_every_s: u32 = 0;
 
@@ -57,6 +59,7 @@ pub fn main(init: std.process.Init) !void {
             .patchbay => patchbay_path = it.next() orelse fatal("--patchbay requires a path"),
             .no_lvc => lvc_enabled = false,
             .stats => stats_enabled = true,
+            .trace => trace_enabled = true,
             .snapshot => snapshot_path = it.next() orelse fatal("--snapshot requires a path"),
             .snapshot_every => {
                 const v = it.next() orelse fatal("--snapshot-every requires a value in seconds");
@@ -83,6 +86,9 @@ pub fn main(init: std.process.Init) !void {
     std.log.info("loaded {d} patchbay form(s)", .{loaded_rules.len});
     std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
     std.log.info("lvc: {s}", .{if (lvc_enabled) "enabled" else "disabled"});
+    if (trace_enabled) {
+        std.log.warn("--trace enabled: every patchbay evaluation will be printed to stderr (noisy and slow, do not run in production)", .{});
+    }
 
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();
@@ -157,6 +163,7 @@ pub fn main(init: std.process.Init) !void {
         .listen_host = "0.0.0.0",
         .listen_port = port,
         .stats_enabled = stats_enabled,
+        .trace_enabled = trace_enabled,
         .bridge_stats = if (build_options.bridge and bridge_runtime != null)
             @ptrCast(&bridge_runtime.?.stats)
         else
@@ -245,6 +252,10 @@ fn printUsage() void {
         \\                   rule-publishes-per-input and max per-conn
         \\                   outbound hwm. Useful for spotting headroom
         \\                   under threshold.
+        \\  --trace          Print each patchbay evaluation step (form,
+        \\                   result, elapsed time) to stderr. Loud: every
+        \\                   inbound PUB produces output. Debug-only, do
+        \\                   not run in production.
         \\  --snapshot FILE  LVC snapshot path. Loaded on startup if it
         \\                   exists. Combine with --snapshot-every to also
         \\                   dump periodically.
