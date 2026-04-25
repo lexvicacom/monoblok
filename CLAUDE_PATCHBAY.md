@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PAT
 For one-off use, reference it inline in a prompt with
 `@CLAUDE_PATCHBAY.md` (Claude Code inlines `@path` refs).
 
-Ensure this is kept updated.
+Agent guidance
 ---
 
 You are writing rules for **monoblok's patchbay**, a small s-expression
