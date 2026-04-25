@@ -20,6 +20,25 @@ resolved by the evaluator.
 That's the whole grammar. The rest of this doc is just which
 operators exist and what they do.
 
+### Lists are calls only inside rule bodies
+
+If you've used Clojure, the muscle memory is "every `(...)` is a call
+unless I `'`-quote it." Patchbay is not quite that. There is no quote
+form. Whether a `(...)` list is "evaluated as a call" depends purely
+on where it appears:
+
+- Inside an `(on FILTER BODY)` body, every list dispatches on its head
+  symbol (`hold-off`, `publish`, `+`, etc.). Unknown heads error.
+- Inside the top-level `(bridge ...)` form, after a keyword like
+  `:servers` or `:export`, a list is read as a literal sequence of
+  values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
+  two-element list of strings, not a call to `nats://a:4222`. Same
+  underlying parser, different consumer.
+
+In other words: the sexpr layer just gives you nested lists. The rule
+evaluator interprets lists as calls; the bridge config reader
+interprets them as vectors. You never need to quote anything.
+
 ## Values
 
 `nil`, booleans (`true` / `false`), numbers (parsed as `f64`),

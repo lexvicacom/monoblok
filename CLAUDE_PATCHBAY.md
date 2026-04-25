@@ -48,6 +48,14 @@ local publishes to a remote NATS cluster. It is export-only.
 bare, `nil` / `true` / `false` are literals. Truthiness: only `nil` and
 `false` are falsy (so `0` and `""` are truthy). Comments start with `;`.
 
+Unlike Clojure, there is no quote form. Whether a `(...)` is a call
+depends on context, not on a leading `'`. Inside an `(on ...)` body,
+every list dispatches on its head symbol (`hold-off`, `publish`, `+`,
+etc.) - unknown heads error. Inside the `(bridge ...)` form, after a
+keyword like `:servers` or `:export`, a list is a literal vector of
+elements (e.g. servers to try when connecting). Same parser, different
+consumer; you never need to quote.
+
 ## Bound symbols (the current message)
 
 - `subject` (string), `payload` (string bytes)
