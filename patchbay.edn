@@ -29,6 +29,22 @@
 ;   (moving-avg N X)                    - running mean over last N samples
 ;   (moving-sum N X)                    - running sum over last N samples
 ;   (moving-max N X) / (moving-min N X) - window extremes
+;   (json-get KEY PAYLOAD)              - top-level JSON object lookup,
+;                                         returns the value as a number,
+;                                         string, or boolean. Returns nil
+;                                         for missing keys, malformed JSON,
+;                                         or nested object/array values.
+;                                         Value-last so it threads:
+;                                         (-> payload (json-get "temp") ...)
+;   (json-decode KEY ... PAYLOAD)       - demux a flat JSON frame: publish
+;                                         each KEY's value to
+;                                         <subject>.<key>. Skips missing,
+;                                         null, and nested fields silently.
+;   (ohlc-bar N X)                      - tick-count OHLC bar accumulator.
+;                                         Every Nth tick, publishes
+;                                         <subject>.bar.{open,high,low,
+;                                         close} for the just-closed bar.
+;                                         Returns nil. Per (rule, subject).
 ;
 ;   (-> X f1 f2 ...)                    - thread X through each form as its
 ;                                         last argument: (-> x (f 1) g)

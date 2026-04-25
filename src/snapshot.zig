@@ -33,6 +33,12 @@
 //!     max_len × u64            (max_deque)
 //!     min_len  u32
 //!     min_len × u64            (min_deque)
+//!   0x04 ohlc:
+//!     open  f64
+//!     high  f64
+//!     low   f64
+//!     count u32
+//!     cap   u32
 //!
 //! No checksum, no compression. If anything changes, bump `version`.
 
@@ -55,6 +61,7 @@ pub const variant_empty: u8 = 0x00;
 pub const variant_bytes: u8 = 0x01;
 pub const variant_number: u8 = 0x02;
 pub const variant_ring: u8 = 0x03;
+pub const variant_ohlc: u8 = 0x04;
 
 pub const LvcEntry = struct {
     subject: []const u8,
@@ -132,6 +139,14 @@ fn writeRuleState(gpa: Allocator, out: *std.ArrayList(u8), e: RuleStateEntry) !v
             for (r.max_deque.items) |v| try writeU64(gpa, out, v);
             try writeU32(gpa, out, @intCast(r.min_deque.items.len));
             for (r.min_deque.items) |v| try writeU64(gpa, out, v);
+        },
+        .ohlc => |b| {
+            try out.append(gpa, variant_ohlc);
+            try writeF64(gpa, out, b.open);
+            try writeF64(gpa, out, b.high);
+            try writeF64(gpa, out, b.low);
+            try writeU32(gpa, out, b.count);
+            try writeU32(gpa, out, b.cap);
         },
     }
 }
@@ -214,6 +229,16 @@ pub fn parse(bytes: []const u8, ctx: anytype) !void {
                             .buf_bytes = buf,
                             .max_bytes = max_bytes,
                             .min_bytes = min_bytes,
+                        });
+                    },
+                    variant_ohlc => {
+                        const open = try readF64(bytes, &i);
+                        const high = try readF64(bytes, &i);
+                        const low = try readF64(bytes, &i);
+                        const count = try readU32(bytes, &i);
+                        const cap = try readU32(bytes, &i);
+                        try ctx.onRuleState(rule_idx, filter, key, .{
+                            .ohlc = .{ .open = open, .high = high, .low = low, .count = count, .cap = cap },
                         });
                     },
                     else => return LoadError.UnknownVariant,
@@ -327,6 +352,7 @@ fn dupStateEntry(arena: Allocator, src: rules_mod.StateEntry) !rules_mod.StateEn
                 .min_deque = min_copy,
             } };
         },
+        .ohlc => |b| .{ .ohlc = b },
     };
 }
 

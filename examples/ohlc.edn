@@ -1,0 +1,21 @@
+; Tick-count OHLC bars over a market feed.
+;
+; Producers publish raw prices on MARKET.<SYM> (e.g. MARKET.AAPL "182.34").
+; Every 60 ticks per symbol, ohlc-bar emits four sub-subjects:
+;   MARKET.AAPL.bar.open   first price in the bar
+;   MARKET.AAPL.bar.high   max price seen
+;   MARKET.AAPL.bar.low    min price seen
+;   MARKET.AAPL.bar.close  60th price (the one that closed the bar)
+;
+; State is per (rule, subject), so each ticker builds its own bars. The
+; in-progress bar is part of the snapshot, so a restart mid-bar resumes
+; without losing the open / high / low collected so far.
+(on "MARKET.*"
+  (ohlc-bar 60 payload-float))
+
+; Downstream alerting can sit on the closed-bar stream and stay clean of
+; intra-bar noise. Example: alert if the bar's close jumps by >= 1.0
+; from the prior bar's close on the same symbol.
+(on "MARKET.*.bar.close"
+  (when (>= (abs (delta payload-float)) 1.0)
+    (publish (str-concat "alerts.market." (subject-token 1)) payload)))

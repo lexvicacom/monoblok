@@ -135,7 +135,9 @@ It's also just more fun than calling everything `FilterOperatorImpl`.
 
 ### What it can be used for
 
-Filtering, routing, light payload rewriting, and signal conditioning at the broker. A form inspects an incoming message and can `publish` zero or more derived messages on other subjects; think "threshold this numeric stream onto a `.high` sub-subject," "mirror anything mentioning `alert` into `events.alerts`," "split a firehose into per-tenant subjects," or "deadband a jittery sensor so only meaningful changes hit downstream." 
+Filtering, routing, light payload rewriting, and signal conditioning at the broker. A form inspects an incoming message and can `publish` zero or more derived messages on other subjects; think "threshold this numeric stream onto a `.high` sub-subject," "mirror anything mentioning `alert` into `events.alerts`," "split a firehose into per-tenant subjects," or "deadband a jittery sensor so only meaningful changes hit downstream."
+
+For sensors that emit JSON frames rather than bare scalars (`{"temp":12.5,"hum":80}`), patchbay has `json-get` for inline lookup of a single field and `json-decode` to demux named fields onto sub-subjects (e.g. `devices.kitchen` `{"temp":12.5,"hum":80}` fans out to `devices.kitchen.temp` and `devices.kitchen.hum`). Top-level keys only, no JSON path; the rest of the patchbay then operates on the resulting scalar streams.
 
 ### What it isn't
 
@@ -146,6 +148,10 @@ nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/sub
 ### Patchbay in depth
 
 The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [PATCHBAY.md](./PATCHBAY.md).
+
+### Example patchbays
+
+The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios: [`sensors.edn`](./examples/sensors.edn) (round + squelch on a noisy sensor), [`office-temp.edn`](./examples/office-temp.edn) (deadband + moving-average alert/all-clear), [`ticker.edn`](./examples/ticker.edn) (market data with bridge), [`ohlc.edn`](./examples/ohlc.edn) (tick-count OHLC bars per symbol), [`json-frames.edn`](./examples/json-frames.edn) (demux a JSON-emitting device into scalar sub-subjects), [`rental-car.edn`](./examples/rental-car.edn), and [`bridge.edn`](./examples/bridge.edn). Run any of them with `monoblok --patchbay examples/<file>.edn`.
 
 ### Patchbay with Claude Code
 

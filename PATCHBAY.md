@@ -4,6 +4,8 @@ The [README](./README.md) covers what patchbay is and what it's for.
 This doc is the full reference for the DSL: syntax, bound symbols, and
 every operator. For the 30-second pitch and worked examples, start
 there; for "what does `(deadband ...)` actually do," this is the page.
+Runnable patchbay files for common scenarios live in
+[`examples/`](./examples/).
 
 ## S-expression syntax in 30 seconds
 
@@ -317,3 +319,83 @@ branches.
 Compared to pairing two edge-gate rules, this evaluates the predicate
 once, keeps one `moving-avg` ring instead of two, and doesn't renumber
 when you later add or remove rules around it.
+
+## JSON payloads
+
+Most off-the-shelf sensors and gateways emit JSON frames (`{"temp":12.04,"hum":80}`),
+not bare scalars. Two ops bridge that gap. Both look up keys against
+the **top-level** object only (no JSON path, no nesting, no array
+indexing) and use Zig's `std.json.Scanner` so escapes and `\uXXXX` are
+handled correctly.
+
+| form                          | what it does                                                                |
+|-------------------------------|-----------------------------------------------------------------------------|
+| `(json-get KEY PAYLOAD)`      | return that field's value as a number, string, or boolean. Nil otherwise.   |
+| `(json-decode KEY ... PAYLOAD)` | publish each KEY's value to `<subject>.<key>`. Side-effecting. Returns nil. |
+
+`json-get` returns `nil` whenever the field can't be turned into a
+scalar (key missing, payload not a JSON object, value is `null`, value
+is a nested object/array). That nil flows through `publish-to` as a
+no-op, so a JSON-aware pipeline reads exactly like the analog ones:
+
+```edn
+; Treat a JSON sensor frame like a scalar stream.
+(on "sensors.*"
+  (-> payload
+      (json-get "temp")
+      (round 1)
+      (squelch)
+      (publish-to (subject-append "temp.stable"))))
+```
+
+`json-decode` is the demux: one wire carrying a multi-field frame
+fanned out to one sub-subject per field. Useful as the first rule for
+JSON-publishing devices, so the rest of the patchbay can stay scalar.
+
+```edn
+; Break a multi-field frame out into per-field subjects.
+; sensors.foo {"temp":12.5,"hum":80} -> sensors.foo.temp 12.5
+;                                       sensors.foo.hum  80
+(on "sensors.*"
+  (json-decode "temp" "hum" payload))
+```
+
+If a key is missing, null, or holds a nested value, `json-decode` skips
+it silently rather than emitting an error. Numbers come out canonically
+formatted, strings are unquoted, booleans render as `true` / `false`.
+
+Both ops are arity-flexible at the **value-last** end (`PAYLOAD` is the
+last argument), matching the rest of the dialect, so you can just as
+easily write the threaded form `(-> payload (json-get "temp") ...)`.
+
+## OHLC bars
+
+`(ohlc-bar N X)` is a tick-count bar accumulator for streams where you
+want open / high / low / close summaries instead of every tick. Each
+call adds one sample to the in-progress bar. Every Nth call closes the
+bar and publishes four sub-subjects under `<subject>.bar`:
+
+| sub-subject  | value                              |
+|--------------|------------------------------------|
+| `.bar.open`  | first sample of the bar            |
+| `.bar.high`  | max sample seen in the bar         |
+| `.bar.low`   | min sample seen in the bar         |
+| `.bar.close` | the Nth sample (the closing tick)  |
+
+State is per `(rule, subject)`, so a single rule on `MARKET.*` builds
+independent bars for every symbol. The op returns `nil`, so it slots
+into a `do` block or stands alone as the rule body without polluting a
+threaded pipeline. In-progress bars survive a snapshot reload.
+
+```edn
+; 60-tick OHLC bars per symbol on a market feed.
+(on "MARKET.*"
+  (ohlc-bar 60 payload-float))
+```
+
+A subscriber to `MARKET.AAPL.bar.>` then sees a clean burst of four
+messages per closed bar, in `open / high / low / close` order, with no
+intermediate per-tick noise.
+
+There is no time-aligned variant yet — bars close on tick count, not
+wall clock. Volume isn't reported because it's always exactly N.
