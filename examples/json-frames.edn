@@ -1,0 +1,35 @@
+; JSON-emitting sensor: one off-the-shelf gateway publishes a flat
+; frame like {"temp":12.5,"hum":80,"batt":3.7} on devices.<id>, and
+; we want the rest of the patchbay to keep working in scalars.
+
+; Step 1: demux at the head. Each named field becomes its own
+; sub-subject under the device id, e.g.
+;   devices.kitchen {"temp":12.5,"hum":80} -> devices.kitchen.temp 12.5
+;                                             devices.kitchen.hum  80
+; Missing / null / nested fields are skipped silently.
+(on "devices.*"
+  (json-decode "temp" "hum" "batt" payload))
+
+; Step 2: from here on, treat each fanned-out subject as a normal
+; scalar stream. Round, deadband, publish to a "stable" mirror.
+(on "devices.*.temp"
+  (-> payload-float
+      (round 1)
+      (deadband 0.2)
+      (publish-to (subject-append "stable"))))
+
+(on "devices.*.hum"
+  (-> payload-float
+      (round 0)
+      (squelch)
+      (publish-to (subject-append "stable"))))
+
+; Inline lookup: sometimes you only want one field from a frame and
+; don't need the demux. Pull it straight off the JSON and into a
+; threaded pipeline. json-get returns nil on missing/malformed/nested,
+; and publish-to is a no-op on nil, so the rule self-skips bad frames.
+(on "devices.*"
+  (-> payload
+      (json-get "batt")
+      (deadband 0.1)
+      (publish-to (subject-append "battery"))))

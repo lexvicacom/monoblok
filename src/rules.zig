@@ -44,6 +44,7 @@ pub const StateEntry = union(enum) {
     bytes: std.ArrayList(u8),
     number: f64,
     ring: Ring,
+    ohlc: Ohlc,
 
     pub fn deinit(self: *StateEntry, gpa: Allocator) void {
         switch (self.*) {
@@ -52,6 +53,20 @@ pub const StateEntry = union(enum) {
             else => {},
         }
     }
+};
+
+/// Open / high / low bookkeeping for an in-progress OHLC bar. `close` is
+/// always the most recent sample so we don't need to store it; instead we
+/// fire the bar at the moment the Nth sample arrives. `cap` is the bar
+/// width N captured at first call so it survives a snapshot reload even if
+/// the new patchbay's literal `N` differs (we trust the saved bar over the
+/// patchbay text).
+pub const Ohlc = struct {
+    open: f64,
+    high: f64,
+    low: f64,
+    count: u32,
+    cap: u32,
 };
 
 /// Fixed-capacity ring of f64 samples with a running sum and monotonic
@@ -265,6 +280,8 @@ const Op = enum {
     squelch, deadband, changed, delta, hold_off,
     moving_avg, moving_sum, moving_max, moving_min,
     rising_edge, falling_edge,
+    json_get, json_decode,
+    ohlc_bar,
 };
 
 const op_map = std.StaticStringMap(Op).initComptime(.{
@@ -304,6 +321,9 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "moving-min", .moving_min },
     .{ "rising-edge", .rising_edge },
     .{ "falling-edge", .falling_edge },
+    .{ "json-get", .json_get },
+    .{ "json-decode", .json_decode },
+    .{ "ohlc-bar", .ohlc_bar },
 });
 
 fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
@@ -364,6 +384,9 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .moving_min => callMoving(ctx, evaled, .min),
         .rising_edge => callEdge(ctx, evaled, .rising),
         .falling_edge => callEdge(ctx, evaled, .falling),
+        .json_get => callJsonGet(ctx, evaled),
+        .json_decode => callJsonDecode(ctx, evaled),
+        .ohlc_bar => callOhlcBar(ctx, evaled),
     };
 }
 
@@ -844,6 +867,153 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
         .max => ring.max(),
         .min => ring.min(),
     } };
+}
+
+/// `(ohlc-bar N PAYLOAD)`. Side-effecting tick-count bar accumulator. Each
+/// call adds one sample. Every Nth call closes a bar and publishes four
+/// sub-subjects under `<current-subject>.bar`:
+///
+///   .open   first sample of the bar
+///   .high   max sample seen in the bar
+///   .low    min sample seen in the bar
+///   .close  this Nth sample (the one that closed the bar)
+///
+/// State is per (rule, subject). Returns nil so it composes with `do` /
+/// `->` without polluting downstream values. Bar-in-progress state
+/// survives a snapshot reload; if the new patchbay's literal `N` differs
+/// from the saved `cap`, the saved `cap` wins until that bar closes.
+fn callOhlcBar(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 2) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const n_f = try asNumber(args[0]);
+    if (n_f < 1) return error.TypeMismatch;
+    const n: u32 = @intFromFloat(n_f);
+    const x = try asNumber(args[1]);
+
+    const key = try stateKey(ctx.arena, "ohlc-bar", ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    if (!slot.found_existing or slot.value_ptr.* == .empty) {
+        slot.value_ptr.* = .{ .ohlc = .{ .open = x, .high = x, .low = x, .count = 1, .cap = n } };
+    } else {
+        const bar = &slot.value_ptr.ohlc;
+        if (bar.count == 0) {
+            bar.open = x;
+            bar.high = x;
+            bar.low = x;
+            bar.count = 1;
+        } else {
+            if (x > bar.high) bar.high = x;
+            if (x < bar.low) bar.low = x;
+            bar.count += 1;
+        }
+    }
+
+    const bar = &slot.value_ptr.ohlc;
+    if (bar.count < bar.cap) {
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+
+    // Bar closes on this tick. Emit four sub-subjects, then reset.
+    const fields = [_]struct { name: []const u8, val: f64 }{
+        .{ .name = "open", .val = bar.open },
+        .{ .name = "high", .val = bar.high },
+        .{ .name = "low", .val = bar.low },
+        .{ .name = "close", .val = x },
+    };
+    for (fields) |f| {
+        const subj = try std.fmt.allocPrint(ctx.arena, "{s}.bar.{s}", .{ ctx.subject, f.name });
+        const out = try std.fmt.allocPrint(ctx.arena, "{d}", .{f.val});
+        subject_mod.validatePublish(subj) catch return error.InvalidSubject;
+        ctx.publisher.publish(subj, out) catch return error.PublishFailed;
+        ctx.rule_publishes += 1;
+        rule.publishes_emitted += 1;
+    }
+    bar.count = 0;
+    return .nil;
+}
+
+/// `(json-get KEY PAYLOAD)`. Top-level object lookup only. Returns the field
+/// as a number, string, or boolean (matching the JSON type), or nil if the
+/// payload isn't a JSON object, the key is missing, or the value is null /
+/// nested (object or array). No JSON path: keys are matched as exact strings,
+/// dots in keys are not special. Value-last so it threads:
+/// `(-> payload (json-get "temp") (round 1) (publish-to ...))`.
+fn callJsonGet(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 2) return error.ArityMismatch;
+    const key = try asString(args[0]);
+    const payload = try asString(args[1]);
+    return jsonLookup(ctx.arena, payload, key) catch |e| switch (e) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => .nil,
+    };
+}
+
+/// `(json-decode KEY ... PAYLOAD)`. Side-effecting demux: for each KEY found
+/// in the top-level JSON object, publishes its value to
+/// `<current-subject>.<key>`. Skips missing keys, null values, and nested
+/// objects/arrays silently. Returns nil. Value-last so it can sit at the end
+/// of a pipeline if needed, though typically it's the whole body:
+/// `(json-decode "temp" "hum" payload)`.
+fn callJsonDecode(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len < 2) return error.ArityMismatch;
+    const payload = try asString(args[args.len - 1]);
+    for (args[0 .. args.len - 1]) |a| {
+        const key = try asString(a);
+        const v = jsonLookup(ctx.arena, payload, key) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        if (v == .nil) continue;
+        const subj = try std.fmt.allocPrint(ctx.arena, "{s}.{s}", .{ ctx.subject, key });
+        const out = try coercePayload(ctx.arena, v);
+        subject_mod.validatePublish(subj) catch return error.InvalidSubject;
+        ctx.publisher.publish(subj, out) catch return error.PublishFailed;
+        ctx.rule_publishes += 1;
+        if (ctx.current_rule) |r| r.publishes_emitted += 1;
+    }
+    return .nil;
+}
+
+const JsonLookupError = error{ Malformed, NotObject, KeyMissing, NestedValue } || Allocator.Error;
+
+/// Find KEY in a top-level JSON object payload and return its value as a
+/// rule Value (number / string / boolean / nil-for-null). Returns an error
+/// for missing keys, malformed payloads, non-object payloads, or values
+/// that are nested objects/arrays. Backed by `std.json.Scanner` so escape
+/// handling, number validation, and \uXXXX are someone else's problem.
+fn jsonLookup(arena: Allocator, payload: []const u8, key: []const u8) JsonLookupError!Value {
+    var scanner = std.json.Scanner.initCompleteInput(arena, payload);
+    defer scanner.deinit();
+
+    const first = scanner.next() catch return error.Malformed;
+    if (first != .object_begin) return error.NotObject;
+
+    while (true) {
+        const tok = scanner.nextAlloc(arena, .alloc_if_needed) catch return error.Malformed;
+        const this_key = switch (tok) {
+            .string => |s| s,
+            .allocated_string => |s| s,
+            .object_end => return error.KeyMissing,
+            else => return error.Malformed,
+        };
+        if (!std.mem.eql(u8, this_key, key)) {
+            scanner.skipValue() catch return error.Malformed;
+            continue;
+        }
+        const v = scanner.nextAlloc(arena, .alloc_if_needed) catch return error.Malformed;
+        return switch (v) {
+            .string, .allocated_string => |s| .{ .string = s },
+            .number, .allocated_number => |s| .{
+                .number = std.fmt.parseFloat(f64, s) catch return error.Malformed,
+            },
+            .true => .{ .boolean = true },
+            .false => .{ .boolean = false },
+            .null => .nil,
+            .object_begin, .array_begin => error.NestedValue,
+            else => error.Malformed,
+        };
+    }
 }
 
 /// Coerce a value into a stable byte representation for equality state.
@@ -1719,4 +1889,209 @@ test "hold-off state is per-subject" {
         try run(rules, &ctx);
     }
     try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+}
+
+test "json-get extracts numeric field and threads through pipeline" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (-> payload
+        \\      (json-get "temp")
+        \\      (round 1)
+        \\      (publish-to (subject-append "temp"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "sensors.x",
+        .payload = "{\"temp\":12.04,\"hum\":80}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("sensors.x.temp", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("12", tp.buf.items[0].payload);
+}
+
+test "json-get returns nil for missing key, malformed payload, nested values" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // publish-to short-circuits on nil, so a successful pipeline run must
+    // be guarded by a key that resolves to a number.
+    const rules = try loadRules(arena,
+        \\(on "x.*"
+        \\  (-> payload
+        \\      (json-get "v")
+        \\      (publish-to (subject-append "out"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const cases = [_]struct { subj: []const u8, payload: []const u8 }{
+        .{ .subj = "x.miss", .payload = "{\"other\":1}" },
+        .{ .subj = "x.bad", .payload = "not json at all" },
+        .{ .subj = "x.nest", .payload = "{\"v\":{\"inner\":1}}" },
+        .{ .subj = "x.nul", .payload = "{\"v\":null}" },
+        .{ .subj = "x.ok", .payload = "{\"v\":42}" },
+    };
+    for (cases) |c| {
+        var ctx: Context = .{
+            .subject = c.subj,
+            .payload = c.payload,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("x.ok.out", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("42", tp.buf.items[0].payload);
+}
+
+test "json-get extracts strings (escapes decoded) and booleans" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (do
+        \\    (publish-to "out.s" (json-get "s" payload))
+        \\    (publish-to "out.b" (json-get "b" payload))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "in",
+        .payload = "{\"s\":\"hi\\nthere\",\"b\":true}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("out.s", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("hi\nthere", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("out.b", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("true", tp.buf.items[1].payload);
+}
+
+test "json-decode demuxes a flat object onto sub-subjects" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (json-decode "temp" "hum" "missing" "nested" payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "sensors.foo",
+        .payload = "{\"temp\":12.5,\"hum\":80,\"nested\":{\"x\":1}}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("sensors.foo.temp", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("12.5", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("sensors.foo.hum", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("80", tp.buf.items[1].payload);
+}
+
+test "ohlc-bar emits open/high/low/close every N ticks" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "MARKET.*"
+        \\  (ohlc-bar 4 payload-float))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    // Bar 1 over [10, 12, 9, 11]:  o=10 h=12 l=9 c=11
+    // Bar 2 over [11, 8, 13, 10]:  o=11 h=13 l=8 c=10
+    // Then one extra tick (15) that opens a new bar but doesn't close it.
+    const feed = [_][]const u8{ "10", "12", "9", "11", "11", "8", "13", "10", "15" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "MARKET.AAPL",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+
+    // Two closed bars × 4 fields = 8 publishes.
+    try testing.expectEqual(@as(usize, 8), tp.buf.items.len);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.open", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("10", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.high", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("12", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.low", tp.buf.items[2].subject);
+    try testing.expectEqualStrings("9", tp.buf.items[2].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.close", tp.buf.items[3].subject);
+    try testing.expectEqualStrings("11", tp.buf.items[3].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.open", tp.buf.items[4].subject);
+    try testing.expectEqualStrings("11", tp.buf.items[4].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.high", tp.buf.items[5].subject);
+    try testing.expectEqualStrings("13", tp.buf.items[5].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.low", tp.buf.items[6].subject);
+    try testing.expectEqualStrings("8", tp.buf.items[6].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.close", tp.buf.items[7].subject);
+    try testing.expectEqualStrings("10", tp.buf.items[7].payload);
+}
+
+test "ohlc-bar state is per-subject" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "MARKET.*"
+        \\  (ohlc-bar 2 payload-float))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const feed = [_]struct { s: []const u8, p: []const u8 }{
+        .{ .s = "MARKET.A", .p = "10" }, // A: open
+        .{ .s = "MARKET.B", .p = "20" }, // B: open (independent)
+        .{ .s = "MARKET.A", .p = "11" }, // A: closes bar (o=10 h=11 l=10 c=11)
+        .{ .s = "MARKET.B", .p = "21" }, // B: closes bar (o=20 h=21 l=20 c=21)
+    };
+    for (feed) |m| {
+        var ctx: Context = .{
+            .subject = m.s,
+            .payload = m.p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 8), tp.buf.items.len);
+    // First bar is A's, second is B's, each in field order.
+    try testing.expectEqualStrings("MARKET.A.bar.close", tp.buf.items[3].subject);
+    try testing.expectEqualStrings("11", tp.buf.items[3].payload);
+    try testing.expectEqualStrings("MARKET.B.bar.close", tp.buf.items[7].subject);
+    try testing.expectEqualStrings("21", tp.buf.items[7].payload);
 }

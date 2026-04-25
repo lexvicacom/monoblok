@@ -105,6 +105,15 @@ Edge gates (take a boolean, fire once per transition; first sight never fires):
 
 - `(rising-edge X)`, `(falling-edge X)`
 
+JSON (top-level object only, no JSON path, value-last):
+
+- `(json-get KEY PAYLOAD)` returns the field as number / string / boolean, or nil if missing, malformed, null, or nested. Threads through `->` and short-circuits `publish-to` on nil.
+- `(json-decode KEY ... PAYLOAD)` demux: publishes each KEY's value to `<subject>.<key>`. Skips missing / null / nested fields silently. Use as the head rule for JSON-emitting devices so the rest of the patchbay stays scalar.
+
+OHLC bars (tick-count, side-effecting, per (rule, subject)):
+
+- `(ohlc-bar N X)` accumulates X into an in-progress bar. Every Nth call closes the bar and publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume is always N so it isn't reported. No time-aligned variant.
+
 ## The `->` pipeline idiom
 
 Because every transform / gate takes its value last, `->` reads
@@ -129,6 +138,7 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 - When you need multiple windows on the same stream (e.g. max - min spread), drop out of `->` and write the explicit nested form. `->` only threads one value.
 - Keep subjects hierarchical: emit into `<input-subject>.<suffix>` via `subject-append` so downstream subscribers can pick the granularity they want.
 - Don't publish back into a subject your own rule matches unless you have explicitly thought about it - rules don't loop, but a second rule on the output subject might.
+- For sensors that emit JSON frames, prefer `json-decode` at the head of the rule chain to fan fields out to scalar sub-subjects, then write the rest of your patchbay against those scalars. Reach for `json-get` inline only when you genuinely want one field on the existing subject.
 
 ## Anti-patterns
 
