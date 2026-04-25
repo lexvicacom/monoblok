@@ -12,3 +12,11 @@
   (transition (> (moving-avg 60 payload-float) 28.0)
     (publish-to (subject-append "alert") "hot")
     (publish-to (subject-append "ok")    "cool")))
+
+;; Daily heat-event tally: increment a per-sensor counter once on each
+;; false->true crossing of the same threshold, ignoring all the
+;; in-between samples. Subscribe to `temp.<floor>.<room>.count` for the
+;; running total. (rising-edge fires once per transition, so this is a
+;; counter of *crossings*, not samples.)
+(on "temp.*.*"
+  (count (rising-edge (> (moving-avg 60 payload-float) 28.0))))

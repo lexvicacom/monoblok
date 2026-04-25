@@ -151,7 +151,7 @@ The full DSL reference (syntax, bound symbols, every operator, all the tables an
 
 ### Example patchbays
 
-The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios: [`sensors.edn`](./examples/sensors.edn) (round + squelch on a noisy sensor), [`office-temp.edn`](./examples/office-temp.edn) (deadband + moving-average alert/all-clear), [`ticker.edn`](./examples/ticker.edn) (market data with bridge), [`ohlc.edn`](./examples/ohlc.edn) (tick-count OHLC bars per symbol), [`json-frames.edn`](./examples/json-frames.edn) (demux a JSON-emitting device into scalar sub-subjects), [`rental-car.edn`](./examples/rental-car.edn), and [`bridge.edn`](./examples/bridge.edn). Run any of them with `monoblok --patchbay examples/<file>.edn`.
+The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios: [`sensors.edn`](./examples/sensors.edn) (round + squelch on a noisy sensor), [`office-temp.edn`](./examples/office-temp.edn) (deadband + moving-average alert/all-clear), [`ticker.edn`](./examples/ticker.edn) (market data with bridge), [`bars.edn`](./examples/bars.edn) (tick-count OHLC bars per symbol), [`json-frames.edn`](./examples/json-frames.edn) (demux a JSON-emitting device into scalar sub-subjects), [`rental-car.edn`](./examples/rental-car.edn), and [`bridge.edn`](./examples/bridge.edn). Run any of them with `monoblok --patchbay examples/<file>.edn`.
 
 ### Patchbay with Claude Code
 

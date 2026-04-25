@@ -43,11 +43,16 @@
 ;                                         The publish is implicit; returns
 ;                                         nil so it sits at the tail of a
 ;                                         rule.
-;   (ohlc-bar N X)                      - tick-count OHLC bar accumulator.
+;   (bar N X)                           - tick-count OHLC bar accumulator.
 ;                                         Every Nth tick, publishes
 ;                                         <subject>.bar.{open,high,low,
 ;                                         close} for the just-closed bar.
 ;                                         Returns nil. Per (rule, subject).
+;   (count) / (count COND)              - running counter per (rule, subject).
+;                                         Increments and publishes the new
+;                                         total to <subject>.count. With one
+;                                         arg, only counts when COND is
+;                                         truthy. Returns nil.
 ;
 ;   (-> X f1 f2 ...)                    - thread X through each form as its
 ;                                         last argument: (-> x (f 1) g)

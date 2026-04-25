@@ -68,3 +68,10 @@
   (when (contains? payload "alert")
     (publish "demo.alerts"
       (str-concat "[" (subject-token 1) "] " payload))))
+
+;; 9. Count: a running tally of threshold crossings, not raw samples.
+;;    Increments once per false->true transition above 50, publishes
+;;    the new total to `demo.sensors.*.count`. Pair with example 7
+;;    (rising-edge "spike") and watch the count climb in lockstep.
+(on "demo.sensors.*"
+  (count (rising-edge (> payload-float 50.0))))

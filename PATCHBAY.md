@@ -371,9 +371,9 @@ Both ops are arity-flexible at the **value-last** end (`PAYLOAD` is the
 last argument), matching the rest of the dialect, so you can just as
 easily write the threaded form `(-> payload (json-get "temp") ...)`.
 
-## OHLC bars
+## Bars
 
-`(ohlc-bar N X)` is a tick-count bar accumulator for streams where you
+`(bar N X)` is a tick-count bar accumulator for streams where you
 want open / high / low / close summaries instead of every tick. Each
 call adds one sample to the in-progress bar. Every Nth call closes the
 bar and publishes four sub-subjects under `<subject>.bar`:
@@ -393,12 +393,42 @@ threaded pipeline. In-progress bars survive a snapshot reload.
 ```edn
 ; 60-tick OHLC bars per symbol on a market feed.
 (on "MARKET.*"
-  (ohlc-bar 60 payload-float))
+  (bar 60 payload-float))
 ```
 
 A subscriber to `MARKET.AAPL.bar.>` then sees a clean burst of four
 messages per closed bar, in `open / high / low / close` order, with no
 intermediate per-tick noise.
 
-There is no time-aligned variant yet — bars close on tick count, not
-wall clock. Volume isn't reported because it's always exactly N.
+There is no time-aligned variant yet (bars close on tick count, not
+wall clock). Volume isn't reported because it's always exactly N.
+
+## Running counters
+
+`(count)` is a side-effecting running counter, per `(rule, subject)`.
+Each call increments and publishes the new total to `<subject>.count`.
+Returns nil so it threads or sits in a `do` block without disturbing the
+value being passed through.
+
+With one optional argument, `(count COND)` only increments when `COND`
+is truthy (any value type, same rules as `if` / `when`). The predicate
+itself is fully general, so it composes with everything the dialect
+already has (`contains?`, comparisons, `changed?`, `rising-edge`, ...).
+
+```edn
+; Total tick count per symbol, live on MARKET.AAPL.count etc.
+(on "MARKET.*"
+  (count))
+
+; Error-event counter per service.
+(on "events.>"
+  (count (contains? payload "ERROR")))
+
+; Threshold breaches.
+(on "sensors.>"
+  (count (> payload-float 100)))
+```
+
+State is a single number, snapshot-persisted, so a restart resumes from
+the last seen total instead of zero. Subscribe to `<subject>.count` (or
+`$LVC.<subject>.count` for the latest value) to watch a counter live.
