@@ -6,19 +6,17 @@
 
 An experimental, partially NATS-compatible pub/sub server written in Zig, with last-value streams and a routing and signal conditioning DSL called **patchbay**. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
-monoblok is a single static`*` binary. Local clients publish to short subjects; patchbay rules round, deadband, squelch, and re-emit on derived subjects; subscribers see a clean signal. `$LVC.*` gives you last-value replay on subscribe, snapshots persist that across restarts, and an optional bridge forwards selected subjects on to a real NATS cluster. NATS-compatible wire protocol, so any `nats` client works.
-
-`*` if you need to bridge with a real NATS server or another monoblok, OpenSSL 3 needs to be installed.
+monoblok is a single, small binary. Local clients publish to short subjects; patchbay rules round, deadband, squelch, and re-emit on derived subjects; subscribers see a clean signal. `$LVC.*` gives you last-value replay on subscribe, snapshots persist that across restarts, and an optional bridge forwards selected subjects on to a real NATS cluster. NATS-compatible wire protocol, so any `nats` client works.
 
 ## What is signal conditioning?
 
-Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate and practically useless; you want "22.0, and tell me when it actually changes."
+Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate but annoying to work with; you want "22.0, and tell me when it actually changes."
 
-monoblok does the software version of that, at the broker, before your subscribers ever see the message. `round` snaps to decimals, `quantize` snaps to a step size, `squelch` drops repeats, `deadband` ignores changes below a threshold, `moving-avg` smooths a window. Chain them together and a chatty sensor becomes a clean **"change-only" stream of interesting events**, so subscribers don't have to deal with the noise themselves and can stay simple: they get a clean signal.
+monoblok does the software version of that, at the broker, before your subscribers ever see the message. `round` snaps to decimals, `quantize` snaps to a step size, `squelch` drops repeats, `deadband` ignores changes below a threshold, `moving-avg` smooths a window. Chain them together and a chatty sensor becomes a clean **"change-only" stream of interesting events**, so subscribers don't have to deal with the noise themselves and can stay simple: **they get a clean signal.**
 
 ## Try it out with no install
 
-A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [DEMO.md](./DEMO.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats (shared, no rate limiting, don't send secrets).
+A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [DEMO.md](./DEMO.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats (tiny server, shared, no rate limiting, don't send secrets).
 
 ## Install on your hardware
 
