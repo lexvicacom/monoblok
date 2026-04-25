@@ -281,7 +281,8 @@ const Op = enum {
     moving_avg, moving_sum, moving_max, moving_min,
     rising_edge, falling_edge,
     json_get, json_demux,
-    ohlc_bar,
+    bar,
+    count,
 };
 
 const op_map = std.StaticStringMap(Op).initComptime(.{
@@ -323,7 +324,8 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "falling-edge", .falling_edge },
     .{ "json-get", .json_get },
     .{ "json-demux", .json_demux },
-    .{ "ohlc-bar", .ohlc_bar },
+    .{ "bar", .bar },
+    .{ "count", .count },
 });
 
 fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
@@ -386,7 +388,8 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .falling_edge => callEdge(ctx, evaled, .falling),
         .json_get => callJsonGet(ctx, evaled),
         .json_demux => callJsonDemux(ctx, evaled),
-        .ohlc_bar => callOhlcBar(ctx, evaled),
+        .bar => callBar(ctx, evaled),
+        .count => callCount(ctx, evaled),
     };
 }
 
@@ -869,7 +872,7 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
     } };
 }
 
-/// `(ohlc-bar N PAYLOAD)`. Side-effecting tick-count bar accumulator. Each
+/// `(bar N PAYLOAD)`. Side-effecting tick-count bar accumulator. Each
 /// call adds one sample. Every Nth call closes a bar and publishes four
 /// sub-subjects under `<current-subject>.bar`:
 ///
@@ -882,7 +885,7 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
 /// `->` without polluting downstream values. Bar-in-progress state
 /// survives a snapshot reload; if the new patchbay's literal `N` differs
 /// from the saved `cap`, the saved `cap` wins until that bar closes.
-fn callOhlcBar(ctx: *Context, args: []const Value) EvalError!Value {
+fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const n_f = try asNumber(args[0]);
@@ -890,7 +893,7 @@ fn callOhlcBar(ctx: *Context, args: []const Value) EvalError!Value {
     const n: u32 = @intFromFloat(n_f);
     const x = try asNumber(args[1]);
 
-    const key = try stateKey(ctx.arena, "ohlc-bar", ctx.subject);
+    const key = try stateKey(ctx.arena, "bar", ctx.subject);
     const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
     if (!slot.found_existing or slot.value_ptr.* == .empty) {
         slot.value_ptr.* = .{ .ohlc = .{ .open = x, .high = x, .low = x, .count = 1, .cap = n } };
@@ -930,6 +933,39 @@ fn callOhlcBar(ctx: *Context, args: []const Value) EvalError!Value {
         rule.publishes_emitted += 1;
     }
     bar.count = 0;
+    return .nil;
+}
+
+/// `(count)` or `(count COND)`. Side-effecting running counter, per
+/// (rule, subject). With no args, increments on every call. With one arg,
+/// increments only when COND is truthy (any value type — same `isTruthy`
+/// rules as `if` / `when`). Each increment publishes the new total to
+/// `<subject>.count`. Returns nil so it slots into a `do` block or sits at
+/// the tail of a `->` pipeline without disturbing the threaded value:
+/// `(-> payload-float (count) (round 1) (publish-to ...))`. State is a
+/// plain `.number` so it round-trips through snapshots for free.
+fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len > 1) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    if (args.len == 1 and !args[0].isTruthy()) {
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+
+    const key = try stateKey(ctx.arena, "count", ctx.subject);
+    const slot = try getOrPutStateSlot(ctx.gpa, rule, key);
+    const next: f64 = if (!slot.found_existing or slot.value_ptr.* == .empty)
+        1
+    else
+        slot.value_ptr.number + 1;
+    slot.value_ptr.* = .{ .number = next };
+
+    const subj = try std.fmt.allocPrint(ctx.arena, "{s}.count", .{ctx.subject});
+    const out = try std.fmt.allocPrint(ctx.arena, "{d}", .{next});
+    subject_mod.validatePublish(subj) catch return error.InvalidSubject;
+    ctx.publisher.publish(subj, out) catch return error.PublishFailed;
+    ctx.rule_publishes += 1;
+    rule.publishes_emitted += 1;
     return .nil;
 }
 
@@ -2013,14 +2049,14 @@ test "json-demux fans a flat object out onto sub-subjects" {
     try testing.expectEqualStrings("80", tp.buf.items[1].payload);
 }
 
-test "ohlc-bar emits open/high/low/close every N ticks" {
+test "bar emits open/high/low/close every N ticks" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (ohlc-bar 4 payload-float))
+        \\  (bar 4 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -2060,14 +2096,14 @@ test "ohlc-bar emits open/high/low/close every N ticks" {
     try testing.expectEqualStrings("10", tp.buf.items[7].payload);
 }
 
-test "ohlc-bar state is per-subject" {
+test "bar state is per-subject" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (ohlc-bar 2 payload-float))
+        \\  (bar 2 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -2094,4 +2130,75 @@ test "ohlc-bar state is per-subject" {
     try testing.expectEqualStrings("11", tp.buf.items[3].payload);
     try testing.expectEqualStrings("MARKET.B.bar.close", tp.buf.items[7].subject);
     try testing.expectEqualStrings("21", tp.buf.items[7].payload);
+}
+
+test "count fires every call when unconditional, per (rule, subject)" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "events.>"
+        \\  (count))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const feed = [_]struct { s: []const u8, p: []const u8 }{
+        .{ .s = "events.a", .p = "x" },
+        .{ .s = "events.a", .p = "y" },
+        .{ .s = "events.b", .p = "z" },
+        .{ .s = "events.a", .p = "w" },
+    };
+    for (feed) |m| {
+        var ctx: Context = .{
+            .subject = m.s,
+            .payload = m.p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+
+    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+    try testing.expectEqualStrings("events.a.count", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("1", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("events.a.count", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("2", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("events.b.count", tp.buf.items[2].subject);
+    try testing.expectEqualStrings("1", tp.buf.items[2].payload);
+    try testing.expectEqualStrings("events.a.count", tp.buf.items[3].subject);
+    try testing.expectEqualStrings("3", tp.buf.items[3].payload);
+}
+
+test "count with predicate only increments on truthy" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "events.>"
+        \\  (count (contains? payload "ERROR")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const feed = [_][]const u8{ "ok", "ERROR: oops", "ok", "ERROR: again", "fine" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "events.svc",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("events.svc.count", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("1", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("events.svc.count", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("2", tp.buf.items[1].payload);
 }

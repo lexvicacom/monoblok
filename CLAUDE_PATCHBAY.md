@@ -110,9 +110,13 @@ JSON (top-level object only, no JSON path, value-last):
 - `(json-get KEY PAYLOAD)` returns the field as number / string / boolean, or nil if missing, malformed, null, or nested. Threads through `->` and short-circuits `publish-to` on nil.
 - `(json-demux KEY ... PAYLOAD)` side-effecting demux: for each KEY, publishes the field's value to `<subject>.<key>`. Skips missing / null / nested fields silently. Returns nil. Use as the head rule for JSON-emitting devices so the rest of the patchbay stays scalar.
 
-OHLC bars (tick-count, side-effecting, per (rule, subject)):
+Bars (tick-count, side-effecting, per (rule, subject)):
 
-- `(ohlc-bar N X)` accumulates X into an in-progress bar. Every Nth call closes the bar and publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume is always N so it isn't reported. No time-aligned variant.
+- `(bar N X)` accumulates X into an in-progress bar. Every Nth call closes the bar and publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume is always N so it isn't reported. No time-aligned variant.
+
+Running counters (side-effecting, per (rule, subject)):
+
+- `(count)` and `(count COND)` increment a running total and publish it to `<subject>.count`. With no args, fires every call; with one arg, only when COND is truthy (same rules as `if` / `when`, so any predicate composes — `(count (contains? payload "ERROR"))`, `(count (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
 
 ## The `->` pipeline idiom
 

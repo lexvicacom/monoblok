@@ -63,6 +63,7 @@ input subject plus a suffix.
 |                                      | `demo.sensors.<name>.alert` / `.ok`         | `transition` across 28.0: "hot" rising, "cool" falling    |
 |                                      | `demo.sensors.<name>.overload`              | `hold-off 2000` while `> 40` (one emit per 2s)            |
 |                                      | `demo.sensors.<name>.spike`                 | `rising-edge` across 50.0                                 |
+|                                      | `demo.sensors.<name>.count`                 | `count` of false-to-true crossings above 50.0             |
 | `demo.log.<name>` (any text)         | `demo.alerts`                               | mirror if payload contains `alert`, prefixed with source  |
 
 State (`squelch` last values, `moving-avg` rings, `transition`
@@ -139,6 +140,16 @@ pub demo.sensors.temp 20      # first sight, no edge
 pub demo.sensors.temp 30      # crossed 28 -> .alert "hot"
 pub demo.sensors.temp 31      # still above, nothing
 pub demo.sensors.temp 25      # crossed back -> .ok "cool"
+```
+
+### Counting threshold crossings
+
+```
+pub demo.sensors.temp 10      # below 50, no spike, count unchanged
+pub demo.sensors.temp 60      # crosses 50 -> .spike, .count "1"
+pub demo.sensors.temp 70      # still above, no edge, count unchanged
+pub demo.sensors.temp 40      # drops below, no edge
+pub demo.sensors.temp 55      # crosses 50 again -> .spike, .count "2"
 ```
 
 ### Alerts from logs
