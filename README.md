@@ -4,16 +4,51 @@
 
 # monoblok
 
-An experimental toy: a partially NATS-compatible pub/sub server with last-value streams and an S-expression routing and signal conditioning DSL called **patchbay**. [Read the introduction post.](https://alexjreid.dev/posts/monoblok/)
+An experimental, partially NATS-compatible pub/sub server written in Zig, with last-value streams and a routing and signal conditioning DSL called **patchbay**. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
-## Build & run
+monoblok is a single static`*` binary. Local clients publish to short subjects; patchbay rules round, deadband, squelch, and re-emit on derived subjects; subscribers see a clean signal. `$LVC.*` gives you last-value replay on subscribe, snapshots persist that across restarts, and an optional bridge forwards selected subjects on to a real NATS cluster. NATS-compatible wire protocol, so any `nats` client works.
+
+`*` if you need to bridge with a real NATS server or another monoblok, OpenSSL 3 needs to be installed.
+
+## What is signal conditioning?
+
+Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate and practically useless; you want "22.0, and tell me when it actually changes."
+
+monoblok does the software version of that, at the broker, before your subscribers ever see the message. `round` snaps to decimals, `quantize` snaps to a step size, `squelch` drops repeats, `deadband` ignores changes below a threshold, `moving-avg` smooths a window. Chain them together and a chatty sensor becomes a clean **"change-only" stream of interesting events**, so subscribers don't have to deal with the noise themselves and can stay simple: they get a clean signal.
+
+## Try it out with no install
+
+A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [DEMO.md](./DEMO.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats (shared, no rate limiting, don't send secrets).
+
+## Install on your hardware
+
+Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Each platform ships two `.tar.gz` archives: the default (includes the [outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the target box) and a `-nobridge` variant with no external runtime dependencies.
+
+Pick the latest tag from the releases page and substitute it for `VERSION` below (e.g. `v0.0.18`).
+
+**macOS (Apple Silicon):**
 
 ```
-zig build --release=safe
-./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
+VERSION=v0.0.18
+curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-macos-aarch64.tar.gz"
+tar -xzf "monoblok-${VERSION}-macos-aarch64.tar.gz"
+sudo install "monoblok-${VERSION}-macos-aarch64/monoblok" /usr/local/bin/monoblok
+brew install openssl@3       # only needed for the bridge build; skip if you grabbed the -nobridge tarball
+monoblok --port 4222 --patchbay "monoblok-${VERSION}-macos-aarch64/patchbay.edn"
 ```
 
-Any NATS client works:
+**Linux (x86_64; swap for `linux-aarch64` on ARM):**
+
+```
+VERSION=v0.0.18
+curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-linux-x86_64.tar.gz"
+tar -xzf "monoblok-${VERSION}-linux-x86_64.tar.gz"
+sudo install "monoblok-${VERSION}-linux-x86_64/monoblok" /usr/local/bin/monoblok
+sudo apt install libssl-dev pkg-config   # only needed for the bridge build; skip if you grabbed the -nobridge tarball
+monoblok --port 4222 --patchbay "monoblok-${VERSION}-linux-x86_64/patchbay.edn"
+```
+
+Then in another shell, drive it with any NATS client:
 
 ```
 nats sub 'sensors.*'
@@ -21,23 +56,10 @@ nats sub 'sensors.*'
 nats pub sensors.temp 42.5
 ```
 
-Prebuilt Mac (ARM) and Linux (x86_64 + aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Each platform ships two `.tar.gz` archives: the default (includes the [outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the target box) and a `-nobridge` variant with no external runtime dependencies.
+For more, see next section.
+If you don't want OpenSSL on the box at all, grab the `-nobridge` tarball (e.g. `monoblok-${VERSION}-linux-x86_64-nobridge.tar.gz`) and skip the dependency-install step.
 
-### Dependencies
-
-OpenSSL is required when the NATS bridge is enabled, which is the default:
-
-```
-# macOS
-brew install openssl@3
-
-# Debian / Ubuntu
-sudo apt install libssl-dev pkg-config
-```
-
-If you don't want the bridge (or don't want to install OpenSSL), build with `zig build -Dbridge=false`.
-
-### Running as a systemd service (Ubuntu / Debian)
+### Running as a systemd service on Linux
 
 A unit file and installer ship in [scripts/](./scripts/) and inside the Linux release tarballs (the macOS tarball omits them):
 
@@ -93,7 +115,7 @@ Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, pe
 
 ## Patchbay
 
-patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Think of it as a wiring diagram: jacks (subject filters) at the top, filter chains in the middle (`round`, `squelch`, `deadband`, `moving-avg`, ...), and sends (`publish-to`) at the bottom. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are the usual NATS ones: `*` matches one token, `>` matches one-or-more tokens and must be the tail (so `foo.*.*` is exactly three tokens, `foo.>` is three-or-more). Messages a patchbay form publishes fan out normally but **do not** re-enter the DSL, so there are no cycles.
+patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Think of it as a wiring diagram: jacks (subject filters) at the top, filter chains in the middle (`round`, `squelch`, `deadband`, `moving-avg`, ...), and sends (`publish-to`) at the bottom. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are the usual NATS ones: `*` matches one token, `>` matches one-or-more tokens and must be the tail (so `foo.*.*` is exactly three tokens, `foo.>` is three-or-more).
 
 ```edn
 (on "sensors.*"
@@ -105,12 +127,6 @@ patchbay is a small S-expression DSL describing how every incoming publish gets 
     (publish "events.alerts" (str-concat subject ": " payload))))
 ```
 
-### Wait, what is signal conditioning?
-
-Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate and practically useless; you want "22.0, and tell me when it actually changes."
-
-patchbay does the software version of that, at the broker, before your subscribers ever see the message. `round` snaps to decimals, `quantize` snaps to a step size, `squelch` drops repeats, `deadband` ignores changes below a threshold, `moving-avg` smooths a window. Chain them together and a chatty sensor becomes a well-behaved "change-only" stream, so subscribers don't have to deal with the noise themselves and can stay simple: they get a clean signal.
-
 ### Why the electronics vocabulary?
 
 Because the operations already have names, and the names already mean the right thing. `squelch` on a radio suppresses the channel until signal strength changes; here it suppresses the message until the value changes. `deadband` on an industrial controller ignores input movement smaller than a threshold; here it ignores payload changes smaller than a threshold. A "patchbay" in a studio is a grid of jacks you physically wire between sources and destinations, which is exactly what the DSL looks like on the page: subject filters on the left, sends on the right.
@@ -121,7 +137,7 @@ It's also just more fun than calling everything `FilterOperatorImpl`.
 
 ### What it can be used for
 
-Filtering, routing, light payload rewriting, and signal conditioning at the broker. A form inspects an incoming message and can `publish` zero or more derived messages on other subjects; think "threshold this numeric stream onto a `.high` sub-subject," "mirror anything mentioning `alert` into `events.alerts`," "split a firehose into per-tenant subjects," or "deadband a jittery sensor so only meaningful changes hit downstream." The stateful primitives (`squelch`, `deadband`, `moving-*`) keep O(1) per-`(rule, subject)` state but there's no time-based windowing, no aggregation across messages, no storage. It's not a stream processor.
+Filtering, routing, light payload rewriting, and signal conditioning at the broker. A form inspects an incoming message and can `publish` zero or more derived messages on other subjects; think "threshold this numeric stream onto a `.high` sub-subject," "mirror anything mentioning `alert` into `events.alerts`," "split a firehose into per-tenant subjects," or "deadband a jittery sensor so only meaningful changes hit downstream." 
 
 ### What it isn't
 
@@ -132,6 +148,31 @@ nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/sub
 ### Patchbay in depth
 
 The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [PATCHBAY.md](./PATCHBAY.md).
+
+### Patchbay with Claude Code
+
+When getting started writing rules, Claude can help you out. [CLAUDE_PATCHBAY.md](./CLAUDE_PATCHBAY.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
+
+```sh
+# project-scoped (recommended)
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ./CLAUDE.md
+
+# or user-global
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ~/.claude/CLAUDE.md
+```
+
+For one-off use, reference it inline in a prompt with `@CLAUDE_PATCHBAY.md` (Claude Code inlines `@path` refs).
+
+Once it's loaded, describe the stream you have and the stream you want. For example:
+
+> Write a patchbay rule file `ticker.edn` for a noisy market ticker on `MARKET.<SYM>`. Round the price to 3 decimal places and only re-emit when the rounded value changes. Also fan out big jumps to an alerts subject, and bridge those alerts out to a real NATS server at `nats://127.0.0.1:4222`.
+
+<p align="center">
+  <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
+</p>
+
+Drop `ticker.edn` into a convenient place and run it with `monoblok --patchbay ticker.edn`.
+
 
 ## `$LVC.*`: the last-value-cache stream
 
@@ -189,7 +230,7 @@ Typical shape:
 - The bridge forwards only the subjects you want (raw sensor reads, the derived stable ones, or both) to a remote NATS cluster — Synadia NGS, a managed cluster, a self-hosted cluster, etc.
 - Nothing else leaves the box. Everything off-path stays local.
 
-Using monoblok as a front-NATS for existing publishers is a light addition: what a downstream consumer used to do (rounding, deadbanding, squelching) can move into monoblok, and everyone subscribing to the processed subjects is none the wiser, they just connect to the same production NATS environment. NATS isn't strictly required downstream either — in smaller or more experimental setups, consumers can point straight at monoblok.
+Using monoblok as a front-NATS for existing publishers is an elegant addition: what a downstream consumer used to do (rounding, deadbanding, squelching) can move into monoblok, and everyone subscribing to the processed subjects is none the wiser, they just connect to the same production NATS environment. NATS isn't strictly required downstream either: in smaller or more experimental setups, consumers can point straight at monoblok.
 
 ### Config
 
@@ -232,29 +273,6 @@ Reconnects are handled by nats.c internally. During the reconnect window, publis
 
 The bridge is on by default. Turn it off at build time with `zig build -Dbridge=false`, which also removes the OpenSSL link dependency. Both variants are published to each release as `-nobridge` and (default) archives — pick whichever fits the target box. Or simply do not add a `bridge` form to your config if you do not need it.
 
-## Using with Claude Code
-
-[CLAUDE_PATCHBAY.md](./CLAUDE_PATCHBAY.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
-
-```sh
-# project-scoped (recommended)
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ./CLAUDE.md
-
-# or user-global
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ~/.claude/CLAUDE.md
-```
-
-For one-off use, reference it inline in a prompt with `@CLAUDE_PATCHBAY.md` (Claude Code inlines `@path` refs).
-
-Once it's loaded, describe the stream you have and the stream you want. For example:
-
-> Write a patchbay rule file `ticker.edn` for a noisy market ticker on `MARKET.<SYM>`. Round the price to 3 decimal places and only re-emit when the rounded value changes. Also fan out big jumps to an alerts subject, and bridge those alerts out to a real NATS server at `nats://127.0.0.1:4222`.
-
-<p align="center">
-  <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
-</p>
-
-Drop `ticker.edn` into a convenient place and run it with `monoblok --patchbay ticker.edn`.
 
 ## Observability
 
@@ -283,11 +301,11 @@ Everything application-level runs on a single thread: parsing, subject matching,
 
 That's a deliberate choice, not a WTF. It's what lets the whole thing skip locks entirely. Adding a second thread breaks our top tenet of simplicity and squanders potential performance tricks added.
 
-The cost is a one-core cap. A heavy rule on a hot subject, or a giant fan-out, will stall every other connection while it runs. monoblok is aimed at signal-conditioning patchbays sitting in front of modest pub/sub traffic, which fits comfortably inside one core. If you outgrow that, meh. There's probably something in sharding but I haven't given it much thought. This is still a toy.
+The cost is a one-core cap. A heavy rule on a hot subject, or a giant fan-out, will stall every other connection while it runs. monoblok is aimed at signal-conditioning patchbays sitting in front of modest pub/sub traffic, which fits comfortably inside one core. If you outgrow that, the solution feels like it may be to shard the subject space, but I haven't given it much thought yet. Any way forward adds complexity. Is it lazy to see just how far one core can take us?
 
 ### Why libxev
 
-Zig 0.16's `std.Io` works, but not in a way that fits a single-threaded event loop: the macOS `Dispatch` backend is thread-per-connection, and the other backends I tried (`Kqueue`, `Uring`) didn't compile cleanly for me on 0.16 (could well be me holding it wrong; or maybe it is too low level for my small brain). libxev gives us a proper single-loop model on kqueue / io_uring / epoll / IOCP, picked at comptime. The server logs which backend it's using at startup.
+Zig 0.16's `std.Io` works, but not in a way that fits a single-threaded event loop: the macOS `Dispatch` backend is thread-per-connection and didn't always compile cleanly for me on 0.16 (could well be me holding it wrong; or maybe it is too low level for my small brain). libxev worked first try, and gives us a proper single-loop model on kqueue / io_uring / epoll / IOCP, picked at comptime. The server logs which backend it's using at startup.
 
 ## Tests
 
@@ -305,7 +323,7 @@ Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--
 
 `scripts/bench.sh` drives the numbers: it starts monoblok on `$NATS_URL` (default `127.0.0.1:4222`), runs the six `nats bench` workloads in the table below against it, stops it, then (if `nats-server` is on `PATH`) starts it on the same port and reruns the same workloads. Servers are benched sequentially, never concurrently. Pub workloads use `nats bench pub`, fan-out workloads spawn a `nats bench sub` with N clients and then a single publisher on the same subject. The script scrapes the `publisher stats` / `subscriber stats` line from each run and prints the msgs/sec table at the end.
 
-**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Hetzner Linux** (2-core AMD EPYC KVM, 4 GB, Ubuntu 24.04, io_uring):
+**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Linux (Hetzner CPX22 VM(** (2-core AMD EPYC KVM, 4 GB, Ubuntu 24.04, io_uring):
 
 | workload            |    M4 monoblok |     M4 nats |   M4 Δ | Linux monoblok | Linux nats | Linux Δ |
 |---------------------|---------------:|------------:|-------:|---------------:|-----------:|--------:|
@@ -316,11 +334,28 @@ Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--
 | 1 pub → 10 subs     |      12.60M/s  |    4.95M/s  |  +155% |       3.31M/s  |   2.59M/s  |    +28% |
 | 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       3.98M/s  |   3.05M/s  |    +30% |
 
-Fan-out is where monoblok pulls ahead on both platforms. The single-subscriber workload is the one regression that flips sign between platforms (likely io_uring completion batching behaving differently under low concurrency). Multi-publisher wins on the M4 collapse to parity on the 2-vCPU box, since a single-threaded loop can't scale past one core while nats-server spreads across both. `--release=fast` adds roughly 10–15% on top if you want to poke the ceiling. Take this all with a pinch of salt, it isn't that deep and the numbers could well be off.
+Fan-out is where monoblok pulls ahead on both platforms. The single-subscriber workload is the one regression that flips sign between platforms (likely io_uring completion batching behaving differently under low concurrency). Multi-publisher wins on the M4 collapse to parity on the 2-vCPU box, since a single-threaded loop can't scale past one core while nats-server spreads across both. Not an apples (Apples?) for apples comparison due as an M4 perf core vs a lowly VPS is unfair.  `--release=fast` adds roughly 10–15% on top if you want to poke the ceiling. Take this all with a huge pinch of salt, the numbers could well be off. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with an eBay turbo :)**
 
-## Building for release
+## Building from source
 
-Release binaries are built natively on each target architecture, not cross-compiled. The `.github/workflows/release.yml` pipeline uses three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), and `macos-latest` (aarch64). Each runs `zig build --release=safe` assuming OpenSSL is installed locally..
+Zig 0.16.0 exactly. OpenSSL is required when the bridge is enabled (the default); skip it if you build with `-Dbridge=false`.
+
+```
+# macOS
+brew install openssl@3
+
+# Debian / Ubuntu
+sudo apt install libssl-dev pkg-config
+```
+
+Then:
+
+```
+zig build --release=safe
+./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
+```
+
+Release binaries are built natively on each target architecture, not cross-compiled. The `.github/workflows/release.yml` pipeline uses three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), and `macos-latest` (aarch64). Each runs `zig build --release=safe` assuming OpenSSL is installed locally.
 
 Each release ships **two variants per platform**: with the NATS bridge (requires OpenSSL on the target box) and without (`-nobridge` suffix, no runtime deps). Grab the bridge variant if you want to forward traffic to a real NATS cluster; grab the `-nobridge` variant if you just want a standalone pub/sub broker with no external deps.
 
