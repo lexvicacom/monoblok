@@ -6,7 +6,7 @@
 
 An experimental, partially NATS-compatible pub/sub server written in Zig, with last-value streams and a routing and signal conditioning DSL called **patchbay**. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
-monoblok is a single small binary. Local clients publish to short subjects; patchbay rules condition the signal (round, deadband, squelch, moving-avg) and re-emit on derived subjects, so subscribers don't each re-implement the same rounding, deduping, and smoothing. It uses the NATS wire protocol, so any `nats` client works.
+monoblok is a single small binary. Local clients publish to short subjects; patchbay rules condition the signal (round, deadband, squelch, moving-avg) and re-emit on derived subjects, so subscribers don't each re-implement the same rounding, deduping, and smoothing. JSON-emitting devices are first-class too: a frame like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and then conditioned the same way. It uses the NATS wire protocol, so any `nats` client works, and it's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-for) so the cleaned-up streams roll into your existing cluster.
 
 ## Try it out with no install
 
@@ -139,6 +139,9 @@ Anywhere you'd otherwise write a small consumer that subscribes, filters or roun
 
 Filtering, routing, light payload rewriting, and signal conditioning at the broker. A form inspects an incoming message and can `publish` zero or more derived messages on other subjects; think "threshold this numeric stream onto a `.high` sub-subject," "mirror anything mentioning `alert` into `events.alerts`," "split a firehose into per-tenant subjects," or "deadband a jittery sensor so only meaningful changes hit downstream."
 
+A natural deployment shape is a sidecar at the edge in front of a NATS leaf: noisy publishers (devices, scrapers, log producers) talk to a local monoblok, the patchbay does the rounding / deduping / demuxing / windowing right there, and the [bridge](#outbound-nats-bridge) forwards only the cleaned-up subjects upstream. The expensive cluster sees one tidy stream per concept instead of the raw firehose.
+
+<a id="json-frames"></a>
 For sensors that emit JSON frames rather than bare scalars (`{"temp":12.5,"hum":80}`), patchbay has `json-get` for inline lookup of a single field and `json-demux` to break named fields out onto sub-subjects (e.g. `devices.kitchen` `{"temp":12.5,"hum":80}` fans out to `devices.kitchen.temp` and `devices.kitchen.hum`). Top-level keys only, no JSON path; the rest of the patchbay then operates on the resulting scalar streams.
 
 ### What it isn't
