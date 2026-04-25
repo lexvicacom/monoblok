@@ -86,6 +86,7 @@ Idempotent filters (per-rule, per-subject state; first sight always passes / is 
 - `(deadband DELTA X)` pass iff numeric X moved by >= DELTA, else nil
 - `(changed? X)` boolean predicate form of squelch
 - `(delta X)` numeric difference since last X (0 on first sight)
+- `(hold-off MS X)` pass X on first sight and again only after MS ms have elapsed since the last pass; nil otherwise. Time source is the server-stamped per-message clock, so all ops in one evaluation see the same "now".
 
 Windowed aggregates (per `(rule, subject, op)` ring, N fixed at first call):
 
