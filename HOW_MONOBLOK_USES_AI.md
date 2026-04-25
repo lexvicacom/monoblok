@@ -1,10 +1,8 @@
 # How monoblok uses AI
 
-There's no shame in using Claude or any of the other assistants, but
-monoblok is not a vibe-coded project and I'd rather be upfront about
-where the line sits.
-
-Short version: I use Claude Code. I can't imagine not using it. Sosumi.
+Short version: I use Claude Code. I can't imagine not using it. 
+There's no shame in using Claude or any of the other assistants, but I'd contend that
+monoblok is not a vibe-coded project.
 
 The interesting parts of monoblok are the bits bolted onto the
 NATS-shaped core (the patchbay DSL, `$LVC.*` last-value streams,
@@ -13,15 +11,9 @@ performance-wise against the real thing on a single thread. Some of
 that may turn into something less toy-shaped at some point, who knows.
 Either way, if the additions are the pitch and the perf numbers are
 the evidence. The design of those additions is mine; the numbers are
-measured; Claude's job is to help make the ideas happen and catch the bugs I wrote on the way there.
+measured; Claude's job is to help make the ideas happen quickly (fail fast), write boring code and catch bugs.
 
 If you see any AI BS or suspected slop, let me know.
-
-## Claude
-
-I use [Claude
-Code](https://claude.com/claude-code) running **Claude Opus 4.7 (1M
-context)**.
 
 ## Where it works best
 
@@ -37,23 +29,18 @@ branches, missing tests, or places where the change disagrees with
 actually measuring what I think it is", "am I warming up enough",
 "does this look like coordinated omission". Claude automates this kind of non-core busy work that you would expect from a good codebase.
 
-**Learning Zig as it moves.** Zig is a moving target and 0.16 broke a
-lot of things I thought I knew (`std.Io`, `std.posix`, file I/O, the
-shape of the networking backends). Claude is genuinely useful as a
-second pair of eyes on "is this the 0.16 way to do it or am I holding
-onto a 0.14 habit", and honestly as a tutor when I'm relearning
-something from scratch. That's part of the value for me as an
-engineer, not just a code-review helper.
+**Learning Zig as it evolves (and breaks stuff).** Zig is a moving target and 0.16 broke a
+ton of things I thought I knew (`std.Io`, `std.posix`, file I/O, the
+shape of the networking backends). Claude is genuinely useful at schooling me on the new way.
 
-**Memory layout and C integration.** The hot path cares about struct
+**Memory layout and C integration.** with Zig, we care about struct
 layout, alignment, where allocations actually live, and what survives
 an arena reset. The nats.c bridge adds another layer: hand-written
-bindings, ownership rules across the FFI boundary, which calls are
-thread-safe versus which need the loop thread. I'd find this hard to get right myself. Claude is a useful
+bindings, ownership rules across the boundary, which calls are
+thread-safe versus which need the loop thread. Hands up, I'd find this very hard to get right myself. Claude is a useful
 check on "does this cast do what I think", "who owns this pointer
 after the call", "is this `extern struct` laid out the way the C
-header expects". I still read the C headers myself, but talking it
-through shortens the loop.
+header expects".
 
 **Sounding board for daft ideas.** A lot of what's in monoblok started
 as "what if the patchbay could do X", "what if `$LVC` also did Y",
@@ -65,14 +52,13 @@ out of it day to day.
 
 **First stab at docs** AI is well-placed to give the skeleton/framework of documentation, which again, might get neglected in favour of writing code. Both are important.
 
-A caveat on all of the above: these models are trained to be helpful,
-which shades into sycophancy more often than is useful. Nothing Mr.
+A caveat on all of the above: sycophancy. Nothing Mr.
 Claude says is taken as gospel. He (they?) gets sworn at frequently,
 told he's wrong, and asked to try again. If a suggestion survives
 that, it's probably worth something.
 
 The other half of not-taking-it-as-gospel is actually reading the
-docs and the prior art. The Zig stdlib source, Andrew's release
+docs and the prior art. The Zig stdlib source, release
 notes, mitchellh's libxev (and the rest of his Zig work), the
 TigerBeetle codebase, the nats.c headers, and the rest of the small
 pile of genuinely excellent Zig code floating around on GitHub all
@@ -88,5 +74,5 @@ real source wins, every time.
 - **Making up numbers.** Every throughput or latency figure in this
   repo came out of an actual run of the compiled binary on a real
   machine. If you see a number, it was measured.
-- **Security or production-readiness claims.** monoblok is an expreriment.
+- **Security or production-readiness claims.** monoblok is an experiment.
 
