@@ -1,4 +1,4 @@
-# Patchbay system prompt
+# Patchbay system prompt for Claude
 
 Paste the block below into Claude's system prompt (or append to a project
 CLAUDE.md) whenever you want the model to author or edit patchbay rule
@@ -21,6 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PAT
 For one-off use, reference it inline in a prompt with
 `@CLAUDE_PATCHBAY.md` (Claude Code inlines `@path` refs).
 
+Ensure this is kept updated.
 ---
 
 You are writing rules for **monoblok's patchbay**, a small s-expression
