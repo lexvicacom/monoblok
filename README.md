@@ -321,7 +321,7 @@ Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--
 
 `scripts/bench.sh` drives the numbers: it starts monoblok on `$NATS_URL` (default `127.0.0.1:4222`), runs the six `nats bench` workloads in the table below against it, stops it, then (if `nats-server` is on `PATH`) starts it on the same port and reruns the same workloads. Servers are benched sequentially, never concurrently. Pub workloads use `nats bench pub`, fan-out workloads spawn a `nats bench sub` with N clients and then a single publisher on the same subject. The script scrapes the `publisher stats` / `subscriber stats` line from each run and prints the msgs/sec table at the end.
 
-**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Linux (Hetzner CPX22 VM(** (2-core AMD EPYC KVM, 4 GB, Ubuntu 24.04, io_uring):
+**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Linux (Hetzner CPX22 VM)** (2-core AMD EPYC KVM, 4 GB, Ubuntu 24.04, io_uring):
 
 | workload            |    M4 monoblok |     M4 nats |   M4 Δ | Linux monoblok | Linux nats | Linux Δ |
 |---------------------|---------------:|------------:|-------:|---------------:|-----------:|--------:|
@@ -332,11 +332,11 @@ Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--
 | 1 pub → 10 subs     |      12.60M/s  |    4.95M/s  |  +155% |       3.31M/s  |   2.59M/s  |    +28% |
 | 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       3.98M/s  |   3.05M/s  |    +30% |
 
-Fan-out is where monoblok pulls ahead on both platforms. The single-subscriber workload is the one regression that flips sign between platforms (likely io_uring completion batching behaving differently under low concurrency). Multi-publisher wins on the M4 collapse to parity on the 2-vCPU box, since a single-threaded loop can't scale past one core while nats-server spreads across both. Not an apples (Apples?) for apples comparison due as an M4 perf core vs a lowly VPS is unfair.  `--release=fast` adds roughly 10–15% on top if you want to poke the ceiling. Take this all with a huge pinch of salt, the numbers could well be off. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with an eBay turbo :)**
+Fan-out is where monoblok pulls ahead on both platforms. The single-subscriber workload is the one regression that flips the sign between platforms (likely a bug under low concurrency). The multi-publisher wins on the M4 collapse to parity with NATS on the 2-vCPU box, since a single-threaded loop can't scale past one core while nats-server spreads across both. Not an apples (Apples?) for apples comparison as an M4 perf core vs a lowly VPS is unfair to compare.  `--release=fast` adds roughly 10–15% on top if you want to poke the ceiling. Take this all with a huge pinch of salt, the numbers could well be off. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo :)**
 
 ## Building from source
 
-Zig 0.16.0 exactly. OpenSSL is required when the bridge is enabled (the default); skip it if you build with `-Dbridge=false`.
+Zig 0.16.0. OpenSSL at runtime is required when the bridge is enabled (the default); skip it if you build with `-Dbridge=false`.
 
 ```
 # macOS
