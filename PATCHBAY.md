@@ -331,7 +331,7 @@ handled correctly.
 | form                          | what it does                                                                |
 |-------------------------------|-----------------------------------------------------------------------------|
 | `(json-get KEY PAYLOAD)`      | return that field's value as a number, string, or boolean. Nil otherwise.   |
-| `(json-decode KEY ... PAYLOAD)` | publish each KEY's value to `<subject>.<key>`. Side-effecting. Returns nil. |
+| `(json-demux KEY ... PAYLOAD)` | publish each KEY's value to `<subject>.<key>`. Side-effecting. Returns nil. |
 
 `json-get` returns `nil` whenever the field can't be turned into a
 scalar (key missing, payload not a JSON object, value is `null`, value
@@ -348,19 +348,22 @@ no-op, so a JSON-aware pipeline reads exactly like the analog ones:
       (publish-to (subject-append "temp.stable"))))
 ```
 
-`json-decode` is the demux: one wire carrying a multi-field frame
-fanned out to one sub-subject per field. Useful as the first rule for
-JSON-publishing devices, so the rest of the patchbay can stay scalar.
+`json-demux` is the breakout: one wire carrying a multi-field frame
+fanned out to one sub-subject per field, like a demultiplexer chip
+selecting an output line per key. Note that the publishing is
+implicit, the form has no return value to thread on. Useful as the
+first rule for JSON-publishing devices, so the rest of the patchbay
+can stay scalar.
 
 ```edn
 ; Break a multi-field frame out into per-field subjects.
 ; sensors.foo {"temp":12.5,"hum":80} -> sensors.foo.temp 12.5
 ;                                       sensors.foo.hum  80
 (on "sensors.*"
-  (json-decode "temp" "hum" payload))
+  (json-demux "temp" "hum" payload))
 ```
 
-If a key is missing, null, or holds a nested value, `json-decode` skips
+If a key is missing, null, or holds a nested value, `json-demux` skips
 it silently rather than emitting an error. Numbers come out canonically
 formatted, strings are unquoted, booleans render as `true` / `false`.
 

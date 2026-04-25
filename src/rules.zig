@@ -280,7 +280,7 @@ const Op = enum {
     squelch, deadband, changed, delta, hold_off,
     moving_avg, moving_sum, moving_max, moving_min,
     rising_edge, falling_edge,
-    json_get, json_decode,
+    json_get, json_demux,
     ohlc_bar,
 };
 
@@ -322,7 +322,7 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "rising-edge", .rising_edge },
     .{ "falling-edge", .falling_edge },
     .{ "json-get", .json_get },
-    .{ "json-decode", .json_decode },
+    .{ "json-demux", .json_demux },
     .{ "ohlc-bar", .ohlc_bar },
 });
 
@@ -385,7 +385,7 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .rising_edge => callEdge(ctx, evaled, .rising),
         .falling_edge => callEdge(ctx, evaled, .falling),
         .json_get => callJsonGet(ctx, evaled),
-        .json_decode => callJsonDecode(ctx, evaled),
+        .json_demux => callJsonDemux(ctx, evaled),
         .ohlc_bar => callOhlcBar(ctx, evaled),
     };
 }
@@ -949,13 +949,13 @@ fn callJsonGet(ctx: *Context, args: []const Value) EvalError!Value {
     };
 }
 
-/// `(json-decode KEY ... PAYLOAD)`. Side-effecting demux: for each KEY found
+/// `(json-demux KEY ... PAYLOAD)`. Side-effecting demux: for each KEY found
 /// in the top-level JSON object, publishes its value to
 /// `<current-subject>.<key>`. Skips missing keys, null values, and nested
 /// objects/arrays silently. Returns nil. Value-last so it can sit at the end
 /// of a pipeline if needed, though typically it's the whole body:
-/// `(json-decode "temp" "hum" payload)`.
-fn callJsonDecode(ctx: *Context, args: []const Value) EvalError!Value {
+/// `(json-demux "temp" "hum" payload)`.
+fn callJsonDemux(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len < 2) return error.ArityMismatch;
     const payload = try asString(args[args.len - 1]);
     for (args[0 .. args.len - 1]) |a| {
@@ -1986,14 +1986,14 @@ test "json-get extracts strings (escapes decoded) and booleans" {
     try testing.expectEqualStrings("true", tp.buf.items[1].payload);
 }
 
-test "json-decode demuxes a flat object onto sub-subjects" {
+test "json-demux fans a flat object out onto sub-subjects" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (json-decode "temp" "hum" "missing" "nested" payload))
+        \\  (json-demux "temp" "hum" "missing" "nested" payload))
     );
     defer deinitRules(rules, testing.allocator);
 
