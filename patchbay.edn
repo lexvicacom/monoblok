@@ -36,10 +36,13 @@
 ;                                         or nested object/array values.
 ;                                         Value-last so it threads:
 ;                                         (-> payload (json-get "temp") ...)
-;   (json-decode KEY ... PAYLOAD)       - demux a flat JSON frame: publish
-;                                         each KEY's value to
+;   (json-demux KEY ... PAYLOAD)        - break a flat JSON frame out: for
+;                                         each KEY, publish its value to
 ;                                         <subject>.<key>. Skips missing,
 ;                                         null, and nested fields silently.
+;                                         The publish is implicit; returns
+;                                         nil so it sits at the tail of a
+;                                         rule.
 ;   (ohlc-bar N X)                      - tick-count OHLC bar accumulator.
 ;                                         Every Nth tick, publishes
 ;                                         <subject>.bar.{open,high,low,

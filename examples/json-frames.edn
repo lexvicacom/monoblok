@@ -2,13 +2,15 @@
 ; frame like {"temp":12.5,"hum":80,"batt":3.7} on devices.<id>, and
 ; we want the rest of the patchbay to keep working in scalars.
 
-; Step 1: demux at the head. Each named field becomes its own
-; sub-subject under the device id, e.g.
+; Step 1: break the frame out at the head. json-demux is a
+; demultiplexer: one wire in, one sub-subject out per named field.
+; The publish is implicit (the form has no return value), so this
+; sits at the tail of the rule.
 ;   devices.kitchen {"temp":12.5,"hum":80} -> devices.kitchen.temp 12.5
 ;                                             devices.kitchen.hum  80
-; Missing / null / nested fields are skipped silently.
+; Missing, null, and nested fields are skipped silently.
 (on "devices.*"
-  (json-decode "temp" "hum" "batt" payload))
+  (json-demux "temp" "hum" "batt" payload))
 
 ; Step 2: from here on, treat each fanned-out subject as a normal
 ; scalar stream. Round, deadband, publish to a "stable" mirror.
