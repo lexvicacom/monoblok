@@ -20,11 +20,23 @@ case "$BRIDGE" in
     *)   echo "BRIDGE must be on or off, got '$BRIDGE'" >&2; exit 2 ;;
 esac
 
+# Pin the CPU baseline per platform. Without this Zig defaults to the host
+# CPU, and GitHub's ubuntu-22.04-arm runner is a Cobalt-100 (Neoverse-N2-class
+# with SVE2), so LLVM auto-vectorizes with SVE and the binary SIGILLs on real
+# Neoverse-N1, Graviton2, etc. that lack SVE. neoverse_n1 is ARMv8.2-A + LSE
+# + dotprod + crypto with no SVE, a safe lower bound for shipped aarch64.
+case "$PLATFORM" in
+    linux-x86_64)  target_args="-Dtarget=x86_64-linux-gnu  -Dcpu=x86_64_v2" ;;
+    linux-aarch64) target_args="-Dtarget=aarch64-linux-gnu -Dcpu=neoverse_n1" ;;
+    macos-aarch64) target_args="-Dtarget=aarch64-macos     -Dcpu=apple_m1" ;;
+    *) echo "unknown PLATFORM: $PLATFORM" >&2; exit 2 ;;
+esac
+
 name="monoblok-${VERSION}-${PLATFORM}${suffix}"
 
 # Fresh zig-out so we don't ship stale bits if a previous run failed halfway.
 rm -rf zig-out
-zig build --release=safe $zig_args
+zig build --release=safe $zig_args $target_args
 
 mkdir -p "dist/${name}"
 cp zig-out/bin/monoblok "dist/${name}/"
