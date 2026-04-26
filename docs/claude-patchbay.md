@@ -12,14 +12,14 @@ automatically when you are editing `.edn` rule files in that project:
 
 ```sh
 # project-scoped (recommended)
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ./CLAUDE.md
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ./CLAUDE.md
 
 # or user-global
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ~/.claude/CLAUDE.md
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ~/.claude/CLAUDE.md
 ```
 
 For one-off use, reference it inline in a prompt with
-`@CLAUDE_PATCHBAY.md` (Claude Code inlines `@path` refs).
+`@docs/claude-patchbay.md` (Claude Code inlines `@path` refs).
 
 Agent guidance
 ---

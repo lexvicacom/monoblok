@@ -180,4 +180,4 @@ sub '$LVC.demo.sensors.temp'   # -> prints "23.5" on subscribe
 - **No JetStream, queues, headers, request/reply.** Core NATS only
   (`PUB`, `SUB`, `UNSUB`, `PING`/`PONG`, `INFO`, `-ERR`).
 
-For the full primitive reference see [PATCHBAY.md](./PATCHBAY.md).
+For the full primitive reference see [patchbay.md](./patchbay.md).
