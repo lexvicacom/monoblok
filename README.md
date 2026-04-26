@@ -355,17 +355,17 @@ The cap is one core's worth of throughput per instance, and the interesting ques
 
 ### Deploying
 
-The right shape is a single-core VM, sized to how much headroom you want. At the cheap end the smallest thing the provider sells is fine: Hetzner CAX11 (or shared-cpu equivalent), AWS t4g.nano, an Oracle free-tier ARM box. 256 MB of RAM is plenty; the binary is small and the only large allocations are the LVC (one entry per cached subject) and per-rule state tables (squelch / deadband / moving-window slots).
+The right shape is a 2-vCPU VM. monoblok itself is single-threaded, but the kernel network stack and io_uring's worker threads also want CPU, and on a 1-vCPU box they timeshare with the broker (~1.6× slowdown, see [Benchmarks](#benchmarks)). A second vCPU lets monoblok run flat-out on core 0 while everything-else-on-the-box uses core 1. Anything beyond two cores is wasted spend, the extra cores sit idle. At the cheap end: Hetzner CAX11, AWS t4g.small, similar 2-vCPU shared plans. 256 MB of RAM is plenty; the binary is small and the only large allocations are the LVC (one entry per cached subject) and per-rule state tables (squelch / deadband / moving-window slots).
 
-If you want more ceiling without changing the deployment shape, a single dedicated ARM core on modern silicon is a sweet spot. AWS Graviton3/4 (`c7g.medium` / `c8g.medium`, 1 vCPU, dedicated), Hetzner's Ampere Altra dedicated-vCPU plans, Oracle Ampere A1 (a single OCPU is one full core, not a hyperthread) — all give you a real core that runs flat-out without noisy-neighbour jitter, which is exactly what a single-threaded event loop wants. monoblok will use all of it before it uses any of the second core you didn't buy.
+This goes for the high-end ARM too: a Graviton4 `c8g.large` (2 vCPU) gives monoblok everything it can use; `c8g.xlarge` and up just heat the room.
 
-Multi-core boxes are a waste of cash either way: the extra cores sit idle. We have builds for `linux-aarch64` and `linux-x86_64`, so you can pick whichever VM family is cheapest or fastest on your provider at that moment in time.
+For more ceiling without changing the shape, dedicated ARM cores on modern silicon are the sweet spot: Hetzner CAX11 (Ampere Altra), AWS Graviton3/4 (`c7g.large` / `c8g.large`). Both give you real cores that run flat-out without noisy-neighbour jitter, which is exactly what a single-threaded event loop wants. Oracle Ampere A1 also nominally gives you a full core per OCPU, but the free tier is host-oversubscribed in practice, so use it for kicking the tyres rather than serious throughput. We have builds for `linux-aarch64` and `linux-x86_64`, so pick whichever VM family is cheapest or fastest on your provider.
 
 The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts cleanly: the unit restarts the service on failure, the snapshot reloads LVC values and gate/window state on startup, so a process crash or a host reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically (every NATS client does this).
 
 The bridge is the reliability story. If you're forwarding upstream to a real NATS cluster, monoblok is the conditioning layer and the upstream cluster is the system of record. A £4/month VM dying loses you smoothing for the duration of the outage, not data: raw publishes that haven't been forwarded yet are gone, but anything already exported is durable upstream, and once monoblok comes back the snapshot restores the gates so they don't re-fire on stale comparisons.
 
-<!-- TODO(alex): add a one-liner here with sustained msg/sec on the cheapest Hetzner box, e.g. "monoblok sustains ~Xk msg/sec fan-out on a €4/month CX22". -->
+For shape: a Hetzner CAX11 (2 vCPU Ampere Altra, ~€4/mo) sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded. See [Benchmarks](#benchmarks).
 
 ### Why libxev
 
@@ -399,6 +399,38 @@ Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--
 | 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       2.38M/s  |   1.86M/s  |    +28% |
 
 Fan-out is where monoblok pulls ahead on both platforms (the 1-sub workload is the standing exception, likely a low-concurrency bug). Multi-publisher wins on the M4 narrow on the CAX11, since a single-threaded loop can't scale past one core while nats-server spreads across both vCPUs. The Ampere Altra column is the more honest deployment-shape number, a single ARM core on a cheap VM, which is roughly what a real monoblok install looks like, and even there a single-threaded Zig loop holds its own against the multi-threaded Go server on most workloads. `--release=fast` adds ~10–15% on top. Take this all with a pinch of salt. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo :)**
+
+### Single core, but you still want at least two
+
+monoblok itself runs on a single core, so you might think a 1-vCPU box is the right shape. It mostly isn't. The kernel's network stack, io_uring's worker threads, and the bench client (or in production, whatever's connected over loopback) all want CPU too, and on a 1-vCPU box they timeshare with monoblok. A second vCPU lets the broker run flat-out on core 0 while everything-else-on-the-box uses core 1.
+
+Same Neoverse-N1 silicon, same patchbay, same workloads, run on Hetzner CAX11 (2 vCPU, ~€4/mo) vs Oracle A1 free tier (1 OCPU):
+
+| workload                |    CAX11 (2-core) | Oracle free (1-core) | speedup |
+|-------------------------|------------------:|---------------------:|--------:|
+| 1 pub × 1M × 64B        |          2.46M/s  |             1.53M/s  |   1.6×  |
+| 2 pub × 500k × 64B      |          3.01M/s  |             1.66M/s  |   1.8×  |
+| 8 pub × 200k × 128B     |          2.21M/s  |             1.45M/s  |   1.5×  |
+| 1 pub → 1 sub           |          0.59M/s  |             0.45M/s  |   1.3×  |
+| 1 pub → 10 subs         |          2.11M/s  |             1.17M/s  |   1.8×  |
+| 1 pub → 50 subs         |          2.37M/s  |             1.33M/s  |   1.8×  |
+
+Both boxes measure the same effective clock (~2.95 GHz) and ~0% steal, so it isn't clock and it isn't oversubscription, it's just that "1 vCPU" really does mean monoblok and the kernel net stack fight over the same core. The takeaway: pick the cheapest 2-vCPU plan your provider sells, not the cheapest 1-vCPU one.
+
+### Patchbay overhead
+
+Empty patchbay vs 1 rule vs 50 rules on the CAX11 (`bash scripts/bench.sh`):
+
+| workload                |    no patchbay |       1 rule | 50 rules |
+|-------------------------|---------------:|-------------:|---------:|
+| 1 pub × 1M × 64B        |       2.46M/s  |     2.40M/s  | 2.51M/s  |
+| 2 pub × 500k × 64B      |       3.01M/s  |     2.24M/s  | 2.22M/s  |
+| 8 pub × 200k × 128B     |       2.21M/s  |     1.81M/s  | 2.07M/s  |
+| 1 pub → 1 sub           |       0.59M/s  |     0.68M/s  | 0.63M/s  |
+| 1 pub → 10 subs         |       2.11M/s  |     2.07M/s  | 2.09M/s  |
+| 1 pub → 50 subs         |       2.37M/s  |     2.43M/s  | 2.40M/s  |
+
+The cost scales with **matching rules per PUB**, not total rules in the file: 1 rule and 50 rules land in roughly the same place because the dispatch table only invokes the rules whose subject filter actually matches. The 2-publisher row is the worst case (~25% off) where every PUB matches a rule; fan-out workloads are at break-even because the bottleneck is the write side, not the rule. Real patchbays sit somewhere in between depending on what the rules actually do (a `contains?` is nothing like a `moving-avg` over a wide window).
 
 ## Building from source
 
