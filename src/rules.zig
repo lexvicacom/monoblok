@@ -183,6 +183,126 @@ pub fn deinitRules(rules: []Rule, gpa: Allocator) void {
     for (rules) |*r| r.deinit(gpa);
 }
 
+/// Returns true if `filter` contains no `*` or `>` token. Such filters can
+/// be looked up by direct string equality against an inbound subject — the
+/// foundation of `RuleSet`'s literal-subject dispatch table.
+pub fn isLiteralFilter(filter: []const u8) bool {
+    var it = std.mem.splitScalar(u8, filter, '.');
+    while (it.next()) |tok| {
+        if (tok.len == 1 and (tok[0] == '*' or tok[0] == '>')) return false;
+    }
+    return true;
+}
+
+/// `[]Rule` plus a dispatch index. Built once at load time, then queried
+/// per inbound PUB. The index lets us skip the linear scan over every
+/// rule's filter for the common case of literal-subject filters; only
+/// wildcard filters still need the per-PUB scan.
+///
+/// Indices in both maps point into `rules` by position. The arena that
+/// owns `rules` also owns the index slices.
+pub const RuleSet = struct {
+    rules: []Rule,
+    /// Filter string → indices of rules with that exact literal filter.
+    /// Multiple rules can share a filter; we keep insertion order so
+    /// behavior matches the old linear scan.
+    literal_index: std.StringHashMapUnmanaged([]const u32) = .empty,
+    /// Indices (into `rules`) of rules whose filter contains a wildcard.
+    /// Scanned linearly per PUB. Empty for fully-literal patchbays.
+    wildcard_indices: []const u32 = &.{},
+
+    pub fn empty() RuleSet {
+        return .{ .rules = &.{} };
+    }
+
+    /// Run all matching rules for `ctx.subject`. Literal-filter rules are
+    /// found via the index; wildcard rules are scanned linearly. Match
+    /// order is: literal hits first (in original patchbay order), then
+    /// wildcard hits (also in original order). For a fully-literal
+    /// patchbay this is the same order as the legacy linear scan; if you
+    /// mix the two, a wildcard rule defined before a literal one will
+    /// fire after it. Worth knowing if you depend on rule ordering.
+    pub fn run(self: *const RuleSet, ctx: *Context) !void {
+        if (self.rules.len == 0) return;
+        ctx.eval_fn = if (ctx.trace) evalTraced else evalNormal;
+        ctx.trace_emissions = .empty;
+        if (ctx.trace) {
+            std.debug.print("trace: {s} {s}\n", .{ ctx.subject, ctx.payload });
+        }
+        const t_pub_start: u64 = if (ctx.trace) monotonicNs() else 0;
+
+        if (self.literal_index.get(ctx.subject)) |idxs| {
+            for (idxs) |i| try runOne(self.rules, i, ctx);
+        }
+        for (self.wildcard_indices) |i| {
+            const rule = &self.rules[i];
+            if (!subject_mod.matches(rule.filter, ctx.subject)) continue;
+            try runOne(self.rules, i, ctx);
+        }
+
+        ctx.current_rule = null;
+        if (ctx.trace) {
+            const ns = monotonicNs() -| t_pub_start;
+            std.debug.print("total [{s}]\n", .{formatNs(ns)});
+        }
+    }
+};
+
+/// Build a `RuleSet` from an already-loaded `[]Rule`. The arena allocates
+/// the index entries; it must outlive the `RuleSet` (same lifetime as
+/// `rules` itself, in practice).
+pub fn buildRuleSet(arena: Allocator, rules: []Rule) Allocator.Error!RuleSet {
+    var rs: RuleSet = .{ .rules = rules };
+    if (rules.len == 0) return rs;
+
+    // First pass: bucket indices into per-filter lists for literals, and
+    // flat list for wildcards. Use a scratch map of ArrayLists keyed by
+    // filter string; flatten into `[]const u32` slices in the arena after.
+    var lit_buckets: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u32)) = .empty;
+    var wild: std.ArrayListUnmanaged(u32) = .empty;
+    defer {
+        var it = lit_buckets.iterator();
+        while (it.next()) |e| e.value_ptr.deinit(arena);
+        lit_buckets.deinit(arena);
+        wild.deinit(arena);
+    }
+
+    for (rules, 0..) |*r, i| {
+        const idx: u32 = @intCast(i);
+        if (isLiteralFilter(r.filter)) {
+            const gop = try lit_buckets.getOrPut(arena, r.filter);
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            try gop.value_ptr.append(arena, idx);
+        } else {
+            try wild.append(arena, idx);
+        }
+    }
+
+    var it = lit_buckets.iterator();
+    while (it.next()) |e| {
+        const slice = try arena.dupe(u32, e.value_ptr.items);
+        try rs.literal_index.put(arena, e.key_ptr.*, slice);
+    }
+    rs.wildcard_indices = try arena.dupe(u32, wild.items);
+    return rs;
+}
+
+fn runOne(rules: []Rule, i: u32, ctx: *Context) !void {
+    const rule = &rules[i];
+    ctx.current_rule = rule;
+    ctx.trace_depth = 0;
+    if (ctx.trace) {
+        std.debug.print("  rule {d} (on \"{s}\") matched\n", .{ i, rule.filter });
+        ctx.trace_depth = 1;
+        const t_start = monotonicNs();
+        _ = try ctx.eval_fn(ctx, rule.body);
+        const ns = monotonicNs() -| t_start;
+        std.debug.print("  rule {d} done [{s}]\n", .{ i, formatNs(ns) });
+    } else {
+        _ = try ctx.eval_fn(ctx, rule.body);
+    }
+}
+
 pub const EvalError = error{
     UnknownSymbol,
     TypeMismatch,
