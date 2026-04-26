@@ -355,17 +355,13 @@ The cap is one core's worth of throughput per instance, and the interesting ques
 
 ### Deploying
 
-The right shape is a 2-vCPU VM. monoblok itself is single-threaded, but the kernel network stack and io_uring's worker threads also want CPU, and on a 1-vCPU box they timeshare with the broker (~1.6× slowdown, see [Benchmarks](#benchmarks)). A second vCPU lets monoblok run flat-out on core 0 while everything-else-on-the-box uses core 1. Anything beyond two cores is wasted spend, the extra cores sit idle. At the cheap end: Hetzner CAX11, AWS t4g.small, similar 2-vCPU shared plans. 256 MB of RAM is plenty; the binary is small and the only large allocations are the LVC (one entry per cached subject) and per-rule state tables (squelch / deadband / moving-window slots).
+Pick a 2-vCPU VM with 256 MB of RAM. monoblok runs on one core, the kernel net stack and io_uring workers use the other; a 1-vCPU box makes them fight over the same core (~1.6× slowdown, see [Benchmarks](#benchmarks)). More than two cores is wasted spend (the extras sit idle). Builds ship for `linux-aarch64` and `linux-x86_64`.
 
-This goes for the high-end ARM too: a Graviton4 `c8g.large` (2 vCPU) gives monoblok everything it can use; `c8g.xlarge` and up just heat the room.
+Concretely: Hetzner CAX11 (2 vCPU Ampere Altra, ~€4/mo) is the sweet spot, AWS `t4g.small` or `c7g.large` / `c8g.large` if you want Graviton, Oracle Ampere A1 free tier for kicking the tyres (host-oversubscribed in practice, so don't lean on it for throughput). The CAX11 sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded.
 
-For more ceiling without changing the shape, dedicated ARM cores on modern silicon are the sweet spot: Hetzner CAX11 (Ampere Altra), AWS Graviton3/4 (`c7g.large` / `c8g.large`). Both give you real cores that run flat-out without noisy-neighbour jitter, which is exactly what a single-threaded event loop wants. Oracle Ampere A1 also nominally gives you a full core per OCPU, but the free tier is host-oversubscribed in practice, so use it for kicking the tyres rather than serious throughput. We have builds for `linux-aarch64` and `linux-x86_64`, so pick whichever VM family is cheapest or fastest on your provider.
+The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts: the unit restarts on failure, the snapshot reloads LVC values and gate/window state on startup, so a crash or reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically.
 
-The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts cleanly: the unit restarts the service on failure, the snapshot reloads LVC values and gate/window state on startup, so a process crash or a host reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically (every NATS client does this).
-
-The bridge is the reliability story. If you're forwarding upstream to a real NATS cluster, monoblok is the conditioning layer and the upstream cluster is the system of record. A £4/month VM dying loses you smoothing for the duration of the outage, not data: raw publishes that haven't been forwarded yet are gone, but anything already exported is durable upstream, and once monoblok comes back the snapshot restores the gates so they don't re-fire on stale comparisons.
-
-For shape: a Hetzner CAX11 (2 vCPU Ampere Altra, ~€4/mo) sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded. See [Benchmarks](#benchmarks).
+If you're bridging to an upstream NATS cluster, that cluster is the system of record. A cheap VM dying loses you smoothing for the duration of the outage, not data: anything already exported is durable upstream, and the snapshot restores the gates on restart so they don't re-fire on stale comparisons.
 
 ### Why libxev
 
