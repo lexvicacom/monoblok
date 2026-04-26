@@ -349,9 +349,23 @@ One `xev.Loop` owns accept, per-connection read/write completions, router state,
 
 Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still gets to use your other cores for actual I/O, but once a byte arrives it's single file through monoblok on a single thread.
 
-That's a deliberate choice, not a WTF. It's what lets the whole thing skip locks entirely. Adding a second thread breaks our top tenet of simplicity and squanders potential performance tricks added.
+monoblok is designed for one core because that's the right shape for the workload. Signal conditioning is cheap per message, the patchbay state lives in a single address space with no synchronization, and an event loop without locks is straightforwardly fast and straightforwardly debuggable. Adding a second thread would mean reaching for atomics or mutexes on every shared structure (router table, LVC, per-rule state), and the resulting code would be slower in the common case and harder to reason about in every case.
 
-The cost is a one-core cap. A heavy rule on a hot subject, or a giant fan-out, will stall every other connection while it runs. monoblok is aimed at signal-conditioning patchbays sitting in front of modest pub/sub traffic, which fits comfortably inside one core. If you outgrow that, the solution feels like it may be to shard the subject space, but I haven't given it much thought yet. Any way forward adds complexity. Is it lazy to see just how far one core can take us?
+The cap is one core's worth of throughput per instance, and the interesting question is how far that actually gets you. The benchmark table further down shows millions of msgs/sec on a single core for the workloads monoblok is built for; a signal-conditioning patchbay sitting in front of sensor or telemetry traffic is nowhere near that ceiling. Size the patchbay to the box and you have a lot of headroom on hardware that costs a few quid a month.
+
+### Deploying
+
+The right shape is a single-core VM, sized to how much headroom you want. At the cheap end the smallest thing the provider sells is fine: Hetzner CX22 (or shared-cpu equivalent), AWS t4g.nano, an Oracle free-tier ARM box. 256 MB of RAM is plenty; the binary is small and the only large allocations are the LVC (one entry per cached subject) and per-rule state tables (squelch / deadband / moving-window slots).
+
+If you want more ceiling without changing the deployment shape, a single dedicated ARM core on modern silicon is a sweet spot. AWS Graviton3/4 (`c7g.medium` / `c8g.medium`, 1 vCPU, dedicated), Hetzner's Ampere Altra dedicated-vCPU plans, Oracle Ampere A1 (a single OCPU is one full core, not a hyperthread) — all give you a real core that runs flat-out without noisy-neighbour jitter, which is exactly what a single-threaded event loop wants. monoblok will use all of it before it uses any of the second core you didn't buy.
+
+Multi-core boxes are wasted spend either way: the extra cores sit idle. We have builds for `linux-aarch64` and `linux-x86_64`, so you can pick whichever VM family is cheapest or fastest on your provider without thinking about the binary.
+
+The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts cleanly: the unit restarts the service on failure, the snapshot reloads LVC values and gate/window state on startup, so a process crash or a host reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically (every NATS client does this).
+
+The bridge is the reliability story. If you're forwarding upstream to a real NATS cluster, monoblok is the conditioning layer and the upstream cluster is the system of record. A £4/month VM dying loses you smoothing for the duration of the outage, not data: raw publishes that haven't been forwarded yet are gone, but anything already exported is durable upstream, and once monoblok comes back the snapshot restores the gates so they don't re-fire on stale comparisons.
+
+<!-- TODO(alex): add a one-liner here with sustained msg/sec on the cheapest Hetzner box, e.g. "monoblok sustains ~Xk msg/sec fan-out on a €4/month CX22". -->
 
 ### Why libxev
 

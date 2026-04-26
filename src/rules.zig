@@ -663,7 +663,14 @@ fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
 
     const tag = op_map.get(op) orelse return error.UnknownSymbol;
 
-    const evaled = try ctx.arena.alloc(Value, args.len);
+    // Most calls have <= 8 args (publish, gates, arithmetic). Stack-back the
+    // evaluated-args slice for that range and only fall through to the arena
+    // for the rare wide form (json-demux, str-concat, do, etc.).
+    var stack_buf: [8]Value = undefined;
+    const evaled = if (args.len <= stack_buf.len)
+        stack_buf[0..args.len]
+    else
+        try ctx.arena.alloc(Value, args.len);
     for (args, 0..) |a, i| evaled[i] = try ctx.eval_fn(ctx, a);
 
     return switch (tag) {
@@ -1419,14 +1426,11 @@ const StateSlot = struct {
 };
 
 fn getOrPutStateSlot(gpa: Allocator, rule: *Rule, key: []const u8) EvalError!StateSlot {
-    if (rule.state.getEntry(key)) |entry| {
-        return .{ .value_ptr = entry.value_ptr, .found_existing = true };
+    const gop = try rule.state.getOrPutAdapted(gpa, key, std.hash_map.StringContext{});
+    if (gop.found_existing) {
+        return .{ .value_ptr = gop.value_ptr, .found_existing = true };
     }
     const owned_key = try gpa.dupe(u8, key);
-    errdefer gpa.free(owned_key);
-    const gop = try rule.state.getOrPut(gpa, owned_key);
-    // getEntry missed, so getOrPut can only be !found_existing here.
-    std.debug.assert(!gop.found_existing);
     gop.key_ptr.* = owned_key;
     gop.value_ptr.* = .empty;
     return .{ .value_ptr = gop.value_ptr, .found_existing = false };
