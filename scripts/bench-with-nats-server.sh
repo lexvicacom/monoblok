@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
-# Bench monoblok at three patchbay sizes against the same workload:
-# no patchbay, one rule, fifty rules. Used to characterize the per-PUB
-# cost of rule loading and dispatch.
-#
-# For a head-to-head comparison against upstream nats-server, see
-# scripts/bench-with-nats-server.sh.
+# Bench monoblok and nats-server on the current host. Same workload is
+# driven against both, one at a time — not concurrently.
 #
 # Honours NATS_URL (same env var the nats CLI reads) for the address;
-# defaults to nats://127.0.0.1:4222.
+# defaults to nats://127.0.0.1:4222. Both servers bind to the same port
+# but are started in sequence.
 #
 # Requirements:
-#   - nats CLI (https://github.com/nats-io/natscli/releases)
+#   - nats CLI     (https://github.com/nats-io/natscli/releases)
+#   - nats-server  (optional; comparison section skipped if absent)
 #
-# Usage: ./scripts/bench.sh
+# Usage: ./scripts/bench-with-nats-server.sh
 #
 # NOTE: If numbers seem low, ensure you're running a release build:
 #   zig build --release=safe   (recommended, what release artifacts ship)
@@ -35,6 +33,10 @@ export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 PORT="${NATS_URL##*:}"
 
 command -v nats >/dev/null 2>&1 || { echo "missing: nats CLI (install from https://github.com/nats-io/natscli/releases)"; exit 1; }
+HAS_NATS_SERVER=false
+if command -v nats-server >/dev/null 2>&1; then
+    HAS_NATS_SERVER=true
+fi
 
 if [ ! -x "$MB_BIN" ]; then
     echo "building..."
@@ -43,6 +45,7 @@ fi
 
 cleanup() {
     [ -n "${MB_PID:-}" ] && kill "$MB_PID" 2>/dev/null && wait "$MB_PID" 2>/dev/null || true
+    [ -n "${NS_PID:-}" ] && kill "$NS_PID" 2>/dev/null && wait "$NS_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -117,6 +120,7 @@ fi
 echo
 echo "$("$MB_BIN" --version)"
 echo "nats cli $(nats --version 2>&1 | head -1)"
+$HAS_NATS_SERVER && echo "$(nats-server --version 2>&1 | head -1)"
 echo
 
 # --- monoblok -----------------------------------------------------------------
@@ -126,65 +130,35 @@ sleep 0.3
 kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
 
 echo "Running monoblok benchmarks..."
-MB_1=$(run_pub 1 1000000 64)
-MB_2=$(run_pub 2 500000 64)
-MB_3=$(run_pub 8 200000 128)
-MB_4=$(run_fanout 1 500000)
-MB_5=$(run_fanout 10 200000)
-MB_6=$(run_fanout 50 50000)
+MB_1=$(run_pub 1 500000 64)
+MB_2=$(run_pub 2 10000 64)
+MB_3=$(run_pub 8 50000 128)
+MB_4=$(run_fanout 1 200000)
+MB_5=$(run_fanout 10 50000)
+MB_6=$(run_fanout 50 20000)
 kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
 MB_PID=""
 sleep 0.2
 
-# --- monoblok + runtime patchbay (one rule) -----------------------------------
-# One rule, gate false on bench payloads. Measures the per-PUB cost of running
-# a single matching rule's body without extra fan-out work.
-PATCHBAY_EDN="$ROOT/examples/bench-onerule.edn"
-MB_P_1="" MB_P_2="" MB_P_3="" MB_P_4="" MB_P_5="" MB_P_6=""
-if [ -f "$PATCHBAY_EDN" ]; then
-    "$MB_BIN" --port $PORT --patchbay "$PATCHBAY_EDN" > /tmp/mb-patchbay.log 2>&1 &
-    MB_PID=$!
-    sleep 0.3
-    if kill -0 $MB_PID 2>/dev/null; then
-        echo "Running monoblok+patchbay (1 rule) benchmarks..."
-        MB_P_1=$(run_pub 1 1000000 64)
-        MB_P_2=$(run_pub 2 500000 64)
-        MB_P_3=$(run_pub 8 200000 128)
-        MB_P_4=$(run_fanout 1 500000)
-        MB_P_5=$(run_fanout 10 200000)
-        MB_P_6=$(run_fanout 50 50000)
-        kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
-        MB_PID=""
-        sleep 0.2
+# --- nats-server (optional) ---------------------------------------------------
+NS_1="" NS_2="" NS_3="" NS_4="" NS_5="" NS_6=""
+if $HAS_NATS_SERVER; then
+    nats-server --port $PORT > /tmp/ns.log 2>&1 &
+    NS_PID=$!
+    sleep 0.4
+    if kill -0 $NS_PID 2>/dev/null; then
+        echo "Running nats-server benchmarks..."
+        NS_1=$(run_pub 1 500000 64)
+        NS_2=$(run_pub 2 10000 64)
+        NS_3=$(run_pub 8 50000 128)
+        NS_4=$(run_fanout 1 200000)
+        NS_5=$(run_fanout 10 50000)
+        NS_6=$(run_fanout 50 20000)
+        kill $NS_PID 2>/dev/null; wait $NS_PID 2>/dev/null || true
+        NS_PID=""
     else
-        echo "monoblok+patchbay (1 rule) failed to start:"
-        cat /tmp/mb-patchbay.log
-    fi
-fi
-
-# --- monoblok + runtime patchbay (50 rules) -----------------------------------
-# 50 rules, only the last filter matches "solo". Measures the per-PUB cost
-# of the linear filter scan + one matching body.
-PATCHBAY_50_EDN="$ROOT/examples/bench-50rules.edn"
-MB_50_1="" MB_50_2="" MB_50_3="" MB_50_4="" MB_50_5="" MB_50_6=""
-if [ -f "$PATCHBAY_50_EDN" ]; then
-    "$MB_BIN" --port $PORT --patchbay "$PATCHBAY_50_EDN" > /tmp/mb-patchbay50.log 2>&1 &
-    MB_PID=$!
-    sleep 0.3
-    if kill -0 $MB_PID 2>/dev/null; then
-        echo "Running monoblok+patchbay (50 rules) benchmarks..."
-        MB_50_1=$(run_pub 1 1000000 64)
-        MB_50_2=$(run_pub 2 500000 64)
-        MB_50_3=$(run_pub 8 200000 128)
-        MB_50_4=$(run_fanout 1 500000)
-        MB_50_5=$(run_fanout 10 200000)
-        MB_50_6=$(run_fanout 50 50000)
-        kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
-        MB_PID=""
-        sleep 0.2
-    else
-        echo "monoblok+patchbay (50 rules) failed to start:"
-        cat /tmp/mb-patchbay50.log
+        echo "nats-server failed to start:"
+        cat /tmp/ns.log
     fi
 fi
 
@@ -193,24 +167,41 @@ echo
 echo "=== Results (msgs/sec) ==="
 echo
 
-# Δ vs no-patchbay baseline. Negative means slower than baseline.
 print_row() {
-    local label="$1" base="$2" one="$3" fifty="$4"
-    local b=$(parse_num "$base") o=$(parse_num "$one") f=$(parse_num "$fifty")
-    local d1=$(calc_delta "$o" "$b")
-    local d50=$(calc_delta "$f" "$b")
-    printf "%-22s %12s %12s %8s %12s %8s\n" \
-        "$label" "$(fmt_num $b)" "$(fmt_num $o)" "$d1" "$(fmt_num $f)" "$d50"
+    local label="$1" mb="$2" ns="$3"
+    local mb_n=$(parse_num "$mb")
+    if [ -n "$ns" ]; then
+        local ns_n=$(parse_num "$ns")
+        local delta=$(calc_delta "$mb_n" "$ns_n")
+        printf "%-22s %14s %14s %8s\n" "$label" "$(fmt_num $mb_n)" "$(fmt_num $ns_n)" "$delta"
+    else
+        printf "%-22s %14s\n" "$label" "$(fmt_num $mb_n)"
+    fi
 }
 
-printf "%-22s %12s %12s %8s %12s %8s\n" "Workload" "no patchbay" "1 rule" "Δ" "50 rules" "Δ"
-printf "%-22s %12s %12s %8s %12s %8s\n" "--------" "-----------" "------" "---" "--------" "---"
-print_row "1 pub × 1M × 64B"    "$MB_1" "$MB_P_1" "$MB_50_1"
-print_row "2 pub × 500k × 64B"  "$MB_2" "$MB_P_2" "$MB_50_2"
-print_row "8 pub × 200k × 128B" "$MB_3" "$MB_P_3" "$MB_50_3"
-print_row "1 pub → 1 sub"       "$MB_4" "$MB_P_4" "$MB_50_4"
-print_row "1 pub → 10 subs"     "$MB_5" "$MB_P_5" "$MB_50_5"
-print_row "1 pub → 50 subs"     "$MB_6" "$MB_P_6" "$MB_50_6"
+if [ -n "$NS_1" ]; then
+    # With comparison
+    printf "%-22s %14s %14s %8s\n" "Workload" "monoblok" "nats-server" "Δ"
+    printf "%-22s %14s %14s %8s\n" "--------" "--------" "-----------" "---"
+    print_row "1 pub × 500k × 64B"  "$MB_1" "$NS_1"
+    print_row "2 pub × 10k × 64B"   "$MB_2" "$NS_2"
+    print_row "8 pub × 50k × 128B"  "$MB_3" "$NS_3"
+    print_row "1 pub → 1 sub"       "$MB_4" "$NS_4"
+    print_row "1 pub → 10 subs"     "$MB_5" "$NS_5"
+    print_row "1 pub → 50 subs"     "$MB_6" "$NS_6"
+else
+    # monoblok only
+    printf "%-22s %14s\n" "Workload" "monoblok"
+    printf "%-22s %14s\n" "--------" "--------"
+    print_row "1 pub × 500k × 64B"  "$MB_1" ""
+    print_row "2 pub × 10k × 64B"   "$MB_2" ""
+    print_row "8 pub × 50k × 128B"  "$MB_3" ""
+    print_row "1 pub → 1 sub"       "$MB_4" ""
+    print_row "1 pub → 10 subs"     "$MB_5" ""
+    print_row "1 pub → 50 subs"     "$MB_6" ""
+    echo
+    echo "(nats-server not installed — skipping comparison)"
+fi
 
 echo
 echo "NOTE: If numbers seem low, ensure a release build (zig build --release=safe)"

@@ -1,0 +1,4 @@
+; Used by scripts/bench.sh to measure runtime patchbay overhead.
+; The gate is intentionally false on bench's arbitrary payloads, so this
+; measures rule-evaluation cost per inbound PUB without extra fan-out work.
+(on "solo" (when (= payload "x") (publish-to "sink" payload)))
