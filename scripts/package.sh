@@ -25,10 +25,16 @@ esac
 # with SVE2), so LLVM auto-vectorizes with SVE and the binary SIGILLs on real
 # Neoverse-N1, Graviton2, etc. that lack SVE. neoverse_n1 is ARMv8.2-A + LSE
 # + dotprod + crypto with no SVE, a safe lower bound for shipped aarch64.
+#
+# Note: -Dcpu only, no -Dtarget. Setting an explicit target triple flips Zig
+# into cross-compile mode and disables system library path search, which
+# breaks the OpenSSL link the bridge needs. PLATFORM here is just a sanity
+# check + tarball-naming concern; the actual target triple comes from the
+# host (each CI runner already runs the matching arch natively).
 case "$PLATFORM" in
-    linux-x86_64)  target_args="-Dtarget=x86_64-linux-gnu  -Dcpu=x86_64_v2" ;;
-    linux-aarch64) target_args="-Dtarget=aarch64-linux-gnu -Dcpu=neoverse_n1" ;;
-    macos-aarch64) target_args="-Dtarget=aarch64-macos     -Dcpu=apple_m1" ;;
+    linux-x86_64)  target_args="-Dcpu=x86_64_v2" ;;
+    linux-aarch64) target_args="-Dcpu=neoverse_n1" ;;
+    macos-aarch64) target_args="-Dcpu=apple_m1" ;;
     *) echo "unknown PLATFORM: $PLATFORM" >&2; exit 2 ;;
 esac
 
