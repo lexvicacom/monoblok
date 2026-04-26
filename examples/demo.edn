@@ -2,7 +2,7 @@
 ;;
 ;; Everything is scoped under `demo.>` so visitors can't stomp on server
 ;; internals or each other's namespaces. Each rule below is an example
-;; of one patchbay primitive; see DEMO.md for the companion walkthrough.
+;; of one patchbay primitive; see docs/demo.md for the companion walkthrough.
 
 ;; 1. Squelch: round to 1dp, only emit when the rounded value changes.
 ;;    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.stable`.

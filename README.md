@@ -10,7 +10,7 @@ monoblok is a single small binary. Local clients publish to short subjects; patc
 
 ## Try it out with no install
 
-A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [DEMO.md](./DEMO.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats (tiny server, shared, no rate limiting, don't send secrets).
+A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats (tiny server, shared, no rate limiting, don't send secrets).
 
 ## Install on your hardware
 
@@ -152,7 +152,7 @@ nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/sub
 
 ### Patchbay in depth
 
-The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [PATCHBAY.md](./PATCHBAY.md).
+The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [docs/patchbay.md](./docs/patchbay.md).
 
 ### Example patchbays
 
@@ -160,17 +160,17 @@ The [`examples/`](./examples/) directory holds runnable patchbay files for commo
 
 ### Patchbay with Claude Code
 
-When getting started writing rules, Claude can help you out. [CLAUDE_PATCHBAY.md](./CLAUDE_PATCHBAY.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
+When getting started writing rules, Claude can help you out. [docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
 
 ```sh
 # project-scoped (recommended)
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ./CLAUDE.md
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ./CLAUDE.md
 
 # or user-global
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/CLAUDE_PATCHBAY.md >> ~/.claude/CLAUDE.md
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ~/.claude/CLAUDE.md
 ```
 
-For one-off use, reference it inline in a prompt with `@CLAUDE_PATCHBAY.md` (Claude Code inlines `@path` refs).
+For one-off use, reference it inline in a prompt with `@docs/claude-patchbay.md` (Claude Code inlines `@path` refs).
 
 Once it's loaded, describe the stream you have and the stream you want. For example:
 
