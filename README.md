@@ -409,6 +409,9 @@ Release binaries are built natively on each target architecture, not cross-compi
 
 Each release ships **two variants per platform**: with the NATS bridge (requires OpenSSL on the target box) and without (`-nobridge` suffix, no runtime deps). Grab the bridge variant if you want to forward traffic to a real NATS cluster; grab the `-nobridge` variant if you just want a standalone pub/sub broker with no external deps.
 
+## AI
+Yes, Claude helps. [Some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md)
+
 ## License
 
 MIT. See `LICENSE`.
