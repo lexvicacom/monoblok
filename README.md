@@ -355,11 +355,11 @@ The cap is one core's worth of throughput per instance, and the interesting ques
 
 ### Deploying
 
-The right shape is a single-core VM, sized to how much headroom you want. At the cheap end the smallest thing the provider sells is fine: Hetzner CX22 (or shared-cpu equivalent), AWS t4g.nano, an Oracle free-tier ARM box. 256 MB of RAM is plenty; the binary is small and the only large allocations are the LVC (one entry per cached subject) and per-rule state tables (squelch / deadband / moving-window slots).
+The right shape is a single-core VM, sized to how much headroom you want. At the cheap end the smallest thing the provider sells is fine: Hetzner CAX11 (or shared-cpu equivalent), AWS t4g.nano, an Oracle free-tier ARM box. 256 MB of RAM is plenty; the binary is small and the only large allocations are the LVC (one entry per cached subject) and per-rule state tables (squelch / deadband / moving-window slots).
 
 If you want more ceiling without changing the deployment shape, a single dedicated ARM core on modern silicon is a sweet spot. AWS Graviton3/4 (`c7g.medium` / `c8g.medium`, 1 vCPU, dedicated), Hetzner's Ampere Altra dedicated-vCPU plans, Oracle Ampere A1 (a single OCPU is one full core, not a hyperthread) — all give you a real core that runs flat-out without noisy-neighbour jitter, which is exactly what a single-threaded event loop wants. monoblok will use all of it before it uses any of the second core you didn't buy.
 
-Multi-core boxes are wasted spend either way: the extra cores sit idle. We have builds for `linux-aarch64` and `linux-x86_64`, so you can pick whichever VM family is cheapest or fastest on your provider without thinking about the binary.
+Multi-core boxes are a waste of cash either way: the extra cores sit idle. We have builds for `linux-aarch64` and `linux-x86_64`, so you can pick whichever VM family is cheapest or fastest on your provider at that moment in time.
 
 The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts cleanly: the unit restarts the service on failure, the snapshot reloads LVC values and gate/window state on startup, so a process crash or a host reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically (every NATS client does this).
 
