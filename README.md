@@ -4,9 +4,15 @@
 
 # monoblok
 
-An experimental, partially NATS-compatible pub/sub server written in Zig, with last-value streams and a routing and signal conditioning DSL called **patchbay**. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
+Every team I've worked on has written the same subscriber: read a messy stream, clean it up, republish it. Data can move quickly but the speed doesn't always carry value, most of it is noise.
 
-monoblok is a single small binary. Local clients publish to short subjects; patchbay rules condition the signal (round, deadband, squelch, moving-avg) and re-emit on derived subjects, so subscribers don't each re-implement the same rounding, deduping, and smoothing. JSON-emitting devices are first-class too: a frame like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and then conditioned the same way. It uses the NATS wire protocol, so any `nats` client works, and it's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-for) so the cleaned-up streams roll into your existing cluster.
+monoblok is a broker that does that work once, before a message reaches subscribers. It sits between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber.
+
+The pattern: publishers PUB to monoblok instead of directly to NATS, using the exact same NATS client. No code changes. monoblok does the conditioning, then forwards to your real cluster. Subscribers get a stream that's already correct.
+
+Useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where the data moves fast but most of the movement isn't worth a downstream message.
+
+Under the hood it's a single small binary written in Zig, speaking the NATS wire protocol so any `nats` client works unchanged. The conditioning lives in a routing DSL called **patchbay** (round, deadband, squelch, moving-avg, rising/falling edges, OHLC bars), with last-value streams on `$LVC.*` for late subscribers. JSON frames like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and conditioned the same way. It's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-for) so the cleaned-up streams roll into your existing cluster. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
 ## Try it out with no install
 
