@@ -13,7 +13,7 @@ Either way, if the additions are the pitch and the perf numbers are
 the evidence. The design of those additions is mine; the numbers are
 measured; Claude's job is to help make the ideas happen quickly (fail fast), write boring code and catch bugs.
 
-If you see any AI BS or suspected slop, let me know. 
+If you see any AI BS or suspected overly-verbose slop, let me know. 
 
 
 ## Where it works best
@@ -51,7 +51,7 @@ survive get prototyped by me. Treating Claude as a
 rubber duck that pushes back is probably where I get the most value
 out of it day to day.
 
-**First stab at docs** AI is well-placed to give the skeleton/framework of documentation, which again, might get neglected in favour of writing code. Both are important.
+**First stab at docs** AI is well-placed to give the skeleton/framework of documentation, which again, might get neglected in favour of writing code. Both are important. AI can get dry, verbose and repetitive so this is something I aim to avoid.
 
 A caveat on all of the above: sycophancy. Nothing Mr.
 Claude says is taken as gospel. He (they?) gets sworn at frequently,
