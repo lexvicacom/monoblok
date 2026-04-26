@@ -53,7 +53,7 @@ pub const Server = struct {
     gpa: Allocator,
     loop: *xev.Loop,
     router: *router_mod.Router,
-    rules: []rules_mod.Rule,
+    rules: rules_mod.RuleSet,
     listener: xev.TCP,
     accept_completion: xev.Completion = undefined,
     next_conn_id: u64 = 1,
@@ -211,7 +211,7 @@ pub const Server = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
-        const snap = try snapshot_mod.collect(arena, self.router, self.rules);
+        const snap = try snapshot_mod.collect(arena, self.router, self.rules.rules);
         try snapshot_mod.writeFileAtomic(self.gpa, io, path, snap);
         std.log.info(
             "shutdown: wrote {d} lvc / {d} rule-state entries",
@@ -246,7 +246,7 @@ pub const Server = struct {
         // Reusing subj_buf across both bufPrints is safe because
         // publishStat -> router.publish copies the subject before returning.
         var subj_buf: [64]u8 = undefined;
-        for (self.rules, 0..) |*rule, i| {
+        for (self.rules.rules, 0..) |*rule, i| {
             const emit_subj = try std.fmt.bufPrint(&subj_buf, "$STATS.rules.{d}.emitted", .{i});
             try self.publishStat(emit_subj, rule.publishes_emitted);
 
@@ -312,7 +312,7 @@ pub const Server = struct {
         errdefer arena_ptr.deinit();
         const arena = arena_ptr.allocator();
 
-        const snap = try snapshot_mod.collect(arena, self.router, self.rules);
+        const snap = try snapshot_mod.collect(arena, self.router, self.rules.rules);
         const path_copy = try arena.dupe(u8, path);
 
         const Job = struct {
@@ -602,7 +602,7 @@ const Conn = struct {
                     .now_ms = self.server.loop.now(),
                     .trace = self.server.trace_enabled,
                 };
-                rules_mod.run(self.server.rules, &ctx) catch |err| {
+                self.server.rules.run(&ctx) catch |err| {
                     std.log.warn("rule error: {s}", .{@errorName(err)});
                 };
 

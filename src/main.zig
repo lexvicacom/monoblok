@@ -83,6 +83,7 @@ pub fn main(init: std.process.Init) !void {
         break :blk &.{};
     };
     defer rules.deinitRules(loaded_rules, gpa);
+    const ruleset = try rules.buildRuleSet(arena, loaded_rules);
     std.log.info("loaded {d} patchbay form(s)", .{loaded_rules.len});
     std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
     std.log.info("lvc: {s}", .{if (lvc_enabled) "enabled" else "disabled"});
@@ -157,7 +158,7 @@ pub fn main(init: std.process.Init) !void {
         .gpa = gpa,
         .loop = &loop,
         .router = &r,
-        .rules = loaded_rules,
+        .rules = ruleset,
         .listener = undefined,
         .server_id = server_id,
         .listen_host = "0.0.0.0",
