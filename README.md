@@ -387,18 +387,18 @@ Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--
 
 `scripts/bench.sh` drives the numbers: it starts monoblok on `$NATS_URL` (default `127.0.0.1:4222`), runs the six `nats bench` workloads in the table below against it, stops it, then (if `nats-server` is on `PATH`) starts it on the same port and reruns the same workloads. Servers are benched sequentially, never concurrently. Pub workloads use `nats bench pub`, fan-out workloads spawn a `nats bench sub` with N clients and then a single publisher on the same subject. The script scrapes the `publisher stats` / `subscriber stats` line from each run and prints the msgs/sec table at the end.
 
-**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Linux (Hetzner CPX22 VM)** (2-core AMD EPYC KVM, 4 GB, Ubuntu 24.04, io_uring):
+**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Hetzner CAX11** (2-vCPU Ampere Altra Neoverse-N1, 4 GB, Ubuntu 24.04, io_uring):
 
-| workload            |    M4 monoblok |     M4 nats |   M4 Δ | Linux monoblok | Linux nats | Linux Δ |
+| workload            |    M4 monoblok |     M4 nats |   M4 Δ | CAX11 monoblok | CAX11 nats | CAX11 Δ |
 |---------------------|---------------:|------------:|-------:|---------------:|-----------:|--------:|
-| 1 pub × 500k × 64B  |       6.46M/s  |    7.14M/s  |    −9% |       3.66M/s  |   3.39M/s  |     +8% |
-| 2 pub × 10k × 64B   |       7.35M/s  |    5.97M/s  |   +23% |       3.08M/s  |   3.09M/s  |     −0% |
-| 8 pub × 50k × 128B  |      11.83M/s  |    8.17M/s  |   +45% |       2.83M/s  |   2.90M/s  |     −2% |
-| 1 pub → 1 sub       |       4.27M/s  |    3.93M/s  |    +9% |       0.73M/s  |   1.09M/s  |    −33% |
-| 1 pub → 10 subs     |      12.60M/s  |    4.95M/s  |  +155% |       3.31M/s  |   2.59M/s  |    +28% |
-| 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       3.98M/s  |   3.05M/s  |    +30% |
+| 1 pub × 500k × 64B  |       6.46M/s  |    7.14M/s  |    −9% |       2.35M/s  |   2.07M/s  |    +14% |
+| 2 pub × 10k × 64B   |       7.35M/s  |    5.97M/s  |   +23% |       1.50M/s  |   2.45M/s  |    −39% |
+| 8 pub × 50k × 128B  |      11.83M/s  |    8.17M/s  |   +45% |       1.96M/s  |   2.05M/s  |     −5% |
+| 1 pub → 1 sub       |       4.27M/s  |    3.93M/s  |    +9% |       0.62M/s  |   0.94M/s  |    −34% |
+| 1 pub → 10 subs     |      12.60M/s  |    4.95M/s  |  +155% |       2.11M/s  |   1.83M/s  |    +15% |
+| 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       2.38M/s  |   1.86M/s  |    +28% |
 
-Fan-out is where monoblok pulls ahead on both platforms. The single-subscriber workload is the one regression that flips the sign between platforms (likely a bug under low concurrency). The multi-publisher wins on the M4 collapse to parity with NATS on the 2-vCPU box, since a single-threaded loop can't scale past one core while nats-server spreads across both. Not an apples (Apples?) for apples comparison as an M4 perf core vs a lowly VPS is unfair to compare.  `--release=fast` adds roughly 10–15% on top if you want to poke the ceiling. Take this all with a huge pinch of salt, the numbers could well be off. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo :)**
+Fan-out is where monoblok pulls ahead on both platforms (the 1-sub workload is the standing exception, likely a low-concurrency bug). Multi-publisher wins on the M4 narrow on the CAX11, since a single-threaded loop can't scale past one core while nats-server spreads across both vCPUs. The Ampere Altra column is the more honest deployment-shape number, a single ARM core on a cheap VM, which is roughly what a real monoblok install looks like, and even there a single-threaded Zig loop holds its own against the multi-threaded Go server on most workloads. `--release=fast` adds ~10–15% on top. Take this all with a pinch of salt. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo :)**
 
 ## Building from source
 
