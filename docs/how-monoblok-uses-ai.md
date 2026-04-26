@@ -2,7 +2,7 @@
 
 Short version: I use Claude Code. I can't imagine not using it. 
 There's no shame in using Claude or any of the other assistants, but I'd contend that
-monoblok is not a vibe-coded project.
+monoblok is not a vibe-coded project. [This is an interesting area](https://github.com/melissawm/open-source-ai-contribution-policies) for sure.
 
 The interesting parts of monoblok are the bits bolted onto the
 NATS-shaped core (the patchbay DSL, `$LVC.*` last-value streams,
@@ -13,7 +13,8 @@ Either way, if the additions are the pitch and the perf numbers are
 the evidence. The design of those additions is mine; the numbers are
 measured; Claude's job is to help make the ideas happen quickly (fail fast), write boring code and catch bugs.
 
-If you see any AI BS or suspected slop, let me know.
+If you see any AI BS or suspected slop, let me know. 
+
 
 ## Where it works best
 
