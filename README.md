@@ -154,6 +154,10 @@ nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/sub
 
 The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [docs/patchbay.md](./docs/patchbay.md).
 
+### Overhead
+
+Per-PUB cost depends on what the matching rule actually does (a cheap `contains?` is nothing like a `moving-avg` over a wide window or a `json-demux` that re-parses the payload), but as a rule of thumb expect ~20-30% throughput off pub-heavy workloads once rules start matching, with fan-out workloads closer to break-even. Cost scales with matching rules per PUB, not total rules in the file. See [`scripts/bench.sh`](./scripts/bench.sh) for the workloads and how to reproduce, and [`--trace`](#--trace-per-evaluation-patchbay-debugger) to see where time is going inside a specific rule.
+
 ### Example patchbays
 
 The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios: [`sensors.edn`](./examples/sensors.edn) (round + squelch on a noisy sensor), [`office-temp.edn`](./examples/office-temp.edn) (deadband + moving-average alert/all-clear), [`ticker.edn`](./examples/ticker.edn) (market data with bridge), [`bars.edn`](./examples/bars.edn) (tick-count OHLC bars per symbol), [`json-frames.edn`](./examples/json-frames.edn) (demux a JSON-emitting device into scalar sub-subjects), [`rental-car.edn`](./examples/rental-car.edn), and [`bridge.edn`](./examples/bridge.edn). Run any of them with `monoblok --patchbay examples/<file>.edn`.
