@@ -3,10 +3,11 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const xev = @import("xev");
 
-pub const subject = @import("subject.zig");
+pub const patchbay = @import("patchbay");
+pub const subject = patchbay.subject;
+pub const sexpr = patchbay.sexpr;
+pub const rules = patchbay.eval;
 pub const proto = @import("proto.zig");
-pub const sexpr = @import("sexpr.zig");
-pub const rules = @import("rules.zig");
 pub const router = @import("router.zig");
 pub const server = @import("server.zig");
 pub const snapshot = @import("snapshot.zig");
