@@ -183,6 +183,91 @@ pub fn deinitRules(rules: []Rule, gpa: Allocator) void {
     for (rules) |*r| r.deinit(gpa);
 }
 
+/// Result of a single rule failing its synthetic-publish exercise. Strings
+/// are owned by the arena passed to `validate`.
+pub const ValidateFailure = struct {
+    rule_index: usize,
+    filter: []const u8,
+    synthetic_subject: []const u8,
+    err: anyerror,
+};
+
+/// Form-lints `rules` by firing one synthetic publish per rule against a
+/// no-op publisher. Catches typo'd ops, arity bugs, and type errors on any
+/// branch the synthetic input flows into. Branches gated off by the input
+/// (e.g. behind a `(when ...)` that the synthetic value doesn't satisfy)
+/// stay dark.
+///
+/// Synthetic subject: rule's filter with `*` and a trailing `>` replaced
+/// by `"x"`. Synthetic payload: `"1"` (parses as a float for `payload-float`).
+///
+/// Caller-owned: `arena` holds returned failure strings; `gpa` owns any
+/// per-rule state the exercise allocates (cleared via `deinitRules` later
+/// or carried into the live ruleset). Exercising mutates `rule.state`, so
+/// only call this on rules you'll either discard or reset.
+pub fn validate(
+    arena: Allocator,
+    gpa: Allocator,
+    rules: []Rule,
+) Allocator.Error![]const ValidateFailure {
+    var failures: std.ArrayListUnmanaged(ValidateFailure) = .empty;
+    if (rules.len == 0) return &.{};
+
+    var msg_arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer msg_arena_state.deinit();
+
+    var dummy_pub_ctx: u8 = 0;
+    const publisher: Publisher = .{
+        .ctx = &dummy_pub_ctx,
+        .publish_fn = noopPublish,
+    };
+
+    for (rules, 0..) |*rule, i| {
+        const subj = try synthSubjectFor(arena, rule.filter);
+        var ctx: Context = .{
+            .subject = subj,
+            .payload = "1",
+            .publisher = publisher,
+            .arena = msg_arena_state.allocator(),
+            .gpa = gpa,
+        };
+        // Run only this rule by passing a single-element slice. Filter is
+        // guaranteed to match because `subj` was synthesized from it.
+        const single = rules[i .. i + 1];
+        run(single, &ctx) catch |err| {
+            try failures.append(arena, .{
+                .rule_index = i,
+                .filter = rule.filter,
+                .synthetic_subject = subj,
+                .err = err,
+            });
+        };
+        _ = msg_arena_state.reset(.retain_capacity);
+    }
+
+    return try failures.toOwnedSlice(arena);
+}
+
+fn noopPublish(_: *anyopaque, _: []const u8, _: []const u8) anyerror!void {
+    return;
+}
+
+fn synthSubjectFor(arena: Allocator, filter: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var it = std.mem.splitScalar(u8, filter, '.');
+    var first = true;
+    while (it.next()) |tok| {
+        if (!first) try out.append(arena, '.');
+        first = false;
+        if (tok.len == 1 and (tok[0] == '*' or tok[0] == '>')) {
+            try out.appendSlice(arena, "x");
+        } else {
+            try out.appendSlice(arena, tok);
+        }
+    }
+    return out.toOwnedSlice(arena);
+}
+
 /// Returns true if `filter` contains no `*` or `>` token. Such filters can
 /// be looked up by direct string equality against an inbound subject — the
 /// foundation of `RuleSet`'s literal-subject dispatch table.
