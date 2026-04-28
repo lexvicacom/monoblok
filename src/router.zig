@@ -2,8 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const proto = @import("proto.zig");
-const subject_mod = @import("subject.zig");
-const rules_mod = @import("rules.zig");
+const patchbay = @import("patchbay");
+const subject_mod = patchbay.subject;
+const rules_mod = patchbay.eval;
 
 /// One connection's router-facing state. The server owns the TCP socket and
 /// the read/write machinery; the router only needs to append bytes to the
