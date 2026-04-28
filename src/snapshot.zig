@@ -17,7 +17,7 @@
 //!         variant-specific body
 //!   EOF
 //!
-//! StateEntry variants (matches src/rules.zig StateEntry union):
+//! StateEntry variants (matches lib/patchbay/src/eval.zig StateEntry union):
 //!   0x00 empty:
 //!     (no body)
 //!   0x01 bytes:
@@ -46,7 +46,8 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const router_mod = @import("router.zig");
-const rules_mod = @import("rules.zig");
+const patchbay = @import("patchbay");
+const rules_mod = patchbay.eval;
 
 pub const magic = "MBLK";
 pub const version: u8 = 1;

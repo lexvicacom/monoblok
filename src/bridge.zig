@@ -15,8 +15,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const nats = @import("nats_c.zig");
-const sexpr = @import("sexpr.zig");
-const subject_mod = @import("subject.zig");
+const patchbay = @import("patchbay");
+const sexpr = patchbay.sexpr;
+const subject_mod = patchbay.subject;
 
 pub const ConfigError = error{
     InvalidBridgeForm,

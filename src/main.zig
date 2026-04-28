@@ -3,10 +3,11 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const xev = @import("xev");
 
-pub const subject = @import("subject.zig");
+pub const patchbay = @import("patchbay");
+pub const subject = patchbay.subject;
+pub const sexpr = patchbay.sexpr;
+pub const rules = patchbay.eval;
 pub const proto = @import("proto.zig");
-pub const sexpr = @import("sexpr.zig");
-pub const rules = @import("rules.zig");
 pub const router = @import("router.zig");
 pub const server = @import("server.zig");
 pub const snapshot = @import("snapshot.zig");
@@ -15,7 +16,7 @@ pub const bridge = if (build_options.bridge) @import("bridge.zig") else {};
 const manifest = @import("manifest");
 const build_options = @import("build_options");
 
-const Flag = enum { port, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, help, version };
+const Flag = enum { port, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, validate, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -27,6 +28,7 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--trace", .trace },
     .{ "--snapshot", .snapshot },
     .{ "--snapshot-every", .snapshot_every },
+    .{ "--validate", .validate },
     .{ "--help", .help },
     .{ "-h", .help },
     .{ "--version", .version },
@@ -45,6 +47,7 @@ pub fn main(init: std.process.Init) !void {
     var trace_enabled = false;
     var snapshot_path: ?[]const u8 = null;
     var snapshot_every_s: u32 = 0;
+    var validate_only = false;
 
     var it = try init.minimal.args.iterateAllocator(gpa);
     defer it.deinit();
@@ -65,6 +68,7 @@ pub fn main(init: std.process.Init) !void {
                 const v = it.next() orelse fatal("--snapshot-every requires a value in seconds");
                 snapshot_every_s = std.fmt.parseInt(u32, v, 10) catch fatal("invalid --snapshot-every value");
             },
+            .validate => validate_only = true,
             .help => {
                 printUsage();
                 return;
@@ -83,6 +87,25 @@ pub fn main(init: std.process.Init) !void {
         break :blk &.{};
     };
     defer rules.deinitRules(loaded_rules, gpa);
+    // Form-lint every rule before we open a socket. A typo or arity bug in
+    // the patchbay would otherwise only surface on the first matching PUB,
+    // which is too late. `--validate` exits after this check.
+    if (validate_only and patchbay_path == null) fatal("--validate requires --patchbay PATH");
+    const failures = try rules.validate(arena, gpa, loaded_rules);
+    if (failures.len > 0) {
+        for (failures) |f| {
+            std.log.err("patchbay rule {d} (on \"{s}\") failed validation on synthetic subject \"{s}\": {s}", .{
+                f.rule_index, f.filter, f.synthetic_subject, @errorName(f.err),
+            });
+        }
+        fatal("patchbay validation failed");
+    }
+    if (validate_only) {
+        std.debug.print("{s}: ok ({d} rule{s})\n", .{
+            patchbay_path.?, loaded_rules.len, if (loaded_rules.len == 1) "" else "s",
+        });
+        return;
+    }
     const ruleset = try rules.buildRuleSet(arena, loaded_rules);
     std.log.info("loaded {d} patchbay form(s)", .{loaded_rules.len});
     std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
@@ -264,6 +287,10 @@ fn printUsage() void {
         \\                   Write the snapshot every SECONDS (atomic
         \\                   write via .tmp + rename). 0 or omitted =
         \\                   load-only. Requires --snapshot.
+        \\  --validate       Form-lint the patchbay file and exit. Same
+        \\                   check that runs at startup; useful for
+        \\                   editor / pre-commit / CI flows. Requires
+        \\                   --patchbay.
         \\
     , .{});
 }

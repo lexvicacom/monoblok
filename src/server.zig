@@ -10,8 +10,9 @@ const xev = @import("xev");
 
 const proto = @import("proto.zig");
 const router_mod = @import("router.zig");
-const rules_mod = @import("rules.zig");
-const subject_mod = @import("subject.zig");
+const patchbay = @import("patchbay");
+const rules_mod = patchbay.eval;
+const subject_mod = patchbay.subject;
 const snapshot_mod = @import("snapshot.zig");
 
 const rx_initial = 32 * 1024;
