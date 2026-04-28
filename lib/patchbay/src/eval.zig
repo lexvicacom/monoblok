@@ -162,7 +162,16 @@ pub const LoadError = error{
 } || sexpr.ParseError || subject_mod.Error;
 
 pub fn loadRules(arena: Allocator, source: []const u8) LoadError![]Rule {
-    const forms = try sexpr.parseAll(arena, source);
+    var discard: usize = 0;
+    return loadRulesReporting(arena, source, &discard);
+}
+
+/// Same as `loadRules` but on a parser-level failure writes the byte offset
+/// in `source` to `parse_err_offset`. Post-parse errors (InvalidRuleForm,
+/// UnknownTopLevel, subject validation) leave it untouched, since they are
+/// per-form, not per-byte.
+pub fn loadRulesReporting(arena: Allocator, source: []const u8, parse_err_offset: *usize) LoadError![]Rule {
+    const forms = try sexpr.parseAllReporting(arena, source, parse_err_offset);
     var out: std.ArrayList(Rule) = .empty;
     for (forms) |f| {
         if (f != .list) return error.InvalidRuleForm;
