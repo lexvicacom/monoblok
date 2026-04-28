@@ -30,12 +30,24 @@ pub const ParseError = error{
 /// Parse a full source text into a slice of top-level expressions.
 /// All returned Values reference memory owned by `arena`.
 pub fn parseAll(arena: Allocator, source: []const u8) ParseError![]const Value {
+    var discard: usize = 0;
+    return parseAllReporting(arena, source, &discard);
+}
+
+/// Same as `parseAll` but writes the byte offset of a parse failure into
+/// `err_offset` when the error is one of `ParseError`'s parser variants
+/// (i.e., not an OutOfMemory). Callers turn that offset into line:col for
+/// human-readable diagnostics. On success `err_offset` is left untouched.
+pub fn parseAllReporting(arena: Allocator, source: []const u8, err_offset: *usize) ParseError![]const Value {
     var p: Parser = .{ .src = source, .pos = 0, .arena = arena };
     var list: std.ArrayList(Value) = .empty;
     while (true) {
         p.skipWhitespaceAndComments();
         if (p.pos >= p.src.len) break;
-        const v = try p.parseOne();
+        const v = p.parseOne() catch |err| {
+            err_offset.* = p.pos;
+            return err;
+        };
         try list.append(arena, v);
     }
     return try list.toOwnedSlice(arena);
@@ -74,7 +86,15 @@ const Parser = struct {
         var items: std.ArrayList(Value) = .empty;
         while (true) {
             p.skipWhitespaceAndComments();
-            if (p.pos >= p.src.len) return error.UnexpectedEof;
+            if (p.pos >= p.src.len) {
+                // Leave p.pos at EOF so the diagnostic points to the end of
+                // the file, where the missing ')' belongs. Pointing at the
+                // unclosed '(' is misleading for multi-line forms (see the
+                // 4-line (on ...) form in patchbay.edn): the user reads the
+                // caret as "this token is wrong" rather than "your file ends
+                // before this list closes."
+                return error.UnexpectedEof;
+            }
             if (p.src[p.pos] == ')') {
                 p.pos += 1;
                 return .{ .list = try items.toOwnedSlice(p.arena) };
@@ -85,6 +105,7 @@ const Parser = struct {
     }
 
     fn parseString(p: *Parser) ParseError!Value {
+        const open_pos = p.pos;
         p.pos += 1; // consume opening quote
         var out: std.ArrayList(u8) = .empty;
         while (p.pos < p.src.len) {
@@ -95,7 +116,10 @@ const Parser = struct {
             }
             if (c == '\\') {
                 p.pos += 1;
-                if (p.pos >= p.src.len) return error.UnterminatedString;
+                if (p.pos >= p.src.len) {
+                    p.pos = open_pos;
+                    return error.UnterminatedString;
+                }
                 const esc = p.src[p.pos];
                 const decoded: u8 = switch (esc) {
                     'n' => '\n',
@@ -112,6 +136,7 @@ const Parser = struct {
             try out.append(p.arena, c);
             p.pos += 1;
         }
+        p.pos = open_pos;
         return error.UnterminatedString;
     }
 
@@ -227,4 +252,15 @@ test "unbalanced paren errors" {
 
     try testing.expectError(error.UnexpectedEof, parseAll(arena, "(a b"));
     try testing.expectError(error.UnexpectedRParen, parseAll(arena, ")"));
+}
+
+test "missing rparen reports offset at end-of-input, not at unclosed paren" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const src = "(on \"foo\"\n  (publish bar baz)\n";
+    var off: usize = 0;
+    try testing.expectError(error.UnexpectedEof, parseAllReporting(arena, src, &off));
+    try testing.expectEqual(src.len, off);
 }

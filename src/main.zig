@@ -83,7 +83,18 @@ pub fn main(init: std.process.Init) !void {
     const patchbay_src: ?[]u8 = if (patchbay_path) |path| try readFile(fsio, arena, path) else null;
 
     const loaded_rules: []rules.Rule = blk: {
-        if (patchbay_src) |src| break :blk try rules.loadRules(arena, src);
+        if (patchbay_src) |src| {
+            var parse_err_offset: usize = 0;
+            break :blk rules.loadRulesReporting(arena, src, &parse_err_offset) catch |err| switch (err) {
+                error.UnexpectedEof,
+                error.UnexpectedRParen,
+                error.UnterminatedString,
+                error.InvalidEscape,
+                error.InvalidNumber,
+                => fatalParseError(patchbay_path.?, src, parse_err_offset, err),
+                else => return err,
+            };
+        }
         break :blk &.{};
     };
     defer rules.deinitRules(loaded_rules, gpa);
@@ -94,7 +105,7 @@ pub fn main(init: std.process.Init) !void {
     const failures = try rules.validate(arena, gpa, loaded_rules);
     if (failures.len > 0) {
         for (failures) |f| {
-            std.log.err("patchbay rule {d} (on \"{s}\") failed validation on synthetic subject \"{s}\": {s}", .{
+            std.log.err("patchbay rule {d} (on \"{s}\") failed validation when test-publishing \"{s}\": {s}", .{
                 f.rule_index, f.filter, f.synthetic_subject, @errorName(f.err),
             });
         }
@@ -257,6 +268,33 @@ fn readFile(io: Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
 
 fn fatal(msg: []const u8) noreturn {
     std.debug.print("monoblok: {s}\n", .{msg});
+    std.process.exit(2);
+}
+
+fn fatalParseError(path: []const u8, src: []const u8, offset: usize, err: anyerror) noreturn {
+    const clamped = if (offset > src.len) src.len else offset;
+    var line: usize = 1;
+    var col: usize = 1;
+    var i: usize = 0;
+    while (i < clamped) : (i += 1) {
+        if (src[i] == '\n') {
+            line += 1;
+            col = 1;
+        } else col += 1;
+    }
+    // Find the start and end of the offending line so we can echo it back.
+    var line_start: usize = clamped;
+    while (line_start > 0 and src[line_start - 1] != '\n') : (line_start -= 1) {}
+    var line_end: usize = clamped;
+    while (line_end < src.len and src[line_end] != '\n') : (line_end += 1) {}
+    const line_text = src[line_start..line_end];
+    std.debug.print("monoblok: {s}:{d}:{d}: {s}\n", .{ path, line, col, @errorName(err) });
+    std.debug.print("    {s}\n", .{line_text});
+    // Caret line: spaces up to col-1, then ^.
+    std.debug.print("    ", .{});
+    var k: usize = 1;
+    while (k < col) : (k += 1) std.debug.print(" ", .{});
+    std.debug.print("^\n", .{});
     std.process.exit(2);
 }
 
