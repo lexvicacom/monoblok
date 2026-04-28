@@ -22,14 +22,13 @@ A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). P
 
 Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Each platform ships two `.tar.gz` archives: the default (includes the [outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the target box) and a `-nobridge` variant with no external runtime dependencies.
 
-Skip to [Deploying](#deploying) for setup on a cloud VM or server.
 
 Pick the latest tag from the releases page and substitute it for `VERSION` below (e.g. `v0.0.24`).
 
 **macOS (Apple Silicon):**
 
 ```
-VERSION=v0.0.24
+VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-macos-aarch64.tar.gz"
 tar -xzf "monoblok-${VERSION}-macos-aarch64.tar.gz"
 sudo install "monoblok-${VERSION}-macos-aarch64/monoblok" /usr/local/bin/monoblok
@@ -38,9 +37,10 @@ monoblok --port 4222 --patchbay "monoblok-${VERSION}-macos-aarch64/patchbay.edn"
 ```
 
 **Linux (x86_64; swap for `linux-aarch64` on ARM):**
+See [Deploying](#deploying) for cloud VM or server suggestions.
 
 ```
-VERSION=v0.0.24
+VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-linux-x86_64.tar.gz"
 tar -xzf "monoblok-${VERSION}-linux-x86_64.tar.gz"
 sudo install "monoblok-${VERSION}-linux-x86_64/monoblok" /usr/local/bin/monoblok
