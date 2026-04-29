@@ -28,6 +28,7 @@ else
     MB_BIN="$ROOT/zig-out/bin/monoblok"
 fi
 
+echo $MB_BIN
 export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 # Extract host:port → port for the server --port flag.
 PORT="${NATS_URL##*:}"
@@ -129,16 +130,22 @@ MB_PID=$!
 sleep 0.3
 kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
 
+# Cooldown between rows. Back-to-back 500k-msg runs throttle laptop CPUs
+# (we saw 6.4M -> 3.3M monotonic decay across 6 consecutive rows on an MBA
+# on battery). 5s is enough to let the cores cool back to baseline; tune
+# via BENCH_COOLDOWN_S if you want a different value.
+COOLDOWN_S="${BENCH_COOLDOWN_S:-5}"
+
 echo "Running monoblok benchmarks..."
-MB_1=$(run_pub 1 500000 64)
-MB_2=$(run_pub 2 10000 64)
-MB_3=$(run_pub 8 50000 128)
-MB_4=$(run_fanout 1 200000)
-MB_5=$(run_fanout 10 50000)
+MB_1=$(run_pub 1 500000 64);    sleep "$COOLDOWN_S"
+MB_2=$(run_pub 2 10000 64);     sleep "$COOLDOWN_S"
+MB_3=$(run_pub 8 50000 128);    sleep "$COOLDOWN_S"
+MB_4=$(run_fanout 1 200000);    sleep "$COOLDOWN_S"
+MB_5=$(run_fanout 10 50000);    sleep "$COOLDOWN_S"
 MB_6=$(run_fanout 50 20000)
 kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
 MB_PID=""
-sleep 0.2
+sleep "$COOLDOWN_S"
 
 # --- nats-server (optional) ---------------------------------------------------
 NS_1="" NS_2="" NS_3="" NS_4="" NS_5="" NS_6=""
@@ -148,11 +155,11 @@ if $HAS_NATS_SERVER; then
     sleep 0.4
     if kill -0 $NS_PID 2>/dev/null; then
         echo "Running nats-server benchmarks..."
-        NS_1=$(run_pub 1 500000 64)
-        NS_2=$(run_pub 2 10000 64)
-        NS_3=$(run_pub 8 50000 128)
-        NS_4=$(run_fanout 1 200000)
-        NS_5=$(run_fanout 10 50000)
+        NS_1=$(run_pub 1 500000 64);    sleep "$COOLDOWN_S"
+        NS_2=$(run_pub 2 10000 64);     sleep "$COOLDOWN_S"
+        NS_3=$(run_pub 8 50000 128);    sleep "$COOLDOWN_S"
+        NS_4=$(run_fanout 1 200000);    sleep "$COOLDOWN_S"
+        NS_5=$(run_fanout 10 50000);    sleep "$COOLDOWN_S"
         NS_6=$(run_fanout 50 20000)
         kill $NS_PID 2>/dev/null; wait $NS_PID 2>/dev/null || true
         NS_PID=""

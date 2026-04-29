@@ -413,6 +413,16 @@ pub const Router = struct {
             try self.storeLast(subject, payload);
         }
 
+        // Common case on pub-only workloads: no subscribers at all. Skip the
+        // arena/kicks/to_drop setup and the hashmap lookup entirely. Only
+        // the bridge hook (if configured) still needs to fire.
+        const have_literal = self.literal_subs.count() != 0;
+        const have_wildcard = self.wildcard_subs.items.len != 0;
+        if (!have_literal and !have_wildcard) {
+            if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
+            return;
+        }
+
         // Scratch for the LVC-subject prefixing + the kicks list. Freed in
         // one shot at end of fan-out.
         var scratch_state: std.heap.ArenaAllocator = .init(self.gpa);
@@ -428,16 +438,18 @@ pub const Router = struct {
 
         // Literal path: O(1) bucket lookup, then iterate just the matching
         // bucket. No per-sub token-walk; the bucket key already proved match.
-        if (self.literal_subs.getPtr(subject)) |bucket| {
-            for (bucket.subs.items) |s| {
-                try self.deliverOne(s, subject, payload, scratch, &kicks, &to_drop);
+        if (have_literal) {
+            if (self.literal_subs.getPtr(subject)) |bucket| {
+                for (bucket.subs.items) |s| {
+                    try self.deliverOne(s, subject, payload, scratch, &kicks, &to_drop);
+                }
             }
         }
 
         // Wildcard path: linear over wildcard subs only. Token-split the
         // subject once (stack buffer); subs reuse their pre-split tokens
         // from subscribe time.
-        if (self.wildcard_subs.items.len > 0) {
+        if (have_wildcard) {
             var sub_tokens_buf: [subject_mod.max_tokens][]const u8 = undefined;
             const sub_tokens = splitInto(subject, &sub_tokens_buf);
             for (self.wildcard_subs.items) |s| {

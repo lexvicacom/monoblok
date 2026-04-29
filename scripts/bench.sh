@@ -125,16 +125,21 @@ MB_PID=$!
 sleep 0.3
 kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
 
+# Cooldown between rows. Back-to-back 500k+ msg runs throttle laptop CPUs;
+# 5s is enough to let the cores cool back to baseline. Tune via
+# BENCH_COOLDOWN_S if you want a different value.
+COOLDOWN_S="${BENCH_COOLDOWN_S:-5}"
+
 echo "Running monoblok benchmarks..."
-MB_1=$(run_pub 1 1000000 64)
-MB_2=$(run_pub 2 500000 64)
-MB_3=$(run_pub 8 200000 128)
-MB_4=$(run_fanout 1 500000)
-MB_5=$(run_fanout 10 200000)
+MB_1=$(run_pub 1 1000000 64);    sleep "$COOLDOWN_S"
+MB_2=$(run_pub 2 500000 64);     sleep "$COOLDOWN_S"
+MB_3=$(run_pub 8 200000 128);    sleep "$COOLDOWN_S"
+MB_4=$(run_fanout 1 500000);     sleep "$COOLDOWN_S"
+MB_5=$(run_fanout 10 200000);    sleep "$COOLDOWN_S"
 MB_6=$(run_fanout 50 50000)
 kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
 MB_PID=""
-sleep 0.2
+sleep "$COOLDOWN_S"
 
 # --- monoblok + runtime patchbay (one rule) -----------------------------------
 # One rule, gate false on bench payloads. Measures the per-PUB cost of running
@@ -147,15 +152,15 @@ if [ -f "$PATCHBAY_EDN" ]; then
     sleep 0.3
     if kill -0 $MB_PID 2>/dev/null; then
         echo "Running monoblok+patchbay (1 rule) benchmarks..."
-        MB_P_1=$(run_pub 1 1000000 64)
-        MB_P_2=$(run_pub 2 500000 64)
-        MB_P_3=$(run_pub 8 200000 128)
-        MB_P_4=$(run_fanout 1 500000)
-        MB_P_5=$(run_fanout 10 200000)
+        MB_P_1=$(run_pub 1 1000000 64);    sleep "$COOLDOWN_S"
+        MB_P_2=$(run_pub 2 500000 64);     sleep "$COOLDOWN_S"
+        MB_P_3=$(run_pub 8 200000 128);    sleep "$COOLDOWN_S"
+        MB_P_4=$(run_fanout 1 500000);     sleep "$COOLDOWN_S"
+        MB_P_5=$(run_fanout 10 200000);    sleep "$COOLDOWN_S"
         MB_P_6=$(run_fanout 50 50000)
         kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
         MB_PID=""
-        sleep 0.2
+        sleep "$COOLDOWN_S"
     else
         echo "monoblok+patchbay (1 rule) failed to start:"
         cat /tmp/mb-patchbay.log
@@ -173,15 +178,15 @@ if [ -f "$PATCHBAY_50_EDN" ]; then
     sleep 0.3
     if kill -0 $MB_PID 2>/dev/null; then
         echo "Running monoblok+patchbay (50 rules) benchmarks..."
-        MB_50_1=$(run_pub 1 1000000 64)
-        MB_50_2=$(run_pub 2 500000 64)
-        MB_50_3=$(run_pub 8 200000 128)
-        MB_50_4=$(run_fanout 1 500000)
-        MB_50_5=$(run_fanout 10 200000)
+        MB_50_1=$(run_pub 1 1000000 64);    sleep "$COOLDOWN_S"
+        MB_50_2=$(run_pub 2 500000 64);     sleep "$COOLDOWN_S"
+        MB_50_3=$(run_pub 8 200000 128);    sleep "$COOLDOWN_S"
+        MB_50_4=$(run_fanout 1 500000);     sleep "$COOLDOWN_S"
+        MB_50_5=$(run_fanout 10 200000);    sleep "$COOLDOWN_S"
         MB_50_6=$(run_fanout 50 50000)
         kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
         MB_PID=""
-        sleep 0.2
+        sleep "$COOLDOWN_S"
     else
         echo "monoblok+patchbay (50 rules) failed to start:"
         cat /tmp/mb-patchbay50.log
