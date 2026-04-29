@@ -4,13 +4,13 @@
 
 # monoblok
 
-monoblok is a broker that does that work once, before a message reaches subscribers. It sits between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber.
+monoblok is a broker that does that work once, before a message reaches subscribers. It can between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. Subscribers can connect also connect directly. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber. It speaks enough of the NATS core protocol so that existing clients are supported for `PUB` and `SUB`.
 
-### Why?
+### Key pattern
 
-Useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where the data moves fast but most of the movement isn't worth a downstream message. 
+Publishers PUB to monoblok instead of directly to NATS, using any NATS client. monoblok does the conditioning, then forwards to a real cluster, or to subscribers who are directly connected. Either way, subscribers get a stream that's already been processed.
 
-The key pattern: publishers PUB to monoblok instead of directly to NATS, using the exact same NATS client. monoblok does the conditioning, then forwards to your real cluster. Subscribers get a stream that's already correct.
+This is useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where the data moves fast but most of the movement isn't worth a downstream message. 
 
 It's a single small binary written in Zig, speaking the NATS wire protocol so any `nats` client works unchanged. The conditioning lives in a routing DSL called **patchbay** (round, deadband, squelch, moving-avg, rising/falling edges, OHLC bars), with last-value streams on `$LVC.*` for late subscribers. JSON frames like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and conditioned the same way. 
 
