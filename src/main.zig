@@ -53,13 +53,26 @@ pub fn main(init: std.process.Init) !void {
     defer it.deinit();
     _ = it.skip();
     while (it.next()) |a| {
+        // Positional argument: a non-flag word is treated as the patchbay
+        // path. Lets `monoblok patchbay.edn` and `monoblok --validate
+        // patchbay.edn` work without the explicit `--patchbay` keyword.
+        // Only one positional is allowed; collisions with --patchbay are an
+        // error so a misspelled flag doesn't silently get adopted as a path.
+        if (a.len == 0 or a[0] != '-') {
+            if (patchbay_path != null) fatal("patchbay path specified twice");
+            patchbay_path = a;
+            continue;
+        }
         const flag = flag_map.get(a) orelse fatal("unknown argument");
         switch (flag) {
             .port => {
                 const v = it.next() orelse fatal("--port requires a value");
                 port = std.fmt.parseInt(u16, v, 10) catch fatal("invalid port");
             },
-            .patchbay => patchbay_path = it.next() orelse fatal("--patchbay requires a path"),
+            .patchbay => {
+                if (patchbay_path != null) fatal("patchbay path specified twice");
+                patchbay_path = it.next() orelse fatal("--patchbay requires a path");
+            },
             .no_lvc => lvc_enabled = false,
             .stats => stats_enabled = true,
             .trace => trace_enabled = true,
@@ -101,7 +114,7 @@ pub fn main(init: std.process.Init) !void {
     // Form-lint every rule before we open a socket. A typo or arity bug in
     // the patchbay would otherwise only surface on the first matching PUB,
     // which is too late. `--validate` exits after this check.
-    if (validate_only and patchbay_path == null) fatal("--validate requires --patchbay PATH");
+    if (validate_only and patchbay_path == null) fatal("--validate requires a patchbay path");
     const failures = try rules.validate(arena, gpa, loaded_rules);
     if (failures.len > 0) {
         for (failures) |f| {
@@ -300,14 +313,18 @@ fn fatalParseError(path: []const u8, src: []const u8, offset: usize, err: anyerr
 
 fn printUsage() void {
     std.debug.print(
-        \\Usage: monoblok [--port PORT] [--patchbay FILE] [--no-lvc] [--snapshot FILE]
+        \\Usage: monoblok [PATCHBAY] [--port PORT] [--no-lvc] [--snapshot FILE]
         \\
         \\A NATS-compatible server with an S-expression routing and signal conditioning DSL ("patchbay").
         \\
         \\Options:
+        \\  PATCHBAY         Path to patchbay file. The first non-flag
+        \\                   argument is treated as the patchbay path, so
+        \\                   `monoblok patchbay.edn` and `monoblok
+        \\                   --validate patchbay.edn` both work.
         \\  --port PORT      TCP port to listen on (default 4222)
-        \\  --patchbay FILE  Path to patchbay file (optional). --rules is a
-        \\                   backwards-compatible alias.
+        \\  --patchbay FILE  Explicit form of the positional argument.
+        \\                   --rules is a backwards-compatible alias.
         \\  --no-lvc         Disable the last-value cache and $LVC.* live
         \\                   streams. LVC is on by default; overhead ~2-4%.
         \\  --stats          Log a running summary every 10k PUBs: max
@@ -328,7 +345,7 @@ fn printUsage() void {
         \\  --validate       Form-lint the patchbay file and exit. Same
         \\                   check that runs at startup; useful for
         \\                   editor / pre-commit / CI flows. Requires
-        \\                   --patchbay.
+        \\                   a patchbay path.
         \\
     , .{});
 }

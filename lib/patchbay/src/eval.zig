@@ -91,12 +91,51 @@ pub const Context = struct {
     /// by `run` per rule body.
     trace_depth: u8 = 0,
     /// Recorded emissions for trace output. Each side-effecting op (publish,
-    /// publish-to, count, json-demux, ohlc-bar) appends `(subject, payload)`
+    /// publish-to, count, json-demux, bar) appends `(subject, payload)`
     /// here when `trace` is on, so `evalTraced` can show what was actually
     /// published instead of the bare `nil` those ops return. Strings live in
     /// `arena`. Only populated under trace; left at .empty otherwise.
     trace_emissions: std.ArrayListUnmanaged(TraceEmit) = .empty,
+    /// Re-entry depth. 0 for the top-level inbound PUB; bumped each time a
+    /// patchbay-emitted publish re-enters rule evaluation. Capped by
+    /// `max_depth` so a rule that publishes back into its own filter can't
+    /// loop forever. The host (server) sets `reentry_fn` to enable
+    /// re-entry; tests leave it null and behave as before.
+    depth: u8 = 0,
+    max_depth: u8 = 8,
+    /// Optional re-entry hook + opaque ctx. When set, every patchbay-emitted
+    /// publish (after fan-out) calls this with the parent context plus the
+    /// new subject/payload so downstream rules can react to it. Null in
+    /// tests / contexts without a RuleSet. The hook owns building the child
+    /// Context (with `depth: parent.depth + 1`) and dispatching rule
+    /// evaluation; this layer stays free of `RuleSet` knowledge.
+    reentry_ctx: ?*anyopaque = null,
+    reentry_fn: ?*const fn (reentry_ctx: ?*anyopaque, parent: *Context, subject: []const u8, payload: []const u8) anyerror!void = null,
+
+    /// Single emission point used by every side-effecting op (publish,
+    /// publish-to, count, json-demux, bar). Does fan-out via the
+    /// publisher, bumps the per-PUB and per-rule counters, records a trace
+    /// entry, and (if a re-entry hook is installed and we're under the
+    /// depth cap) invokes the hook so patchbay-emitted subjects can match
+    /// downstream rules. The depth check lives here so it covers all five
+    /// emission ops uniformly.
+    pub fn emit(ctx: *Context, subject: []const u8, payload: []const u8) EvalError!void {
+        ctx.publisher.publish(subject, payload) catch return error.PublishFailed;
+        ctx.rule_publishes += 1;
+        if (ctx.current_rule) |r| r.publishes_emitted += 1;
+        recordTraceEmit(ctx, subject, payload);
+        if (ctx.reentry_fn) |f| {
+            if (ctx.depth < ctx.max_depth) {
+                f(ctx.reentry_ctx, ctx, subject, payload) catch return error.PublishFailed;
+            }
+        }
+    }
 };
+
+fn recordTraceEmit(ctx: *Context, subject: []const u8, payload: []const u8) void {
+    if (!ctx.trace) return;
+    ctx.trace_emissions.append(ctx.arena, .{ .subject = subject, .payload = payload }) catch {};
+}
 
 pub const TraceEmit = struct {
     subject: []const u8,
@@ -259,7 +298,7 @@ fn evalNormal(ctx: *Context, v: Value) EvalError!Value {
 /// time. Atoms and bare symbols pass straight through to `evalNormal`,
 /// timing them would add noise without insight.
 ///
-/// Side-effecting ops (publish, publish-to, count, json-demux, ohlc-bar) all
+/// Side-effecting ops (publish, publish-to, count, json-demux, bar) all
 /// return `nil`. To distinguish "I emitted something" from "I was suppressed",
 /// we snapshot `ctx.trace_emissions.items.len` before recursing; any new
 /// entries belong to this form's subtree. If the form added emissions AND
@@ -327,7 +366,7 @@ fn suppressionHint(v: Value) ?[]const u8 {
         .{ "changed?", "unchanged" },
         .{ "when", "branch not taken" },
         .{ "if", "branch not taken" },
-        .{ "ohlc-bar", "bar in progress" },
+        .{ "bar", "bar in progress" },
         .{ "json-get", "key missing" },
     };
     inline for (map) |entry| {
@@ -349,7 +388,7 @@ fn isLeafEmitter(v: Value) bool {
         std.mem.eql(u8, head, "publish-to") or
         std.mem.eql(u8, head, "count") or
         std.mem.eql(u8, head, "json-demux") or
-        std.mem.eql(u8, head, "ohlc-bar");
+        std.mem.eql(u8, head, "bar");
 }
 
 fn indentTrace(depth: u8) void {

@@ -50,7 +50,7 @@ fn validate(s: []const u8, kind: Kind) Error!void {
         };
 
         for (tok) |c| switch (c) {
-            'A'...'Z', 'a'...'z', '0'...'9', '-', '_', '$' => {},
+            'A'...'Z', 'a'...'z', '0'...'9', '-', '_', '$', ':' => {},
             else => return error.InvalidCharacter,
         };
     }
@@ -93,6 +93,7 @@ test "validate publish subjects" {
     try validatePublish("foo");
     try validatePublish("foo.bar.baz");
     try validatePublish("foo-1_2.bar");
+    try validatePublish("T.O:AAPL250620C00200000");
     try std.testing.expectError(error.Empty, validatePublish(""));
     try std.testing.expectError(error.EmptyToken, validatePublish("foo..bar"));
     try std.testing.expectError(error.EmptyToken, validatePublish("foo."));

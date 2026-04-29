@@ -1062,3 +1062,111 @@ test "count with predicate only increments on truthy" {
     try testing.expectEqualStrings("events.svc.count", tp.buf.items[1].subject);
     try testing.expectEqualStrings("2", tp.buf.items[1].payload);
 }
+
+// --- Re-entry: patchbay-emitted publishes match downstream rules ---------
+
+const RuleSet = eval.RuleSet;
+const buildRuleSet = eval.buildRuleSet;
+
+// Test harness for re-entry. Holds the RuleSet so the hook can dispatch.
+const ReentryHarness = struct {
+    rs: *const RuleSet,
+
+    fn hook(
+        ctx_opaque: ?*anyopaque,
+        parent: *Context,
+        subject: []const u8,
+        payload: []const u8,
+    ) anyerror!void {
+        const self: *ReentryHarness = @ptrCast(@alignCast(ctx_opaque.?));
+        var child: Context = .{
+            .subject = subject,
+            .payload = payload,
+            .publisher = parent.publisher,
+            .arena = parent.arena,
+            .gpa = parent.gpa,
+            .depth = parent.depth + 1,
+            .max_depth = parent.max_depth,
+            .reentry_ctx = parent.reentry_ctx,
+            .reentry_fn = parent.reentry_fn,
+        };
+        try self.rs.run(&child);
+    }
+};
+
+test "staged rules: demuxed subject re-enters and matches downstream" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // First rule demuxes a JSON frame into devices.<id>.temp.
+    // Second rule consumes that demuxed subject and republishes a
+    // "stable" mirror — only reachable via re-entry.
+    const rules = try loadRules(arena,
+        \\(on "devices.*"
+        \\  (json-demux "temp" payload))
+        \\(on "devices.*.temp"
+        \\  (-> payload-float
+        \\      (round 0)
+        \\      (publish-to (subject-append "stable"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    const rs = try buildRuleSet(arena, rules);
+    var harness: ReentryHarness = .{ .rs = &rs };
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "devices.kitchen",
+        .payload = "{\"temp\":12.7}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .reentry_ctx = &harness,
+        .reentry_fn = ReentryHarness.hook,
+    };
+    try rs.run(&ctx);
+
+    // Expect: devices.kitchen.temp 12.7 (from demux),
+    //         devices.kitchen.temp.stable 13 (from staged rule via re-entry).
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("devices.kitchen.temp", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("12.7", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("devices.kitchen.temp.stable", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("13", tp.buf.items[1].payload);
+}
+
+test "re-entry depth cap prevents runaway loops" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A rule whose own emission matches its own filter. Without the cap
+    // this would loop forever; with the cap we get exactly max_depth + 1
+    // emissions (the original + one per allowed re-entry).
+    const rules = try loadRules(arena,
+        \\(on "loop.>"
+        \\  (publish (subject-append "x") payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    const rs = try buildRuleSet(arena, rules);
+    var harness: ReentryHarness = .{ .rs = &rs };
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "loop.start",
+        .payload = "p",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .max_depth = 3,
+        .reentry_ctx = &harness,
+        .reentry_fn = ReentryHarness.hook,
+    };
+    try rs.run(&ctx);
+
+    // depth 0 emits, depth 1 emits, depth 2 emits, depth 3 emits, depth 4 blocked.
+    // So 4 total emissions (one per allowed level, 0..max_depth inclusive).
+    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+}
