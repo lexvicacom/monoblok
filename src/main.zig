@@ -364,6 +364,7 @@ test {
     _ = proto;
     _ = sexpr;
     _ = rules;
+    _ = router;
     _ = snapshot;
     if (build_options.bridge) _ = bridge;
 }
