@@ -76,10 +76,15 @@ _growPool(natsDispatcherPool *pool, int cap)
             s = nats_setDefaultError(NATS_NO_MEMORY);
         if (s == NATS_OK)
         {
-            memcpy(
-                newDispatchers,
-                pool->dispatchers,
-                pool->cap * sizeof(natsDispatcher*));
+            // First call has pool->dispatchers == NULL and pool->cap == 0.
+            // memcpy(dst, NULL, 0) is UB by the letter of C; on linux-arm64
+            // with FORTIFY enabled glibc's __memcpy_chk traps even though
+            // size is zero. Guard the copy.
+            if (pool->cap > 0)
+                memcpy(
+                    newDispatchers,
+                    pool->dispatchers,
+                    pool->cap * sizeof(natsDispatcher*));
             NATS_FREE(pool->dispatchers);
             pool->dispatchers = newDispatchers;
             pool->cap = cap;
