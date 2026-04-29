@@ -8,7 +8,7 @@ High-frequency market data is a poster-case for monoblok: data moves
 fast, most of the movement isn't worth a downstream message, and every
 subscriber would otherwise re-implement the same rounding / dedupe /
 demux logic. This example shows the conditioning happening once, at the
-broker, in front of a synthetic Massive-shape feed.
+broker, in front of a synthetic Massive-shape feed. [I posted more about this in this post](https://alexjreid.dev/posts/monoblok-massive/).
 
 This end-to-end example with two pieces:
 
