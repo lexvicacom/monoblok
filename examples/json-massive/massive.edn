@@ -1,0 +1,82 @@
+; Explode the synthetic Massive JSON frames into per-field scalar subjects,
+; so subscribers can treat each value as a normal stream. Re-entry (capped
+; at depth 8) makes the staged form work: the demux rule's emitted subjects
+; match the downstream rules below.
+;
+; Note: Massive's delayed feeds already publish OHLC bars on the AM / XA /
+; CA channels (server-side aggregation). The patchbay here just demuxes
+; those frames into scalars; it deliberately doesn't recompute open / high
+; / low / close from raw trades. If you want bar-from-tick logic, see
+; examples/bars.edn (uses bar), that's the right tool when you only
+; have a trade stream and need bars yourself.
+
+; --- Stocks ----------------------------------------------------------------
+
+; Stock trade: T.<SYM> -> { p, s, ... }
+(on "T.*"
+  (json-demux "p" "s" payload))
+
+; Stock NBBO quote: Q.<SYM> -> { bp, bs, ap, as, ... }
+(on "Q.*"
+  (json-demux "bp" "bs" "ap" "as" payload))
+
+; Stock minute aggregate: AM.<SYM> -> { o, h, l, c, v, vw, ... }
+(on "AM.*"
+  (json-demux "o" "h" "l" "c" "v" "vw" payload))
+
+; --- Options (same T/Q ev letters as stocks, OCC symbol with O: prefix) ----
+; The "T.*"/"Q.*" rules above already cover options because the wildcard
+; matches "T.O:AAPL250620C00200000" too. Nothing extra needed here.
+
+; --- Crypto ----------------------------------------------------------------
+
+(on "XT.*"
+  (json-demux "p" "s" payload))
+
+(on "XQ.*"
+  (json-demux "bp" "bs" "ap" "as" payload))
+
+(on "XA.*"
+  (json-demux "o" "h" "l" "c" "v" "vw" payload))
+
+; --- Forex -----------------------------------------------------------------
+
+; Forex quotes use single-letter b/a (no sizes). Demux those.
+(on "C.*"
+  (json-demux "b" "a" payload))
+
+(on "CA.*"
+  (json-demux "o" "h" "l" "c" "v" payload))
+
+; --- Cleanup pipelines (consume demuxed subjects via re-entry) -------------
+
+; Stock trade prices: round to 2dp, drop duplicates, mirror to .stable.
+(on "T.*.p"
+  (-> payload-float
+      (round 2)
+      (squelch)
+      (publish-to (subject-append "stable"))))
+
+; Alert on big single-trade price jumps (>= 1.0 between consecutive ticks
+; on the same symbol). delta is 0 on first sight so this stays quiet
+; until we have a prior value.
+(on "T.*.p"
+  (when (>= (abs (delta payload-float)) 1.0)
+    (publish
+      (str-concat "alerts.trade." (subject-token 1))
+      payload)))
+
+; Crypto prices move bigger; alert on >= 1% moves between trades.
+(on "XT.*.p"
+  (when (>= (abs (/ (delta payload-float) payload-float)) 0.01)
+    (publish
+      (str-concat "alerts.crypto." (subject-token 1))
+      payload)))
+
+; Forex mid-rate alert: a 5 pip move on a major is notable. Computed off
+; the demuxed bid; cheap proxy for "the market moved".
+(on "C.*.b"
+  (when (>= (abs (delta payload-float)) 0.0005)
+    (publish
+      (str-concat "alerts.fx." (subject-token 1))
+      payload)))
