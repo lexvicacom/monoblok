@@ -29,7 +29,8 @@ reshapes them on the way through.
 
 ```bash
 # terminal 1: start monoblok with the demuxing patchbay
-monoblok --port 4222 examples/json-massive/massive.edn
+# if you don't need the subject last value cache, save some cpu by turning it off
+monoblok --no-lvc examples/json-massive/massive.edn
 
 # terminal 2: start the producer
 node examples/json-massive/mock_producer.js
