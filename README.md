@@ -1,23 +1,30 @@
+<p align="center">
+  <img src="monoblok.png" alt="monoblok" width="480" style="border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.25);">
+</p>
+
 # monoblok
 
->monoblok is a broker that does that work once, before a message reaches subscribers. It sits between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber.
+monoblok is a broker that does that work once, before a message reaches subscribers. It sits between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber.
 
-The pattern: publishers PUB to monoblok instead of directly to NATS, using the exact same NATS client. No code changes. monoblok does the conditioning, then forwards to your real cluster. Subscribers get a stream that's already correct.
+### Why?
 
-Useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where the data moves fast but most of the movement isn't worth a downstream message.
+Useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where the data moves fast but most of the movement isn't worth a downstream message. 
 
-Under the hood it's a single small binary written in Zig, speaking the NATS wire protocol so any `nats` client works unchanged. The conditioning lives in a routing DSL called **patchbay** (round, deadband, squelch, moving-avg, rising/falling edges, OHLC bars), with last-value streams on `$LVC.*` for late subscribers. JSON frames like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and conditioned the same way. It's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-for) so the cleaned-up streams roll into your existing cluster. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
+The key pattern: publishers PUB to monoblok instead of directly to NATS, using the exact same NATS client. monoblok does the conditioning, then forwards to your real cluster. Subscribers get a stream that's already correct.
+
+It's a single small binary written in Zig, speaking the NATS wire protocol so any `nats` client works unchanged. The conditioning lives in a routing DSL called **patchbay** (round, deadband, squelch, moving-avg, rising/falling edges, OHLC bars), with last-value streams on `$LVC.*` for late subscribers. JSON frames like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and conditioned the same way. 
+
+It's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-for) so the cleaned-up streams effortlessly into your existing cluster. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
 ## Try it out with no install
 
-A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats (tiny server, shared, no rate limiting, don't send secrets).
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats.
 
 ## Install on your hardware
 
 Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Each platform ships two `.tar.gz` archives: the default (includes the [outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the target box) and a `-nobridge` variant with no external runtime dependencies.
 
-
-Pick the latest tag from the releases page and substitute it for `VERSION` below (e.g. `v0.0.24`).
+Pick the latest tag from the releases page and substitute it for `VERSION` below (e.g. `v0.0.26`).
 
 **macOS (Apple Silicon):**
 
@@ -26,7 +33,10 @@ VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-macos-aarch64.tar.gz"
 tar -xzf "monoblok-${VERSION}-macos-aarch64.tar.gz"
 sudo install "monoblok-${VERSION}-macos-aarch64/monoblok" /usr/local/bin/monoblok
-brew install openssl@3       # only needed for the bridge build; skip if you grabbed the -nobridge tarball
+
+# only needed for the bridge build; skip if you grabbed the -nobridge tarball
+brew install openssl@3
+
 monoblok --port 4222 --patchbay "monoblok-${VERSION}-macos-aarch64/patchbay.edn"
 ```
 
@@ -38,7 +48,10 @@ VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-linux-x86_64.tar.gz"
 tar -xzf "monoblok-${VERSION}-linux-x86_64.tar.gz"
 sudo install "monoblok-${VERSION}-linux-x86_64/monoblok" /usr/local/bin/monoblok
-sudo apt install libssl-dev pkg-config   # only needed for the bridge build; skip if you grabbed the -nobridge tarball
+
+# only needed for the bridge build; skip if you grabbed the -nobridge tarball
+sudo apt install libssl-dev pkg-config
+
 monoblok --port 4222 --patchbay "monoblok-${VERSION}-linux-x86_64/patchbay.edn"
 ```
 
@@ -50,8 +63,7 @@ nats sub 'sensors.*'
 nats pub sensors.temp 42.5
 ```
 
-For more, see next section.
-If you don't want OpenSSL on the box at all, grab the `-nobridge` tarball (e.g. `monoblok-${VERSION}-linux-x86_64-nobridge.tar.gz`) and skip the dependency-install step.
+> If you don't want OpenSSL on the box at all, grab the `-nobridge` tarball (e.g. `monoblok-${VERSION}-linux-x86_64-nobridge.tar.gz`) and skip the dependency-install step.
 
 ### Running as a systemd service on Linux
 
@@ -63,11 +75,11 @@ sudo systemctl enable --now monoblok
 journalctl -u monoblok -f
 ```
 
-The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, creates a `monoblok` system user, and registers the unit. Snapshots live under `/var/lib/monoblok/state.mblk` (created by systemd's `StateDirectory=`, owned by the service user) and are written every 10 seconds, plus once on `systemctl stop`. stdout/stderr land in the systemd journal (`journalctl -u monoblok`), so log rotation, structured fields, and `--since`/`--until` filtering are free.
+The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, creates a `monoblok` system user, and registers the unit. Snapshots live under `/var/lib/monoblok/state.mblk` (created by systemd's `StateDirectory=`, owned by the service user) and are written every 10 seconds, plus once on `systemctl stop`. stdout/stderr land in the systemd journal (`journalctl -u monoblok`). Edit the unit file to suit.
 
 ## Driving the demo patchbay
 
-The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the server, then in another shell subscribe so you can watch the derived traffic show up:
+Once up and running, the shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the server, then in another shell subscribe so you can watch the derived traffic show up:
 
 ```
 nats sub 'sensors.>'       # in one shell
@@ -107,7 +119,7 @@ nats sub 'events.>'        # in another (for the alert rule)
 
 Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
 
-## What is signal conditioning?
+## So, what is signal conditioning?
 
 Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate but annoying to work with; you want "22.0, and tell me when it actually changes."
 
