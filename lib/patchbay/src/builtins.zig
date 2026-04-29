@@ -257,22 +257,6 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
     return .nil;
 }
 
-// --- Trace plumbing -----------------------------------------------------
-
-/// Record an emission for trace output. No-op when not tracing. Strings are
-/// expected to live in `ctx.arena` so they remain valid until the per-message
-/// arena reset.
-///
-/// FIXME: not happy with this, every side-effecting op has to remember to
-/// call this, which is exactly the kind of tight coupling a tracer should
-/// avoid. The cleaner shape is to wrap `ctx.publisher` for the duration of
-/// `run` so the spy lives in one place and ops stay oblivious. Left inline
-/// for now to keep the diff small.
-fn recordTraceEmit(ctx: *Context, subject: []const u8, payload: []const u8) void {
-    if (!ctx.trace) return;
-    ctx.trace_emissions.append(ctx.arena, .{ .subject = subject, .payload = payload }) catch {};
-}
-
 // --- Side-effecting publish ops -----------------------------------------
 
 fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
@@ -280,10 +264,7 @@ fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     const subj = try state.asString(args[0]);
     const payload = try state.asString(args[1]);
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
-    ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
-    ctx.rule_publishes += 1;
-    if (ctx.current_rule) |r| r.publishes_emitted += 1;
-    recordTraceEmit(ctx, subj, payload);
+    try ctx.emit(subj, payload);
     return .nil;
 }
 
@@ -298,10 +279,7 @@ fn callPublishTo(ctx: *Context, args: []const Value) EvalError!Value {
     const subj = try state.asString(args[0]);
     const payload = try coercePayload(ctx.arena, args[1]);
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
-    ctx.publisher.publish(subj, payload) catch return error.PublishFailed;
-    ctx.rule_publishes += 1;
-    if (ctx.current_rule) |r| r.publishes_emitted += 1;
-    recordTraceEmit(ctx, subj, payload);
+    try ctx.emit(subj, payload);
     return .nil;
 }
 
@@ -728,10 +706,7 @@ fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
         const subj = try std.fmt.allocPrint(ctx.arena, "{s}.bar.{s}", .{ ctx.subject, f.name });
         const out = try std.fmt.allocPrint(ctx.arena, "{d}", .{f.val});
         subject_mod.validatePublish(subj) catch return error.InvalidSubject;
-        ctx.publisher.publish(subj, out) catch return error.PublishFailed;
-        ctx.rule_publishes += 1;
-        rule.publishes_emitted += 1;
-        recordTraceEmit(ctx, subj, out);
+        try ctx.emit(subj, out);
     }
     bar.count = 0;
     return .nil;
@@ -766,10 +741,7 @@ fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
     const subj = try std.fmt.allocPrint(ctx.arena, "{s}.count", .{ctx.subject});
     const out = try std.fmt.allocPrint(ctx.arena, "{d}", .{next});
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
-    ctx.publisher.publish(subj, out) catch return error.PublishFailed;
-    ctx.rule_publishes += 1;
-    rule.publishes_emitted += 1;
-    recordTraceEmit(ctx, subj, out);
+    try ctx.emit(subj, out);
     return .nil;
 }
 
@@ -810,10 +782,7 @@ fn callJsonDemux(ctx: *Context, args: []const Value) EvalError!Value {
         const subj = try std.fmt.allocPrint(ctx.arena, "{s}.{s}", .{ ctx.subject, key });
         const out = try coercePayload(ctx.arena, v);
         subject_mod.validatePublish(subj) catch return error.InvalidSubject;
-        ctx.publisher.publish(subj, out) catch return error.PublishFailed;
-        ctx.rule_publishes += 1;
-        if (ctx.current_rule) |r| r.publishes_emitted += 1;
-        recordTraceEmit(ctx, subj, out);
+        try ctx.emit(subj, out);
     }
     return .nil;
 }
