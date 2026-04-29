@@ -17,7 +17,7 @@ This end-to-end example with two pieces:
   external connection, no API key; it generates frames locally and
   publishes straight into monoblok over the NATS protocol. Subjects are
   shaped `<ev>.<symbol-or-pair>` and the JSON payloads match the
-  documented field sets at [www.massive.com](https://www.massive.com). **AI was used to create the test harness as an illustration.**
+  documented field sets at [www.massive.com](https://www.massive.com). **AI was used to create the test harness as an illustration.** In reality, you might develop a simple websocket, MQTT, mcast or whatever client to source and land the raw data, depending on your setup.
 - [massive.edn](./massive.edn), patchbay that demuxes the JSON frames into
   per-field scalar streams and runs a couple of downstream rules on
   them (rounded mirror, big-move alerts).
