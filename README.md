@@ -1,10 +1,4 @@
-<p align="center">
-  <img src="monoblok.png" alt="monoblok" width="480" style="border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.25);">
-</p>
-
 # monoblok
-
-Every team I've worked on has written the same subscriber, usually three or four times, usually subtly differently each time: read a messy stream, clean it up, republish it. Data can move quickly but the speed doesn't always carry value, most of it is noise.
 
 >monoblok is a broker that does that work once, before a message reaches subscribers. It sits between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber.
 
