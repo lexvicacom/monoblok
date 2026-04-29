@@ -11,22 +11,15 @@ const sexpr = @import("sexpr.zig");
 
 pub const Value = sexpr.Value;
 
-/// A compiled rule: a subject filter, a body to evaluate when the filter
-/// matches an incoming publish, and a per-subject state table used by
-/// stateful primitives (`squelch`, `deadband`).
+/// A compiled rule: filter + body + per-subject state table.
 pub const Rule = struct {
     filter: []const u8,
     body: Value,
-    /// Per-subject memory for stateful primitives. Keyed by the concrete
-    /// incoming subject; value is the last payload observed (or the last
-    /// value of whatever expression the stateful op was called on).
-    /// Keys and stored payloads are owned by `gpa` and freed in `deinit`.
+    /// Per-(rule, subject, op) state for stateful primitives. Keys and
+    /// stored payloads are owned by `gpa`.
     state: std.StringHashMapUnmanaged(StateEntry) = .empty,
 
-    /// Cumulative totals since server start. Exposed via `$STATS.rules.<i>.*`.
-    /// `emitted` bumps on each successful `publish` / `publish-to` from this
-    /// rule; `suppressed` bumps whenever a gate (`squelch`, `deadband`,
-    /// `changed?`, `rising-edge`, `falling-edge`) returns nil.
+    /// Cumulative totals, exposed via `$STATS.rules.<i>.*`.
     publishes_emitted: u64 = 0,
     publishes_suppressed: u64 = 0,
 
@@ -40,11 +33,8 @@ pub const Rule = struct {
     }
 };
 
-/// Stored last-seen value for a (rule, subject) pair. Stateful ops store
-/// whatever shape they need: a byte buffer (for `squelch`), a number
-/// (for `deadband`'s anchor), or a ring of numeric samples (for the
-/// `moving-*` family). Buffers are reused in place across messages,
-/// clear + appendSlice instead of free + dupe.
+/// Stored value for a state slot. Buffers are reused in place across
+/// messages (clear + appendSlice, not free + dupe).
 pub const StateEntry = union(enum) {
     empty,
     bytes: std.ArrayList(u8),
@@ -61,12 +51,9 @@ pub const StateEntry = union(enum) {
     }
 };
 
-/// Open / high / low bookkeeping for an in-progress OHLC bar. `close` is
-/// always the most recent sample so we don't need to store it; instead we
-/// fire the bar at the moment the Nth sample arrives. `cap` is the bar
-/// width N captured at first call so it survives a snapshot reload even if
-/// the new patchbay's literal `N` differs (we trust the saved bar over the
-/// patchbay text).
+/// In-progress OHLC bar. `close` is the latest sample, so the bar fires
+/// when the Nth sample arrives. `cap` is captured at first call so reload
+/// keeps the saved bar even if the patchbay's literal `N` changed.
 pub const Ohlc = struct {
     open: f64,
     high: f64,
@@ -75,22 +62,17 @@ pub const Ohlc = struct {
     cap: u32,
 };
 
-/// Fixed-capacity ring of f64 samples with a running sum and monotonic
-/// deques for O(1)-amortized max/min. The deques hold indices into the
-/// ring (index is a monotonically increasing logical counter, not a
-/// buffer offset, modular math happens at read time).
-///
-/// Window size is fixed at first use per (rule, subject, op) slot. It's
-/// a usage error to call different `moving-N` sizes on the same slot;
-/// we just trust the first allocation.
+/// Fixed-capacity ring of f64 samples with running sum and monotonic
+/// deques for O(1)-amortised max/min. Deque entries are logical counter
+/// values, not buffer offsets; modular math happens at read time. Window
+/// size is fixed at first use; differing `moving-N` on the same slot
+/// trusts the first allocation.
 pub const Ring = struct {
     buf: []f64,
-    /// Total samples pushed ever. `len = min(counter, cap)`. Positions
-    /// live at `buf[counter % cap]` on write.
+    /// Total samples pushed; positions live at `buf[counter % cap]`.
     counter: u64 = 0,
     sum: f64 = 0,
-    /// Indices (as `counter` values, not buffer offsets) of candidates
-    /// still in the window, front holds the running max / min.
+    /// Front holds the running max / min as a logical counter index.
     max_deque: std.ArrayList(u64) = .empty,
     min_deque: std.ArrayList(u64) = .empty,
 
@@ -109,8 +91,7 @@ pub const Ring = struct {
         return if (self.counter < cap) @intCast(self.counter) else cap;
     }
 
-    /// Push `x`. Evicts the oldest sample if the ring was full, updates
-    /// sum and both monotonic deques.
+    /// Push `x`, evicting the oldest sample if the ring is full.
     pub fn push(self: *Ring, gpa: Allocator, x: f64) !void {
         const cap = self.buf.len;
         const idx = self.counter;
@@ -179,9 +160,8 @@ pub fn encodeForState(arena: Allocator, v: Value) StateError![]const u8 {
     };
 }
 
-/// Build a state-table key `"op:subject"` in the per-message arena. Every
-/// stateful op namespaces its keys by op name so distinct ops on the same
-/// subject cannot alias each other's state slot.
+/// Build a state-table key `"op:subject"` so distinct ops on the same
+/// subject don't alias each other's slot.
 pub fn stateKey(arena: Allocator, op_name: []const u8, subject: []const u8) Allocator.Error![]const u8 {
     return std.fmt.allocPrint(arena, "{s}:{s}", .{ op_name, subject });
 }
@@ -191,11 +171,8 @@ pub const StateSlot = struct {
     found_existing: bool,
 };
 
-/// Look up (or create) a state slot. On insert the key is dup'd into `gpa`
-/// before calling `getOrPut`, so the map never holds a pointer into the
-/// caller's per-message arena (avoids a UAF if a later alloc fails between
-/// `getOrPut` and an overwrite, and makes map iteration safe across the
-/// next arena reset).
+/// Look up or create a state slot. Key is dup'd into `gpa` on insert so
+/// the map never holds an arena-owned pointer.
 pub fn getOrPutStateSlot(gpa: Allocator, rule: *Rule, key: []const u8) Allocator.Error!StateSlot {
     const gop = try rule.state.getOrPutAdapted(gpa, key, std.hash_map.StringContext{});
     if (gop.found_existing) {
@@ -207,10 +184,8 @@ pub fn getOrPutStateSlot(gpa: Allocator, rule: *Rule, key: []const u8) Allocator
     return .{ .value_ptr = gop.value_ptr, .found_existing = false };
 }
 
-/// Look up (or create) a bytes-typed state slot. Returns true iff the slot
-/// was absent or differed from `encoded`, and updates it to `encoded` in
-/// either case. The backing ArrayList is reused across messages
-/// (clear + appendSlice, not free + dupe).
+/// Look up or create a bytes-typed state slot. Returns true iff the slot
+/// was absent or differed from `encoded`; updates it in either case.
 pub fn stateEqualsOrStore(
     gpa: Allocator,
     rule: *Rule,

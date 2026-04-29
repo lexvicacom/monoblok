@@ -478,21 +478,23 @@ const Conn = struct {
         const gpa = self.server.gpa;
         var cursor: usize = 0;
         while (cursor < self.rx.items.len) {
-            const result = proto.parseClientOp(self.rx.items[cursor..]) catch |err| {
-                const err_msg: []const u8 = switch (err) {
-                    error.NeedMoreData => break,
-                    error.UnknownOp => "Unknown Protocol Operation",
-                    error.InvalidArgs, error.MalformedOp => "Invalid Operation",
-                    error.ControlLineTooLong, error.PayloadTooLarge => {
-                        try proto.writeErr(gpa, &self.router_conn.out, "Protocol Violation");
-                        self.closing = true;
-                        break;
-                    },
-                };
-                try proto.writeErr(gpa, &self.router_conn.out, err_msg);
-                const nl = std.mem.indexOfScalar(u8, self.rx.items[cursor..], '\n') orelse break;
-                cursor += nl + 1;
-                continue;
+            const result = proto.parseClientOp(self.rx.items[cursor..]) catch |err| switch (err) {
+                error.NeedMoreData => break,
+                error.ControlLineTooLong, error.PayloadTooLarge => {
+                    try proto.writeErr(gpa, &self.router_conn.out, "Protocol Violation");
+                    self.closing = true;
+                    break;
+                },
+                error.UnknownOp, error.InvalidArgs, error.MalformedOp => {
+                    const msg: []const u8 = if (err == error.UnknownOp)
+                        "Unknown Protocol Operation"
+                    else
+                        "Invalid Operation";
+                    try proto.writeErr(gpa, &self.router_conn.out, msg);
+                    const nl = std.mem.indexOfScalar(u8, self.rx.items[cursor..], '\n') orelse break;
+                    cursor += nl + 1;
+                    continue;
+                },
             };
 
             try self.handleOp(result.op);
@@ -569,7 +571,7 @@ const Conn = struct {
 
                 if (ctx.rule_publishes >= rule_publish_warn_threshold) {
                     std.log.warn(
-                        "patchbay amplification: subject={s} generated {d} publishes",
+                        "patchbay amplification: subject={s} exploded into {d} publishes",
                         .{ subject, ctx.rule_publishes },
                     );
                 }

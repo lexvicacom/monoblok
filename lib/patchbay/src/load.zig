@@ -33,9 +33,7 @@ pub fn loadRulesReporting(arena: Allocator, source: []const u8, parse_err_offset
         if (f != .list) return error.InvalidRuleForm;
         const items = f.list;
         if (items.len < 2 or items[0] != .symbol) return error.UnknownTopLevel;
-        // Other modules own their own top-level forms (e.g. `bridge`). Skip
-        // anything we don't recognize as a rule, the other loader will
-        // claim it and raise its own error if malformed.
+        // Other modules claim their own top-level forms (e.g. `bridge`).
         if (!std.mem.eql(u8, items[0].symbol, "on")) continue;
         if (items.len != 3 or items[1] != .string) return error.InvalidRuleForm;
         try subject_mod.validateFilter(items[1].string);
@@ -57,19 +55,10 @@ pub const ValidateFailure = struct {
     err: anyerror,
 };
 
-/// Form-lints `rules` by firing one synthetic publish per rule against a
-/// no-op publisher. Catches typo'd ops, arity bugs, and type errors on any
-/// branch the synthetic input flows into. Branches gated off by the input
-/// (e.g. behind a `(when ...)` that the synthetic value doesn't satisfy)
-/// stay dark.
-///
-/// Synthetic subject: rule's filter with `*` and a trailing `>` replaced
-/// by `"x"`. Synthetic payload: `"1"` (parses as a float for `payload-float`).
-///
-/// Caller-owned: `arena` holds returned failure strings; `gpa` owns any
-/// per-rule state the exercise allocates (cleared via `deinitRules` later
-/// or carried into the live ruleset). Exercising mutates `rule.state`, so
-/// only call this on rules you'll either discard or reset.
+/// Fire one synthetic publish per rule against a no-op publisher. Catches
+/// typos, arity bugs, and type errors on any branch the synthetic input
+/// reaches; input-gated branches stay dark. Synthetic subject = filter
+/// with `*`/`>` replaced by `"x"`; payload = `"1"`. Mutates `rule.state`.
 pub fn validate(
     arena: Allocator,
     gpa: Allocator,
@@ -96,8 +85,7 @@ pub fn validate(
             .arena = msg_arena_state.allocator(),
             .gpa = gpa,
         };
-        // Run only this rule by passing a single-element slice. Filter is
-        // guaranteed to match because `subj` was synthesized from it.
+        // Single-element slice; `subj` was synthesised from this rule's filter.
         const single = rules[i .. i + 1];
         eval.run(single, &ctx) catch |err| {
             try failures.append(arena, .{
@@ -133,9 +121,7 @@ fn synthSubjectFor(arena: Allocator, filter: []const u8) Allocator.Error![]const
     return out.toOwnedSlice(arena);
 }
 
-/// Returns true if `filter` contains no `*` or `>` token. Such filters can
-/// be looked up by direct string equality against an inbound subject, the
-/// foundation of `RuleSet`'s literal-subject dispatch table.
+/// True if `filter` has no `*`/`>` token (eligible for literal dispatch).
 pub fn isLiteralFilter(filter: []const u8) bool {
     var it = std.mem.splitScalar(u8, filter, '.');
     while (it.next()) |tok| {

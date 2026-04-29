@@ -6,7 +6,7 @@ pub const Value = union(enum) {
     boolean: bool,
     number: f64,
     symbol: []const u8,
-    keyword: []const u8, // EDN-style :foo — used in config forms like (bridge :servers [...])
+    keyword: []const u8, // EDN-style :foo (used in config forms like (bridge :servers [...]))
     string: []const u8,
     list: []const Value,
 
@@ -87,12 +87,8 @@ const Parser = struct {
         while (true) {
             p.skipWhitespaceAndComments();
             if (p.pos >= p.src.len) {
-                // Leave p.pos at EOF so the diagnostic points to the end of
-                // the file, where the missing ')' belongs. Pointing at the
-                // unclosed '(' is misleading for multi-line forms (see the
-                // 4-line (on ...) form in patchbay.edn): the user reads the
-                // caret as "this token is wrong" rather than "your file ends
-                // before this list closes."
+                // Diagnostic points at EOF, not the unclosed '('; the latter
+                // reads as "this token is wrong" for multi-line forms.
                 return error.UnexpectedEof;
             }
             if (p.src[p.pos] == ')') {
