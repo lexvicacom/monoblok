@@ -1,7 +1,7 @@
 # json-massive
 
 <p align="center">
-  <img src="massivemono.png" alt="json-massive" width="480">
+  <img src="massivemono.png" alt="json-massive">
 </p>
 
 High-frequency market data is a poster-case for monoblok: data moves
