@@ -369,9 +369,9 @@ The cap is one core's worth of throughput per instance, and the interesting ques
 
 ### Deploying
 
-Pick a 2-vCPU VM with 256 MB of RAM. monoblok runs on one core, the kernel net stack and io_uring workers use the other; a 1-vCPU box makes them fight over the same core (~1.6× slowdown, see [Benchmarks](#benchmarks)). More than two cores is wasted spend (the extras sit idle). Builds ship for `linux-aarch64` and `linux-x86_64`.
+Pick a 2-vCPU VM with at least 256 MB of RAM. monoblok runs on one core, the kernel net stack and io_uring workers will use the other; a 1-vCPU box makes them share the same core (~1.6× slowdown, see [Benchmarks](#benchmarks)). More than two cores is wasted spend (the extras sit idle). Deploy builds ship for `linux-aarch64` and `linux-x86_64`.
 
-Concretely: Hetzner CAX11 (2 vCPU Ampere Altra, about €5/mo) is the sweet spot, AWS `t4g.small` or `c7g.large` / `c8g.large` if you want Graviton, Oracle Ampere A1 free tier for kicking the tyres (only 1 vCPU, ideally 2). The CAX11 sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded.
+On the low end, a Hetzner CAX11 (2 vCPU Ampere Altra, about €5/mo) is the sweet spot, AWS `t4g.small` or `c7g.large` / `c8g.large` if you want Graviton, Oracle Ampere A1 free tier for kicking the tyres (only 1 vCPU, ideally 2). The CAX11 sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded.
 
 The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts: the unit restarts on failure, the snapshot reloads LVC values and gate/window state on startup, so a crash or reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically.
 
