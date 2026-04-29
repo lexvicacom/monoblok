@@ -1,14 +1,8 @@
-; Explode the synthetic Massive JSON frames into per-field scalar subjects,
-; so subscribers can treat each value as a normal stream. Re-entry (capped
-; at depth 8) makes the staged form work: the demux rule's emitted subjects
-; match the downstream rules below.
+; Demux Massive JSON frames into per-field scalar subjects. Re-entry (depth
+; cap 8) lets the downstream rules below match the demuxed subjects.
 ;
-; Note: Massive's delayed feeds already publish OHLC bars on the AM / XA /
-; CA channels (server-side aggregation). The patchbay here just demuxes
-; those frames into scalars; it deliberately doesn't recompute open / high
-; / low / close from raw trades. If you want bar-from-tick logic, see
-; examples/bars.edn (uses bar), that's the right tool when you only
-; have a trade stream and need bars yourself.
+; AM / XA / CA carry server-side OHLC bars, so we just demux them. For
+; bar-from-tick logic on a raw trade stream, see examples/bars.edn.
 
 ; --- Stocks ----------------------------------------------------------------
 
@@ -60,6 +54,10 @@
 ; Alert on big single-trade price jumps (>= 1.0 between consecutive ticks
 ; on the same symbol). delta is 0 on first sight so this stays quiet
 ; until we have a prior value.
+;
+; (subject-token 1) pulls the Nth dot-separated token from the matched
+; subject (0-indexed), so for "T.AAPL.p" it returns "AAPL". Used here
+; (and in the crypto/fx rules below) to build a per-symbol alert subject.
 (on "T.*.p"
   (when (>= (abs (delta payload-float)) 1.0)
     (publish

@@ -1,13 +1,29 @@
 # json-massive
 
-Synthetic NATS producer simulating a Massive-shape market data feed
-(stocks, options, crypto, forex), plus a patchbay that explodes the JSON
-frames into per-field scalar streams.
+<p align="center">
+  <img src="massivemono.png" alt="json-massive" width="480">
+</p>
 
-The producer publishes straight into a locally running monoblok / NATS
-server. Subjects are shaped `<ev>.<symbol-or-pair>` so each event class
-gets its own subtree, and the JSON payloads match the documented field
-sets at [www.massive.com](https://www.massive.com).
+High-frequency market data is a poster-case for monoblok: data moves
+fast, most of the movement isn't worth a downstream message, and every
+subscriber would otherwise re-implement the same rounding / dedupe /
+demux logic. This example shows the conditioning happening once, at the
+broker, in front of a synthetic Massive-shape feed.
+
+End-to-end example with two pieces:
+
+- **`mock_producer.js`**, synthetic NATS producer simulating a
+  Massive-shape market data feed (stocks, options, crypto, forex). No
+  external connection, no API key; it generates frames locally and
+  publishes straight into monoblok over the NATS protocol. Subjects are
+  shaped `<ev>.<symbol-or-pair>` and the JSON payloads match the
+  documented field sets at [www.massive.com](https://www.massive.com).
+- **`massive.edn`**, patchbay that demuxes the JSON frames into
+  per-field scalar streams and runs a couple of downstream rules on
+  them (rounded mirror, big-move alerts).
+
+You need both running: the producer feeds frames in, the patchbay
+reshapes them on the way through.
 
 **AI created this informational test harness as an illustration.**
 
