@@ -369,9 +369,9 @@ The cap is one core's worth of throughput per instance, and the interesting ques
 
 ### Deploying
 
-Pick a 2-vCPU VM with at least 256 MB of RAM. monoblok runs on one core, the kernel net stack and io_uring workers will use the other; a 1-vCPU box makes them share the same core (~1.6× slowdown, see [Benchmarks](#benchmarks)). More than two cores is wasted spend (the extras sit idle). Deploy builds ship for `linux-aarch64` and `linux-x86_64`.
+Pick a 2-vCPU VM with at least 256 MB of RAM. monoblok runs on one core, the kernel net stack and io_uring workers will use the other; a 1-vCPU box makes them share the same core, which costs throughput. More than two cores is wasted spend (the extras sit idle). Deploy builds ship for `linux-aarch64` and `linux-x86_64`.
 
-On the low end, a Hetzner CAX11 (2 vCPU Ampere Altra, about €5/mo) is the sweet spot, AWS `t4g.small` or `c7g.large` / `c8g.large` if you want Graviton, Oracle Ampere A1 free tier for kicking the tyres (only 1 vCPU, ideally 2). The CAX11 sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded.
+On the low end, a Hetzner CAX11 (2 vCPU Ampere Altra, about €5/mo) is the sweet spot, AWS `t4g.small` or `c7g.large` / `c8g.large` if you want Graviton, Oracle Ampere A1 free tier for kicking the tyres (only 1 vCPU, ideally 2).
 
 The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts: the unit restarts on failure, the snapshot reloads LVC values and gate/window state on startup, so a crash or reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically.
 
@@ -393,54 +393,37 @@ bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
 
 `nats-server` is a mature Go codebase doing a lot more than monoblok (accounting, metrics, slow-consumer detection, clustering, JetStream, TLS, auth). These numbers are informational, not a "faster than nats-server" claim. monoblok is benchmarked with an **empty patchbay**, so this is raw PUB/SUB + fan-out only; a real patchbay adds work per matching publish.
 
-Both columns are msgs/sec from `nats bench`, single run each. monoblok built `--release=safe`, vs `nats-server` v2.12.7.
+Numbers are msgs/sec from `nats bench`, single run each. monoblok built `--release=safe`, vs `nats-server` v2.12.7.
 
-`scripts/bench.sh` drives the numbers: it starts monoblok on `$NATS_URL` (default `127.0.0.1:4222`), runs the six `nats bench` workloads in the table below against it, stops it, then (if `nats-server` is on `PATH`) starts it on the same port and reruns the same workloads. Servers are benched sequentially, never concurrently. Pub workloads use `nats bench pub`, fan-out workloads spawn a `nats bench sub` with N clients and then a single publisher on the same subject. The script scrapes the `publisher stats` / `subscriber stats` line from each run and prints the msgs/sec table at the end.
+`scripts/bench-with-nats-server.sh` drives the numbers: it starts monoblok on `$NATS_URL` (default `127.0.0.1:4222`), runs the six `nats bench` workloads in the table below against it, stops it, then (if `nats-server` is on `PATH`) starts it on the same port and reruns the same workloads. Servers are benched sequentially, never concurrently, with a 5s cooldown between rows so back-to-back runs don't thermally throttle the host. Pub workloads use `nats bench pub`, fan-out workloads spawn a `nats bench sub` with N clients and then a single publisher on the same subject. The script scrapes the `publisher stats` / `subscriber stats` line from each run and prints the msgs/sec table at the end.
 
-**M4 Mac Mini** (10-core, 16 GB, macOS 26.2, kqueue) vs **Hetzner CAX11** (2-vCPU Ampere Altra Neoverse-N1, 4 GB, Ubuntu 24.04, io_uring):
+**MacBook Air M2** (8-core, 16 GB, macOS 15.6, kqueue):
 
-| workload            |    M4 monoblok |     M4 nats |   M4 Δ | CAX11 monoblok | CAX11 nats | CAX11 Δ |
-|---------------------|---------------:|------------:|-------:|---------------:|-----------:|--------:|
-| 1 pub × 500k × 64B  |       6.46M/s  |    7.14M/s  |    −9% |       2.35M/s  |   2.07M/s  |    +14% |
-| 2 pub × 10k × 64B   |       7.35M/s  |    5.97M/s  |   +23% |       1.50M/s  |   2.45M/s  |    −39% |
-| 8 pub × 50k × 128B  |      11.83M/s  |    8.17M/s  |   +45% |       1.96M/s  |   2.05M/s  |     −5% |
-| 1 pub → 1 sub       |       4.27M/s  |    3.93M/s  |    +9% |       0.62M/s  |   0.94M/s  |    −34% |
-| 1 pub → 10 subs     |      12.60M/s  |    4.95M/s  |  +155% |       2.11M/s  |   1.83M/s  |    +15% |
-| 1 pub → 50 subs     |      17.52M/s  |    4.82M/s  |  +264% |       2.38M/s  |   1.86M/s  |    +28% |
+| workload            |   monoblok |  nats-server |     Δ |
+|---------------------|-----------:|-------------:|------:|
+| 1 pub × 500k × 64B  |    8.52M/s |      8.91M/s |   −4% |
+| 2 pub × 10k × 64B   |    4.60M/s |      3.90M/s |  +18% |
+| 8 pub × 50k × 128B  |    5.32M/s |      4.47M/s |  +19% |
+| 1 pub → 1 sub       |    3.00M/s |      3.16M/s |   −5% |
+| 1 pub → 10 subs     |    8.67M/s |      4.03M/s | +115% |
+| 1 pub → 50 subs     |   11.18M/s |      2.97M/s | +276% |
 
-Fan-out is where monoblok pulls ahead on both platforms (the 1-sub workload is the standing exception, likely a low-concurrency bug). Multi-publisher wins on the M4 narrow on the CAX11, since a single-threaded loop can't scale past one core while nats-server spreads across both vCPUs. The Ampere Altra column is the more honest deployment-shape number, a single ARM core on a cheap VM, which is roughly what a real monoblok install looks like, and even there a single-threaded Zig loop holds its own against the multi-threaded Go server on most workloads. `--release=fast` adds ~10–15% on top. Take this all with a pinch of salt. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo :)**
-
-### Single core, but you still want at least two
-
-monoblok itself runs on a single core, so you might think a 1-vCPU box is the right shape. It mostly isn't. The kernel's network stack, io_uring's worker threads, and the bench client (or in production, whatever's connected over loopback) all want CPU too, and on a 1-vCPU box they timeshare with monoblok. A second vCPU lets the broker run flat-out on core 0 while everything-else-on-the-box uses core 1.
-
-Same Neoverse-N1 silicon, same patchbay, same workloads, run on Hetzner CAX11 (2 vCPU, ~€4/mo) vs Oracle A1 free tier (1 OCPU):
-
-| workload                |    CAX11 (2-core) | Oracle free (1-core) | speedup |
-|-------------------------|------------------:|---------------------:|--------:|
-| 1 pub × 1M × 64B        |          2.46M/s  |             1.53M/s  |   1.6×  |
-| 2 pub × 500k × 64B      |          3.01M/s  |             1.66M/s  |   1.8×  |
-| 8 pub × 200k × 128B     |          2.21M/s  |             1.45M/s  |   1.5×  |
-| 1 pub → 1 sub           |          0.59M/s  |             0.45M/s  |   1.3×  |
-| 1 pub → 10 subs         |          2.11M/s  |             1.17M/s  |   1.8×  |
-| 1 pub → 50 subs         |          2.37M/s  |             1.33M/s  |   1.8×  |
-
-Both boxes measure the same effective clock (~2.95 GHz) and ~0% steal, so it isn't clock and it isn't oversubscription, it's just that "1 vCPU" really does mean monoblok and the kernel net stack fight over the same core. The takeaway: pick the cheapest 2-vCPU plan your provider sells, not the cheapest 1-vCPU one.
+Fan-out is where monoblok pulls ahead hardest, but multi-publisher and pub-only rows hold their own too. The 1-sub row is the standing exception, likely a low-concurrency bug. `--release=fast` adds ~10–15% on top. Take this all with a pinch of salt. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo :)**
 
 ### Patchbay overhead
 
-Empty patchbay vs 1 rule vs 50 rules on the CAX11 (`bash scripts/bench.sh`):
+Empty patchbay vs 1 rule vs 50 rules on the same M2 (`bash scripts/bench.sh`):
 
-| workload                |    no patchbay |       1 rule | 50 rules |
-|-------------------------|---------------:|-------------:|---------:|
-| 1 pub × 1M × 64B        |       2.46M/s  |     2.40M/s  | 2.51M/s  |
-| 2 pub × 500k × 64B      |       3.01M/s  |     2.24M/s  | 2.22M/s  |
-| 8 pub × 200k × 128B     |       2.21M/s  |     1.81M/s  | 2.07M/s  |
-| 1 pub → 1 sub           |       0.59M/s  |     0.68M/s  | 0.63M/s  |
-| 1 pub → 10 subs         |       2.11M/s  |     2.07M/s  | 2.09M/s  |
-| 1 pub → 50 subs         |       2.37M/s  |     2.43M/s  | 2.40M/s  |
+| workload                |    no patchbay |       1 rule |   Δ |     50 rules |   Δ |
+|-------------------------|---------------:|-------------:|----:|-------------:|----:|
+| 1 pub × 1M × 64B        |        9.45M/s |      7.14M/s | −24% |      6.48M/s | −31% |
+| 2 pub × 500k × 64B      |        8.65M/s |      6.62M/s | −23% |      6.62M/s | −24% |
+| 8 pub × 200k × 128B     |        6.54M/s |      5.10M/s | −22% |      5.21M/s | −20% |
+| 1 pub → 1 sub           |        3.41M/s |      3.37M/s |  −1% |      3.03M/s | −11% |
+| 1 pub → 10 subs         |        8.13M/s |      8.71M/s |  +7% |      8.52M/s |  +5% |
+| 1 pub → 50 subs         |       11.62M/s |     10.55M/s |  −9% |     10.59M/s |  −9% |
 
-The cost scales with **matching rules per PUB**, not total rules in the file: 1 rule and 50 rules land in roughly the same place because the dispatch table only invokes the rules whose subject filter actually matches. The 2-publisher row is the worst case (~25% off) where every PUB matches a rule; fan-out workloads are at break-even because the bottleneck is the write side, not the rule. Real patchbays sit somewhere in between depending on what the rules actually do (a `contains?` is nothing like a `moving-avg` over a wide window).
+The cost scales with **matching rules per PUB**, not total rules in the file: 1 rule and 50 rules land in roughly the same place because the dispatch table only invokes the rules whose subject filter actually matches. Pub-heavy rows take the biggest hit (~20–30%) when every PUB matches a rule; fan-out workloads are closer to break-even because the bottleneck is the write side, not the rule. Real patchbays sit somewhere in between depending on what the rules actually do (a `contains?` is nothing like a `moving-avg` over a wide window).
 
 ## Building from source
 
