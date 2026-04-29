@@ -19,16 +19,10 @@ pub const Conn = struct {
     /// bytes that need to be written. Single-threaded, no locking needed.
     kick_ctx: ?*anyopaque = null,
     kick_fn: ?*const fn (ctx: *anyopaque) void = null,
-    /// Refcount for lifetime across fan-out. Starts at 1; fan-out does
-    /// not retain in the current single-threaded model (fan-out finishes
-    /// before the loop returns to the handler that might close the
-    /// conn), but `refs` is atomic so that a future sharded / worker
-    /// model can retain across thread boundaries without a refactor.
+    /// Refcount for lifetime across fan-out. Starts at 1.
     refs: std.atomic.Value(u32) = .init(1),
-    /// Set by the owning loop before `removeAllFor`; read by fan-out and
-    /// `writeMsg` to short-circuit work on a dying conn. Atomic so the
-    /// close signal is visible across threads if fan-out ever moves off
-    /// the loop thread.
+    /// Set before `removeAllFor`; checked by fan-out and `writeMsg` to
+    /// short-circuit work on a dying conn.
     closed: std.atomic.Value(bool) = .init(false),
     /// Largest `out.items.len` observed on this conn between drains. The
     /// server reads this after each PUB dispatch to detect slow-consumer
@@ -44,10 +38,7 @@ pub const Conn = struct {
     }
 
     pub fn release(c: *Conn) void {
-        // Release-before / acquire-on-last-drop pairs the writer's stores
-        // on the last release with the reader's dealloc — standard refcount
-        // fence idiom so non-atomic fields touched by other threads
-        // happen-before the `destroy`.
+        // Standard release-on-dec, acquire-on-last-drop refcount fence.
         if (c.refs.fetchSub(1, .release) == 1) {
             _ = c.refs.load(.acquire);
             c.out.deinit(c.gpa);
@@ -80,9 +71,8 @@ const Subscription = struct {
     conn: *Conn,
     sid: []u8,
     filter: []u8,
-    /// Match key for the dispatch table: `filter` for non-LVC subs,
-    /// `filter[lvc_prefix.len..]` for LVC subs. Owned by the same alloc as
-    /// `filter` (it's a slice into it), so don't free separately.
+    /// Slice into `filter` (non-LVC) or `filter[lvc_prefix.len..]` (LVC).
+    /// Don't free separately.
     match_filter: []const u8,
     tokens: [][]const u8,
     is_lvc: bool,
@@ -93,27 +83,18 @@ const Subscription = struct {
 
 pub const Router = struct {
     gpa: Allocator,
-    /// Literal-filter subs, keyed by `match_filter` (the inbound subject the
-    /// sub wants to see). Bucket value is a list of pointers into
-    /// heap-allocated `Subscription`s so growth doesn't invalidate identity.
-    /// Bucket keys are owned by the bucket's first subscriber's
-    /// `Subscription.match_filter`; rotated on remove if the owner leaves
-    /// while the bucket is non-empty.
+    /// Literal-filter subs, keyed by `match_filter`. Bucket owns its key
+    /// (duped on first insert, freed when the bucket goes empty).
     literal_subs: std.StringHashMapUnmanaged(LiteralBucket) = .empty,
-    /// Wildcard-filter subs (filters containing `*` or `>`). Linear scan
-    /// per publish — bounded by the wildcard sub count, not the total.
+    /// Wildcard-filter subs (`*` or `>`). Linear scan per publish.
     wildcard_subs: std.ArrayListUnmanaged(*Subscription) = .empty,
     lvc_enabled: bool,
     last_value: std.StringHashMap(std.ArrayList(u8)),
     /// Optional export hook (the NATS bridge). Called once per publish after
-    /// normal fan-out. The bridge decides internally whether the subject
-    /// matches any export filter; router doesn't care.
+    /// local fan-out; the bridge does its own subject-filter match.
     bridge_ctx: ?*anyopaque = null,
     bridge_fn: ?*const fn (ctx: *anyopaque, subject: []const u8, payload: []const u8) void = null,
 
-    /// One literal-filter dispatch bucket. `subs` is a list of pointers to
-    /// heap-allocated `Subscription`s; the hashmap key aliases into the
-    /// `match_filter` of one of them (rotated on remove if the owner leaves).
     pub const LiteralBucket = struct {
         subs: std.ArrayListUnmanaged(*Subscription) = .empty,
     };
@@ -194,9 +175,6 @@ pub const Router = struct {
         };
 
         if (is_literal) {
-            // The hashmap entry owns its key separately from any subscription,
-            // so subs in the bucket can come and go without dangling the key.
-            // When the bucket empties, both key and value go away in dropSub.
             const gop = try self.literal_subs.getOrPut(self.gpa, match_filter);
             if (!gop.found_existing) {
                 const key_owned = self.gpa.dupe(u8, match_filter) catch |err| {
@@ -214,8 +192,6 @@ pub const Router = struct {
                 return err;
             };
             errdefer {
-                // Roll back the append. If we created the bucket, drop it
-                // and free its owned key.
                 _ = gop.value_ptr.subs.pop();
                 if (!gop.found_existing) {
                     gop.value_ptr.subs.deinit(self.gpa);
@@ -253,10 +229,8 @@ pub const Router = struct {
         }
     }
 
-    /// Remove `sub` from its dispatch bucket (literal or wildcard) and free
-    /// it. Caller must already know which bucket the sub lives in via
-    /// `sub.is_literal`. Drops the literal bucket entry (and its owned key)
-    /// when it goes empty.
+    /// Remove `sub` from its dispatch bucket and free it. Drops the literal
+    /// bucket (and its owned key) when it goes empty.
     fn dropSub(self: *Router, sub: *Subscription) void {
         if (sub.is_literal) {
             if (self.literal_subs.getEntry(sub.match_filter)) |entry| {
@@ -288,9 +262,6 @@ pub const Router = struct {
     }
 
     pub fn unsubscribe(self: *Router, conn: *Conn, sid: []const u8, max_msgs: ?u64) !void {
-        // Walk both dispatch tables. Lifting `(conn, sid)` -> sub into its own
-        // index would skip this scan, but UNSUB is rare relative to PUB and
-        // the cost is per-conn, not per-PUB.
         try self.scanLiteralAndPrune(scanModeUnsub(conn, sid, max_msgs));
 
         var i: usize = 0;
@@ -315,9 +286,8 @@ pub const Router = struct {
     }
 
     pub fn removeAllFor(self: *Router, conn: *Conn) void {
-        // Errors only on scratch alloc; for removeAllFor we treat that as
-        // best-effort (the conn is going away anyway, leaving stale subs is
-        // worse than a partial cleanup).
+        // Best-effort: a scratch-alloc failure leaves stale subs, but the
+        // conn is going away anyway.
         self.scanLiteralAndPrune(scanModeRemoveAll(conn)) catch {};
 
         var i: usize = 0;
@@ -363,9 +333,8 @@ pub const Router = struct {
         return .{ .ctx = .{ .remove_all = .{ .conn = conn } } };
     }
 
-    /// Walk `literal_subs`, apply `mode` to each sub, drop any bucket that
-    /// goes empty (freeing its owned key). The two-phase approach (collect
-    /// empty bucket keys, then remove) avoids mutating the map mid-iteration.
+    /// Walk `literal_subs`, apply `mode`, drop empty buckets. Two-phase
+    /// (collect, then remove) so we don't mutate mid-iteration.
     fn scanLiteralAndPrune(self: *Router, mode: ScanMode) !void {
         var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena_state.deinit();
@@ -403,19 +372,13 @@ pub const Router = struct {
         }
     }
 
-    /// Fan-out a publish to matching subscribers. Single-threaded: we iterate
-    /// and append to each conn's outbound buffer directly, then kick each.
+    /// Fan-out a publish to matching subscribers.
     pub fn publish(self: *Router, subject: []const u8, payload: []const u8) !void {
-        // $STATS.* is excluded from the LVC: it's a periodic system stream
-        // (one burst every stats_tick_ms), caching it only bloats the cache
-        // and pins a snapshot that's stale the moment the next tick fires.
+        // $STATS.* is excluded from the LVC (tick-driven, stale by design).
         if (self.lvc_enabled and !std.mem.startsWith(u8, subject, stats_prefix)) {
             try self.storeLast(subject, payload);
         }
 
-        // Common case on pub-only workloads: no subscribers at all. Skip the
-        // arena/kicks/to_drop setup and the hashmap lookup entirely. Only
-        // the bridge hook (if configured) still needs to fire.
         const have_literal = self.literal_subs.count() != 0;
         const have_wildcard = self.wildcard_subs.items.len != 0;
         if (!have_literal and !have_wildcard) {
@@ -423,21 +386,15 @@ pub const Router = struct {
             return;
         }
 
-        // Scratch for the LVC-subject prefixing + the kicks list. Freed in
-        // one shot at end of fan-out.
         var scratch_state: std.heap.ArenaAllocator = .init(self.gpa);
         defer scratch_state.deinit();
         const scratch = scratch_state.allocator();
 
-        // Track which conns we appended to so we can kick them once each.
         var kicks: std.ArrayListUnmanaged(*Conn) = .empty;
-        // Subs that hit max_msgs or whose conn closed mid-fanout. Collected
-        // into a small stack-friendly list and removed after iteration so we
-        // don't mutate the bucket we're walking.
+        // Subs that hit max_msgs or whose conn closed mid-fanout. Removed
+        // after iteration so we don't mutate the bucket we're walking.
         var to_drop: std.ArrayListUnmanaged(*Subscription) = .empty;
 
-        // Literal path: O(1) bucket lookup, then iterate just the matching
-        // bucket. No per-sub token-walk; the bucket key already proved match.
         if (have_literal) {
             if (self.literal_subs.getPtr(subject)) |bucket| {
                 for (bucket.subs.items) |s| {
@@ -446,9 +403,6 @@ pub const Router = struct {
             }
         }
 
-        // Wildcard path: linear over wildcard subs only. Token-split the
-        // subject once (stack buffer); subs reuse their pre-split tokens
-        // from subscribe time.
         if (have_wildcard) {
             var sub_tokens_buf: [subject_mod.max_tokens][]const u8 = undefined;
             const sub_tokens = splitInto(subject, &sub_tokens_buf);
@@ -458,8 +412,6 @@ pub const Router = struct {
             }
         }
 
-        // Drop dead/exhausted subs after iteration so we don't perturb the
-        // collections we just walked.
         for (to_drop.items) |s| self.dropSub(s);
 
         // Dedup kicks: each conn kicked at most once per publish.
@@ -475,18 +427,14 @@ pub const Router = struct {
             last = c;
         }
 
-        // Bridge: export-side fan-out. Bridge filters are checked inside the
-        // hook; we call it once per publish regardless of what matched
-        // locally. Kept after local fan-out so a blocked remote can't
-        // starve local subscribers.
+        // Bridge fires after local fan-out so a blocked remote can't starve
+        // local subscribers.
         if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
     }
 
-    /// Per-sub delivery path shared by literal and wildcard fan-out. Appends
-    /// MSG bytes to the conn's outbound buffer, records a kick, and queues
-    /// the sub for removal if its conn closed or it hit max_msgs. Errors on
-    /// allocator failure for the kicks/to_drop scratch lists; per-sub
-    /// writeMsg failures are silently ignored (matches pre-split behavior).
+    /// Append MSG bytes to the conn's outbound buffer, record a kick, queue
+    /// the sub for removal on close / max_msgs. Per-sub writeMsg failures
+    /// are silently dropped.
     fn deliverOne(
         self: *Router,
         s: *Subscription,
@@ -514,9 +462,7 @@ pub const Router = struct {
         }
     }
 
-    /// Public wrapper for snapshot loaders. Same semantics as the internal
-    /// publish-path call; exposed so `snapshot.zig` can populate the cache
-    /// without duplicating the dup+append logic.
+    /// Public wrapper so `snapshot.zig` can populate the LVC at load time.
     pub fn storeLastPublic(self: *Router, subject: []const u8, payload: []const u8) !void {
         return self.storeLast(subject, payload);
     }
@@ -570,11 +516,6 @@ fn rulesPublish(ctx: *anyopaque, subj: []const u8, payload: []const u8) anyerror
 }
 
 // --- Tests --------------------------------------------------------------
-//
-// Direct router tests for the literal-bucket / wildcard split. The full
-// loop integration is covered by scripts/smoke.sh; these tests pin the
-// dispatch shape (right bucket, no leaks, max_msgs / removeAllFor across
-// both paths).
 
 const testing = std.testing;
 

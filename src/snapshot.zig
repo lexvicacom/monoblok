@@ -359,8 +359,8 @@ fn dupStateEntry(arena: Allocator, src: rules_mod.StateEntry) !rules_mod.StateEn
 
 /// Load a snapshot into `router`'s LVC and `rules[*].state`. Rule-state
 /// entries whose `rule_idx` is out of range or whose recorded `filter`
-/// doesn't match the current rule are skipped with a warning — the
-/// patchbay file changed since the snapshot was written.
+/// doesn't match the current rule are skipped with a warning (patchbay
+/// changed since the snapshot was written).
 pub fn loadInto(
     gpa: Allocator,
     bytes: []const u8,

@@ -2,8 +2,8 @@
 //
 // Not using @cImport(nats.h) because translate-c was flaky under Zig 0.16.0
 // when this was written (same issue zigxll-nats hit cross-compiling to MSVC).
-// Hand-writing the declarations for what we actually call is cheap — this is
-// a small outbound surface (connect, publish, close).
+// Hand-writing the declarations for what we actually call is cheap (small
+// outbound surface: connect, publish, close).
 
 pub const natsConnection = opaque {};
 pub const natsOptions = opaque {};

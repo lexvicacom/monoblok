@@ -33,7 +33,7 @@ pub const StartError = error{
     ConnectFailed,
 } || Allocator.Error;
 
-/// Parsed bridge config — owned by the caller's arena.
+/// Parsed bridge config (owned by the caller's arena).
 pub const Config = struct {
     servers: []const []const u8,
     name: ?[]const u8 = null,
