@@ -53,11 +53,7 @@ pub fn main(init: std.process.Init) !void {
     defer it.deinit();
     _ = it.skip();
     while (it.next()) |a| {
-        // Positional argument: a non-flag word is treated as the patchbay
-        // path. Lets `monoblok patchbay.edn` and `monoblok --validate
-        // patchbay.edn` work without the explicit `--patchbay` keyword.
-        // Only one positional is allowed; collisions with --patchbay are an
-        // error so a misspelled flag doesn't silently get adopted as a path.
+        // First non-flag word is the patchbay path. Only one allowed.
         if (a.len == 0 or a[0] != '-') {
             if (patchbay_path != null) fatal("patchbay path specified twice");
             patchbay_path = a;
@@ -111,9 +107,8 @@ pub fn main(init: std.process.Init) !void {
         break :blk &.{};
     };
     defer rules.deinitRules(loaded_rules, gpa);
-    // Form-lint every rule before we open a socket. A typo or arity bug in
-    // the patchbay would otherwise only surface on the first matching PUB,
-    // which is too late. `--validate` exits after this check.
+    // Form-lint every rule before opening a socket so arity bugs surface
+    // at startup, not on the first matching PUB.
     if (validate_only and patchbay_path == null) fatal("--validate requires a patchbay path");
     const failures = try rules.validate(arena, gpa, loaded_rules);
     if (failures.len > 0) {
@@ -144,9 +139,8 @@ pub fn main(init: std.process.Init) !void {
     var r = router.Router.init(gpa, lvc_enabled);
     defer r.deinit();
 
-    // Snapshot: optional LVC warm-start. If `--snapshot PATH` is given and
-    // the file exists, populate the cache before we accept any connections
-    // so the first `SUB $LVC.*` sees the restored state.
+    // Warm-start the LVC before accepting connections so the first
+    // `SUB $LVC.*` sees the restored state.
     if (snapshot_path) |sp| {
         if (!lvc_enabled) {
             std.log.warn("snapshot: --snapshot ignored because --no-lvc is set", .{});
@@ -166,8 +160,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Bridge: optional outbound NATS connection. Parsed from the patchbay
-    // file's top-level `(bridge :servers [...] :export [...] ...)` form.
+    // Bridge config comes from the top-level `(bridge ...)` form in the
+    // patchbay file.
     var bridge_runtime: if (build_options.bridge) ?bridge.Bridge else ?void = null;
     if (build_options.bridge) {
         if (patchbay_src) |src| {
@@ -192,13 +186,12 @@ pub fn main(init: std.process.Init) !void {
     }
     defer if (build_options.bridge) if (bridge_runtime) |*b| b.deinit();
 
-    // Process-wide random ID, regenerated per start. 16 upper-hex chars — a
-    // nod to nats-server's nuid without pulling in a nuid library.
+    // Process-wide random ID, 16 upper-hex chars (nats-server nuid-like).
     var id_bytes: [8]u8 = undefined;
     fsio.random(&id_bytes);
     var id_buf: [16]u8 = undefined;
     for (id_bytes, 0..) |b, j| {
-        _ = std.fmt.bufPrint(id_buf[j * 2 ..][0..2], "{X:0>2}", .{b}) catch unreachable;
+        _ = try std.fmt.bufPrint(id_buf[j * 2 ..][0..2], "{X:0>2}", .{b});
     }
     const server_id = try arena.dupe(u8, &id_buf);
 
@@ -231,20 +224,16 @@ pub fn main(init: std.process.Init) !void {
     defer srv.deinit();
     std.log.info("monoblok listening on {f} id={s}", .{ address, server_id });
 
-    // SIGINT / SIGTERM -> graceful shutdown with a final snapshot. The
-    // handler only touches the atomic server pointer and notifies the
-    // loop's xev.Async; all real work happens on the loop thread in
-    // onShutdown.
+    // SIGINT/SIGTERM: signal handler notifies an xev.Async; real work runs
+    // on the loop thread in onShutdown.
     shutdown_server_ptr.store(&srv, .release);
     installShutdownSignals();
 
     try loop.run(.until_done);
 }
 
-/// Published by the main thread before the signal handlers are installed,
-/// read by the signal handler (which may fire on any thread). Pointer
-/// stores on aligned memory are atomic on every real CPU, but using an
-/// explicit atomic keeps it portable-correct and documents intent.
+/// Set by main before installing signal handlers; read by the handler
+/// (which may fire on any thread).
 var shutdown_server_ptr: std.atomic.Value(?*server.Server) = .init(null);
 
 fn installShutdownSignals() void {
@@ -258,8 +247,7 @@ fn installShutdownSignals() void {
 }
 
 fn onSignalRequestShutdown(_: std.posix.SIG) callconv(.c) void {
-    // Async-signal-safe: notify() does a non-blocking write to an
-    // eventfd / mach port. No allocation, no locks, no stdio.
+    // Async-signal-safe: `notify()` is a non-blocking eventfd/mach write.
     if (shutdown_server_ptr.load(.acquire)) |srv| srv.requestShutdown();
 }
 
