@@ -74,8 +74,8 @@ stream and need to build bars locally, see `examples/bars.edn` (uses
 
 | Variable     | Default     | Description                                |
 |--------------|-------------|--------------------------------------------|
-| `NATS_HOST`  | `127.0.0.1` | NATS host to connect to                    |
-| `NATS_PORT`  | `4222`      | NATS port                                  |
+| `NATS_HOST`  | `127.0.0.1` | monoblok host to connect to                |
+| `NATS_PORT`  | `4222`      | monoblok port                              |
 | `RATE`       | `1`         | Scales every interval (2 = 2x faster)      |
 
 No npm dependencies; the producer talks the NATS protocol directly over
