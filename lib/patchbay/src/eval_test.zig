@@ -1101,7 +1101,7 @@ test "staged rules: demuxed subject re-enters and matches downstream" {
 
     // First rule demuxes a JSON frame into devices.<id>.temp.
     // Second rule consumes that demuxed subject and republishes a
-    // "stable" mirror — only reachable via re-entry.
+    // "stable" mirror, only reachable via re-entry.
     const rules = try loadRules(arena,
         \\(on "devices.*"
         \\  (json-demux "temp" payload))
