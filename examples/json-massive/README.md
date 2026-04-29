@@ -1,7 +1,7 @@
 # json-massive
 
 <p align="center">
-  <img src="massivemono.png" alt="json-massive">
+  <img src="../../docs/massivemono.png" alt="json-massive">
 </p>
 
 High-frequency market data is a poster-case for monoblok: data moves
@@ -40,7 +40,7 @@ nats sub '>'
 ```
 
 <p align="center">
-  <img src="sub.png" alt="nats sub raw stream">
+  <img src="../../docs/sub.png" alt="nats sub raw stream">
 </p>
 
 The raw stream makes the conditioning visible: raw `T.<SYM>` JSON frames
