@@ -70,7 +70,7 @@ open / high / low / close from raw trades. If you only have a trade
 stream and need to build bars locally, see `examples/bars.edn` (uses
 `bar`).
 
-## Env
+## mock_producer environment variables
 
 | Variable     | Default     | Description                                |
 |--------------|-------------|--------------------------------------------|
