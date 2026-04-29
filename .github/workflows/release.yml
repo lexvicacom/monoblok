@@ -58,8 +58,8 @@ jobs:
         with:
           files: dist/*.tar.gz
           draft: false
-          prerelease: false
-          generate_release_notes: true
+          prerelease: true
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -102,8 +102,8 @@ jobs:
         with:
           files: dist/*.tar.gz
           draft: false
-          prerelease: false
-          generate_release_notes: true
+          prerelease: true
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -146,7 +146,7 @@ jobs:
         with:
           files: dist/*.tar.gz
           draft: false
-          prerelease: false
-          generate_release_notes: true
+          prerelease: true
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
