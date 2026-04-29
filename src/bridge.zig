@@ -242,15 +242,14 @@ pub const Bridge = struct {
 
         var opts: ?*nats.natsOptions = null;
         if (nats.natsOptions_Create(&opts) != nats.NATS_OK) return error.OptsCreateFailed;
-        errdefer nats.natsOptions_Destroy(opts);
+        defer nats.natsOptions_Destroy(opts);
 
         try self.applyOpts(opts.?);
 
         if (nats.natsConnection_Connect(&self.nc, opts) != nats.NATS_OK) {
-            nats.natsOptions_Destroy(opts);
+            self.nc = null;
             return error.ConnectFailed;
         }
-        nats.natsOptions_Destroy(opts);
     }
 
     fn zdup(self: *Bridge, s: []const u8) ![:0]u8 {
