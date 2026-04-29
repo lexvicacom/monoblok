@@ -19,9 +19,7 @@ const load = @import("load.zig");
 
 pub const Value = sexpr.Value;
 
-// Re-exports: keep the public surface identical to pre-split eval.zig so
-// every consumer (server, router, snapshot, main) continues to reach types
-// through `patchbay.eval.*`.
+// Public surface; consumers reach types through `patchbay.eval.*`.
 pub const Rule = state.Rule;
 pub const StateEntry = state.StateEntry;
 pub const Ohlc = state.Ohlc;
@@ -58,67 +56,39 @@ pub const Context = struct {
     subject: []const u8,
     payload: []const u8,
     publisher: Publisher,
-    /// Per-message scratch; caller owns an arena that is reset between messages.
+    /// Per-message scratch; reset between messages by the caller.
     arena: Allocator,
-    /// Long-lived allocator for per-rule state (e.g. `squelch` keeps the
-    /// last-seen payload across messages). Distinct from `arena`, which is
-    /// reset between messages.
+    /// Long-lived allocator for per-rule state.
     gpa: Allocator,
-    /// Set by `run` before each rule body executes so stateful primitives
-    /// know which rule's state table to read/write.
+    /// Set by `run` before each rule body executes.
     current_rule: ?*Rule = null,
-    /// Count of publishes the patchbay generated for this one inbound PUB.
-    /// Incremented by `callPublish` / `callPublishTo`. Read by the server
-    /// after `run()` returns to detect rule-amplification blow-ups.
+    /// Publishes generated for this inbound PUB. Read by the server to
+    /// detect rule-amplification blow-ups.
     rule_publishes: u32 = 0,
-    /// Ingress wall-clock in milliseconds, stamped once by the server per
-    /// inbound PUB so every op in this evaluation sees a consistent "now".
-    /// Used by time-based gates like `hold-off`. Defaults to 0 so
-    /// router-internal `run()` paths (e.g. no time-gated rules) don't need
-    /// to care; tests inject a value directly.
+    /// Ingress wall-clock (ms), stamped once per PUB. Used by `hold-off`.
     now_ms: i64 = 0,
-    /// `--trace` mode. When true, `run` switches to the traced eval path
-    /// (`evalTraced`) which prints each form, its result, and elapsed
-    /// time to stderr. Branched once per `run` (top of the function), not
-    /// per node, via `eval_fn` below.
+    /// `--trace`: switches `run` to the traced eval path.
     trace: bool = false,
-    /// Indirect-dispatch slot for the evaluator. `run` picks `evalNormal`
-    /// or `evalTraced` based on `trace` and writes it here once. All
-    /// recursive eval calls go through `ctx.eval_fn(...)` so the choice
-    /// propagates without each form having to branch.
+    /// Indirect-dispatch slot picked by `run`; all recursive eval goes
+    /// through `ctx.eval_fn(...)` so trace propagates without per-node branches.
     eval_fn: *const fn (ctx: *Context, v: Value) EvalError!Value = evalNormal,
-    /// Indent level for trace output (one level per recursive eval). Reset
-    /// by `run` per rule body.
     trace_depth: u8 = 0,
-    /// Recorded emissions for trace output. Each side-effecting op (publish,
-    /// publish-to, count, json-demux, bar) appends `(subject, payload)`
-    /// here when `trace` is on, so `evalTraced` can show what was actually
-    /// published instead of the bare `nil` those ops return. Strings live in
-    /// `arena`. Only populated under trace; left at .empty otherwise.
+    /// Side-effecting ops append here under trace so `evalTraced` can show
+    /// what was published instead of the bare nil those ops return.
     trace_emissions: std.ArrayListUnmanaged(TraceEmit) = .empty,
-    /// Re-entry depth. 0 for the top-level inbound PUB; bumped each time a
-    /// patchbay-emitted publish re-enters rule evaluation. Capped by
-    /// `max_depth` so a rule that publishes back into its own filter can't
-    /// loop forever. The host (server) sets `reentry_fn` to enable
-    /// re-entry; tests leave it null and behave as before.
+    /// Re-entry depth. Capped by `max_depth` so a rule that publishes back
+    /// into its own filter can't loop forever.
     depth: u8 = 0,
     max_depth: u8 = 8,
-    /// Optional re-entry hook + opaque ctx. When set, every patchbay-emitted
-    /// publish (after fan-out) calls this with the parent context plus the
-    /// new subject/payload so downstream rules can react to it. Null in
-    /// tests / contexts without a RuleSet. The hook owns building the child
-    /// Context (with `depth: parent.depth + 1`) and dispatching rule
-    /// evaluation; this layer stays free of `RuleSet` knowledge.
+    /// Optional re-entry hook. When set, every patchbay-emitted publish
+    /// invokes this so downstream rules can react. The hook owns building
+    /// the child Context with `depth + 1`.
     reentry_ctx: ?*anyopaque = null,
     reentry_fn: ?*const fn (reentry_ctx: ?*anyopaque, parent: *Context, subject: []const u8, payload: []const u8) anyerror!void = null,
 
-    /// Single emission point used by every side-effecting op (publish,
-    /// publish-to, count, json-demux, bar). Does fan-out via the
-    /// publisher, bumps the per-PUB and per-rule counters, records a trace
-    /// entry, and (if a re-entry hook is installed and we're under the
-    /// depth cap) invokes the hook so patchbay-emitted subjects can match
-    /// downstream rules. The depth check lives here so it covers all five
-    /// emission ops uniformly.
+    /// Single emission point used by every side-effecting op. Bumps
+    /// counters, records the trace entry, and (under the depth cap)
+    /// invokes the re-entry hook.
     pub fn emit(ctx: *Context, subject: []const u8, payload: []const u8) EvalError!void {
         ctx.publisher.publish(subject, payload) catch return error.PublishFailed;
         ctx.rule_publishes += 1;
@@ -142,34 +112,22 @@ pub const TraceEmit = struct {
     payload: []const u8,
 };
 
-/// `[]Rule` plus a dispatch index. Built once at load time, then queried
-/// per inbound PUB. The index lets us skip the linear scan over every
-/// rule's filter for the common case of literal-subject filters; only
-/// wildcard filters still need the per-PUB scan.
-///
-/// Indices in both maps point into `rules` by position. The arena that
-/// owns `rules` also owns the index slices.
+/// `[]Rule` plus a dispatch index built at load time. Literal-filter rules
+/// hit a hashmap; wildcard rules still need the per-PUB linear scan.
 pub const RuleSet = struct {
     rules: []Rule,
-    /// Filter string → indices of rules with that exact literal filter.
-    /// Multiple rules can share a filter; we keep insertion order so
-    /// behavior matches the old linear scan.
+    /// Filter string -> rule indices. Insertion order preserved.
     literal_index: std.StringHashMapUnmanaged([]const u32) = .empty,
-    /// Indices (into `rules`) of rules whose filter contains a wildcard.
-    /// Scanned linearly per PUB. Empty for fully-literal patchbays.
+    /// Indices of rules with wildcard filters; scanned linearly per PUB.
     wildcard_indices: []const u32 = &.{},
 
     pub fn empty() RuleSet {
         return .{ .rules = &.{} };
     }
 
-    /// Run all matching rules for `ctx.subject`. Literal-filter rules are
-    /// found via the index; wildcard rules are scanned linearly. Match
-    /// order is: literal hits first (in original patchbay order), then
-    /// wildcard hits (also in original order). For a fully-literal
-    /// patchbay this is the same order as the legacy linear scan; if you
-    /// mix the two, a wildcard rule defined before a literal one will
-    /// fire after it. Worth knowing if you depend on rule ordering.
+    /// Run matching rules for `ctx.subject`. Order: literal hits first
+    /// (patchbay order), then wildcard hits (patchbay order). Mixing the
+    /// two means a wildcard rule defined before a literal one fires after.
     pub fn run(self: *const RuleSet, ctx: *Context) !void {
         if (self.rules.len == 0) return;
         ctx.eval_fn = if (ctx.trace) evalTraced else evalNormal;
@@ -196,16 +154,12 @@ pub const RuleSet = struct {
     }
 };
 
-/// Build a `RuleSet` from an already-loaded `[]Rule`. The arena allocates
-/// the index entries; it must outlive the `RuleSet` (same lifetime as
-/// `rules` itself, in practice).
+/// Build a `RuleSet` from `[]Rule`. Index entries live in `arena`, which
+/// must outlive the RuleSet (same lifetime as `rules`).
 pub fn buildRuleSet(arena: Allocator, rules: []Rule) Allocator.Error!RuleSet {
     var rs: RuleSet = .{ .rules = rules };
     if (rules.len == 0) return rs;
 
-    // First pass: bucket indices into per-filter lists for literals, and
-    // flat list for wildcards. Use a scratch map of ArrayLists keyed by
-    // filter string; flatten into `[]const u32` slices in the arena after.
     var lit_buckets: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u32)) = .empty;
     var wild: std.ArrayListUnmanaged(u32) = .empty;
     defer {
@@ -253,9 +207,7 @@ fn runOne(rules: []Rule, i: u32, ctx: *Context) !void {
 
 pub fn run(rules: []Rule, ctx: *Context) !void {
     ctx.eval_fn = if (ctx.trace) evalTraced else evalNormal;
-    // The per-message arena is reset between PUBs by the server, which frees
-    // any prior backing storage for `trace_emissions`. Reset the list so we
-    // don't carry over a stale capacity pointer into freed memory.
+    // Reset; the per-message arena was wiped between PUBs.
     ctx.trace_emissions = .empty;
     if (ctx.trace) {
         std.debug.print("trace: {s} {s}\n", .{ ctx.subject, ctx.payload });
@@ -294,18 +246,11 @@ fn evalNormal(ctx: *Context, v: Value) EvalError!Value {
     };
 }
 
-/// Trace wrapper: prints each list-form (call) with its result and elapsed
-/// time. Atoms and bare symbols pass straight through to `evalNormal`,
-/// timing them would add noise without insight.
-///
-/// Side-effecting ops (publish, publish-to, count, json-demux, bar) all
-/// return `nil`. To distinguish "I emitted something" from "I was suppressed",
-/// we snapshot `ctx.trace_emissions.items.len` before recursing; any new
-/// entries belong to this form's subtree. If the form added emissions AND
-/// returned nil, we print `=> published "subj" payload` instead of the bare
-/// `=> nil`. We only consume the leaf-level emission (the parent of a `(->)`
-/// chain shows aggregate timing only); we leave the full list in place so
-/// outer forms aren't fooled into re-printing the same emissions.
+/// Trace wrapper. Atoms pass through to `evalNormal`; list-forms get
+/// printed with their result and elapsed time. We snapshot
+/// `trace_emissions.items.len` before recursing so leaf emitters can show
+/// `=> published ...` instead of bare `nil`; wrappers leave the slice in
+/// place so outer forms don't re-print emissions.
 fn evalTraced(ctx: *Context, v: Value) EvalError!Value {
     if (v != .list or v.list.len == 0) return evalNormal(ctx, v);
 
@@ -346,12 +291,8 @@ fn evalTraced(ctx: *Context, v: Value) EvalError!Value {
     return result;
 }
 
-/// Best-effort hint for why a form returned `nil`. Static dispatch on the
-/// head symbol, doesn't know the actual reason (e.g. `rising-edge` returns
-/// nil for both "first sight" and "stayed false"), just gives a generic gloss
-/// so readers don't have to remember each op's suppression semantics. Returns
-/// null for forms whose nil is unremarkable (atoms, unknown ops, wrappers
-/// that already showed their children).
+/// Generic gloss for why a form returned nil; doesn't know the actual
+/// reason. Returns null for unremarkable nils.
 fn suppressionHint(v: Value) ?[]const u8 {
     if (v != .list or v.list.len == 0) return null;
     if (v.list[0] != .symbol) return null;
@@ -375,11 +316,9 @@ fn suppressionHint(v: Value) ?[]const u8 {
     return null;
 }
 
-/// True for the side-effecting ops that publish their own subjects (and
-/// therefore record emissions). Wrapper forms like `->`, `do`, `when`, `if`
-/// also return nil and may have emissions in their subtree, but their
-/// children already printed the `published ...` line, so we keep the wrapper
-/// at `=> nil` to show timing without duplicating the emission line.
+/// True for ops that publish their own subjects. Wrappers (`->`, `do`,
+/// `when`, `if`) stay at `=> nil` so their children's emission lines aren't
+/// duplicated.
 fn isLeafEmitter(v: Value) bool {
     if (v != .list or v.list.len == 0) return false;
     if (v.list[0] != .symbol) return false;
@@ -396,11 +335,8 @@ fn indentTrace(depth: u8) void {
     while (i < depth) : (i += 1) std.debug.print("  ", .{});
 }
 
-/// CLOCK_MONOTONIC in nanoseconds. Used only on the trace path; we go
-/// straight to `posix.system.clock_gettime` because `std.time.Timer`
-/// doesn't exist in Zig 0.16 and the `std.Io` clock API requires an
-/// `Io` instance we don't carry through `Context`. Identical syscall to
-/// what xev's loop uses internally.
+/// CLOCK_MONOTONIC in ns. Direct syscall: `std.time.Timer` is gone in
+/// 0.16 and `std.Io`'s clock needs an `Io` we don't carry on `Context`.
 fn monotonicNs() u64 {
     var ts: std.posix.timespec = undefined;
     _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
@@ -409,10 +345,8 @@ fn monotonicNs() u64 {
     return sec *| std.time.ns_per_s +| nsec;
 }
 
-/// Returns a pretty elapsed-time string ("180ns", "12µs", "3ms"). The
-/// returned slice points into `tls_ns_buf` and is invalidated by the next
-/// call from this thread; trace output is single-threaded (loop thread)
-/// so the buffer reuse is safe.
+/// Pretty elapsed-time string. Returned slice aliases `tls_ns_buf` and is
+/// invalidated by the next call from this thread.
 threadlocal var tls_ns_buf: [32]u8 = undefined;
 fn formatNs(ns: u64) []const u8 {
     if (ns < 1_000) return std.fmt.bufPrint(&tls_ns_buf, "{d}ns", .{ns}) catch "?";
@@ -421,10 +355,7 @@ fn formatNs(ns: u64) []const u8 {
     return std.fmt.bufPrint(&tls_ns_buf, "{d}s", .{ns / 1_000_000_000}) catch "?";
 }
 
-/// Print a Value back in its source-level shape. Used only by the trace
-/// path; not a general pretty-printer (no escape handling on strings, no
-/// keyword support, since trace input is rule bodies and rule bodies
-/// don't contain keywords).
+/// Print a Value in source-level shape (trace-only, no escape handling).
 fn formatValue(v: Value) void {
     switch (v) {
         .nil => std.debug.print("nil", .{}),

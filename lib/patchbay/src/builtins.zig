@@ -1,13 +1,5 @@
-//! Built-in operators for the patchbay DSL: arithmetic, comparisons, gates
-//! (`squelch`, `deadband`, `hold-off`, edge detectors), windowed aggregates
-//! (`moving-*`), JSON ops, OHLC bars, the `count` accumulator, the
-//! threading macro `->`, and the special forms `if` / `when` / `and` / `or`
-//! / `do` / `transition`.
-//!
-//! The single dispatch entry point is `evalCall`; `eval.evalNormal` delegates
-//! to it for any list-form. Stateful ops read and write through the
-//! `state.zig` slot helpers, so this module never touches the rule's state
-//! map directly.
+//! Built-in operators for the patchbay DSL. Single dispatch entry is
+//! `evalCall`; stateful ops go through `state.zig`'s slot helpers.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -106,9 +98,7 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
 
     const tag = op_map.get(op) orelse return error.UnknownSymbol;
 
-    // Most calls have <= 8 args (publish, gates, arithmetic). Stack-back the
-    // evaluated-args slice for that range and only fall through to the arena
-    // for the rare wide form (json-demux, str-concat, do, etc.).
+    // <= 8 args is the common case; arena fallback for wide forms.
     var stack_buf: [8]Value = undefined;
     const evaled = if (args.len <= stack_buf.len)
         stack_buf[0..args.len]
@@ -203,12 +193,8 @@ fn evalDo(ctx: *Context, args: []const Value) EvalError!Value {
     return last;
 }
 
-/// `(-> X f1 f2 ...)`, thread X through each form as its LAST argument.
-/// A bare symbol `f` is treated as the call `(f)`, so
-/// `(-> payload-float (round 3) (squelch))` expands to
-/// `(squelch (round 3 payload-float))`. Last-arg threading fits this
-/// dialect: `round`, `moving-avg`, `deadband`, `publish-to` all take the
-/// value as their final argument.
+/// `(-> X f1 f2 ...)` threads X as the LAST argument of each form. A bare
+/// symbol `f` is treated as `(f)`.
 fn evalThread(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len == 0) return error.ArityMismatch;
     var acc = try ctx.eval_fn(ctx, args[0]);
@@ -221,22 +207,15 @@ fn evalThread(ctx: *Context, args: []const Value) EvalError!Value {
         if (call_items.len == 0 or call_items[0] != .symbol) return error.TypeMismatch;
         const rebuilt = try ctx.arena.alloc(Value, call_items.len + 1);
         @memcpy(rebuilt[0..call_items.len], call_items);
-        // Append the already-evaluated threaded value as the last arg.
-        // Safe because eval() on .nil/.boolean/.number/.string is identity,
-        // and prior evals never yield a .symbol.
         rebuilt[call_items.len] = acc;
         acc = try ctx.eval_fn(ctx, .{ .list = rebuilt });
     }
     return acc;
 }
 
-/// `(transition BOOL RISING-BRANCH FALLING-BRANCH)`, one boolean edge
-/// detector that dispatches both directions. Evaluates BOOL, compares to
-/// the prior value stored per (rule, subject), and evaluates exactly one
-/// branch: RISING-BRANCH on false→true, FALLING-BRANCH on true→false.
-/// Returns nil (and leaves both branches unevaluated) on first sight or
-/// no-change. State key is distinct from rising-edge/falling-edge so the
-/// three can coexist without aliasing.
+/// `(transition BOOL RISING-BRANCH FALLING-BRANCH)`. Evaluates one branch
+/// on the matching edge; nil on first sight or no-change. Distinct state
+/// key from rising-edge/falling-edge.
 fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 3) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -268,11 +247,8 @@ fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     return .nil;
 }
 
-/// `(publish-to SUBJECT VALUE)`, publish with args flipped so it slots
-/// into a `->` pipeline: `(-> x (publish-to "foo"))` publishes x to foo.
-/// Numbers are formatted canonically; strings pass through. If VALUE is
-/// nil (a suppressed gate upstream), this is a no-op, that's what makes
-/// `(-> ... (squelch) ... (publish-to ...))` read top-to-bottom.
+/// `(publish-to SUBJECT VALUE)`. Args flipped so it threads through `->`.
+/// No-op on nil VALUE (suppressed upstream gate).
 fn callPublishTo(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     if (args[1] == .nil) return .nil;
@@ -324,7 +300,6 @@ fn callContains(args: []const Value) EvalError!Value {
 
 const AffixKind = enum { starts, ends };
 
-/// `(starts-with? HAY NEEDLE)` / `(ends-with? HAY NEEDLE)`, mirror `contains?`.
 fn callStartsEnds(args: []const Value, kind: AffixKind) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const hay = try state.asString(args[0]);
@@ -335,9 +310,7 @@ fn callStartsEnds(args: []const Value, kind: AffixKind) EvalError!Value {
     } };
 }
 
-/// `(subject-token N)` / `(subject-token N S)` returns the Nth
-/// dot-separated token (0-indexed) of the current subject, or of an
-/// explicit string. Returns nil if N is out of range.
+/// `(subject-token N)` / `(subject-token N S)`. 0-indexed; nil if out of range.
 fn callSubjectToken(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len < 1 or args.len > 2) return error.ArityMismatch;
     const n_f = try state.asNumber(args[0]);
@@ -411,7 +384,7 @@ fn callArith(args: []const Value, op: Arith) EvalError!Value {
 
 // --- Numeric transforms -------------------------------------------------
 
-/// `(round N X)`, round X to N decimal places. Returns a number.
+/// `(round N X)`, X rounded to N decimal places.
 fn callRound(args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const decimals = try state.asNumber(args[0]);
@@ -421,8 +394,7 @@ fn callRound(args: []const Value) EvalError!Value {
     return .{ .number = @round(x * scale) / scale };
 }
 
-/// `(quantize STEP X)`, snap X to the nearest multiple of STEP. Useful
-/// when you want 0.5-degree buckets, 100-ms buckets, etc.
+/// `(quantize STEP X)`, X snapped to the nearest multiple of STEP.
 fn callQuantize(args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const step = try state.asNumber(args[0]);
@@ -431,8 +403,7 @@ fn callQuantize(args: []const Value) EvalError!Value {
     return .{ .number = @round(x / step) * step };
 }
 
-/// `(clamp LO HI X)`, clip X to the inclusive range [LO, HI]. Value
-/// last so it threads: `(-> payload-float (clamp 0 100))`.
+/// `(clamp LO HI X)`, X clipped to [LO, HI]. Value-last for threading.
 fn callClamp(args: []const Value) EvalError!Value {
     if (args.len != 3) return error.ArityMismatch;
     const lo = try state.asNumber(args[0]);
@@ -444,7 +415,6 @@ fn callClamp(args: []const Value) EvalError!Value {
 
 const MinMaxKind = enum { min, max };
 
-/// `(min A B ...)` / `(max A B ...)`, variadic over numbers; at least one arg.
 fn callMinMax(args: []const Value, kind: MinMaxKind) EvalError!Value {
     if (args.len == 0) return error.ArityMismatch;
     var acc = try state.asNumber(args[0]);
@@ -463,7 +433,6 @@ fn callAbs(args: []const Value) EvalError!Value {
     return .{ .number = @abs(try state.asNumber(args[0])) };
 }
 
-/// `(sign X)`, returns -1, 0, or 1.
 fn callSign(args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const x = try state.asNumber(args[0]);
@@ -472,11 +441,8 @@ fn callSign(args: []const Value) EvalError!Value {
 
 // --- Stateful gates -----------------------------------------------------
 
-/// `(squelch X)`, passes X through iff it differs from the last X seen
-/// on this subject by this rule, otherwise returns nil. On first sight
-/// for a subject, passes. Truthy-on-pass / falsy-on-suppress means it
-/// still works as a gate in `when` / `and`, and threads cleanly through
-/// `->` into a downstream sink.
+/// `(squelch X)`. Passes X through iff it differs from the last X seen.
+/// First sight passes. Returns nil on suppress.
 fn callSquelch(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -487,10 +453,8 @@ fn callSquelch(ctx: *Context, args: []const Value) EvalError!Value {
     return if (changed) args[0] else .nil;
 }
 
-/// `(deadband DELTA X)`, passes X through iff it differs from the last
-/// accepted X on this subject by at least DELTA, otherwise nil. Classic
-/// analog-sensor gate: suppresses noise smaller than DELTA. Truthy-
-/// on-pass keeps it composable with both `when` and `->`.
+/// `(deadband DELTA X)`. Passes X through iff it differs from the last
+/// accepted X by >= DELTA. Suppresses sub-DELTA noise.
 fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -513,11 +477,7 @@ fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
     return .{ .number = x };
 }
 
-/// `(changed? X)`, boolean predicate: true iff X differs from the last
-/// X seen on this subject by this rule. First sight returns true. Unlike
-/// `squelch` (returns value-or-nil), this returns a boolean so it
-/// composes cleanly inside `if` / `and` / `or`. Keyed per (rule, subject)
-/// with a distinct prefix so it doesn't collide with `squelch`.
+/// `(changed? X)`. Boolean version of `squelch`; first sight returns true.
 fn callChanged(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -528,10 +488,7 @@ fn callChanged(ctx: *Context, args: []const Value) EvalError!Value {
     return .{ .boolean = changed };
 }
 
-/// `(delta X)`, numeric difference between X and the last X seen on
-/// this (rule, subject). First sight returns 0. Stored as a number in
-/// the existing state union. Keyed per (rule, subject) with a distinct
-/// prefix so it doesn't collide with `deadband`.
+/// `(delta X)`. X minus the last X. First sight returns 0.
 fn callDelta(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -547,12 +504,9 @@ fn callDelta(ctx: *Context, args: []const Value) EvalError!Value {
     return .{ .number = x - last };
 }
 
-/// `(hold-off MS X)` (radar term: after firing, ignore further triggers
-/// for MS milliseconds). Passes X through on first sight and on any
-/// subsequent call that arrives at least MS ms after the previous pass;
-/// returns nil otherwise. Time source is `ctx.now_ms`, stamped once per
-/// ingress by the server, so every op in one evaluation sees the same
-/// "now". Per (rule, subject). Composes with `->` the same as `squelch`.
+/// `(hold-off MS X)`. Passes X on first sight and on any call arriving
+/// >= MS ms after the previous pass; nil otherwise. Time source is
+/// `ctx.now_ms` (stamped once per ingress).
 fn callHoldOff(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -577,11 +531,8 @@ fn callHoldOff(ctx: *Context, args: []const Value) EvalError!Value {
 
 const EdgeKind = enum { rising, falling };
 
-/// `(rising-edge X)` / `(falling-edge X)`, returns X on the matching
-/// boolean transition, nil otherwise. First sight returns nil (no prior
-/// state means no edge). Keyed per (rule, op, subject) so two rising-edge
-/// gates on the same subject don't share state. Stored as a number (0/1)
-/// in the existing state union, no new variant needed.
+/// `(rising-edge X)` / `(falling-edge X)`. X on the matching boolean
+/// transition, nil otherwise; first sight is nil.
 fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -612,12 +563,9 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
 
 const MovingKind = enum { avg, sum, max, min };
 
-/// `(moving-avg N X)` / `moving-sum` / `moving-max` / `moving-min`,
-/// push numeric X into an N-wide ring (per rule+subject+op) and return
-/// the corresponding aggregate over the current window. The ring is
-/// allocated on first sight per slot; `N` must be a positive literal
-/// (well, any number ≥ 1; we round down). First call returns the
-/// aggregate over just the first sample.
+/// `(moving-{avg,sum,max,min} N X)`. Push X into an N-wide ring and
+/// return the aggregate over the current window. Ring allocates on first
+/// sight; first call's aggregate is over just that one sample.
 fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -650,19 +598,9 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
 
 // --- OHLC bars ----------------------------------------------------------
 
-/// `(bar N PAYLOAD)`. Side-effecting tick-count bar accumulator. Each
-/// call adds one sample. Every Nth call closes a bar and publishes four
-/// sub-subjects under `<current-subject>.bar`:
-///
-///   .open   first sample of the bar
-///   .high   max sample seen in the bar
-///   .low    min sample seen in the bar
-///   .close  this Nth sample (the one that closed the bar)
-///
-/// State is per (rule, subject). Returns nil so it composes with `do` /
-/// `->` without polluting downstream values. Bar-in-progress state
-/// survives a snapshot reload; if the new patchbay's literal `N` differs
-/// from the saved `cap`, the saved `cap` wins until that bar closes.
+/// `(bar N PAYLOAD)`. Tick-count bar accumulator; every Nth call closes a
+/// bar and publishes `<subject>.bar.{open,high,low,close}`. Returns nil.
+/// In-progress bar survives snapshot reload (saved `cap` wins until close).
 fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -714,14 +652,9 @@ fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
 
 // --- Counters -----------------------------------------------------------
 
-/// `(count)` or `(count COND)`. Side-effecting running counter, per
-/// (rule, subject). With no args, increments on every call. With one arg,
-/// increments only when COND is truthy (any value type, same `isTruthy`
-/// rules as `if` / `when`). Each increment publishes the new total to
-/// `<subject>.count`. Returns nil so it slots into a `do` block or sits at
-/// the tail of a `->` pipeline without disturbing the threaded value:
-/// `(-> payload-float (count) (round 1) (publish-to ...))`. State is a
-/// plain `.number` so it round-trips through snapshots for free.
+/// `(count)` / `(count COND)`. Running counter; with COND, increments
+/// only when truthy. Each increment publishes the new total to
+/// `<subject>.count`. Returns nil.
 fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len > 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
@@ -747,12 +680,8 @@ fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
 
 // --- JSON ops -----------------------------------------------------------
 
-/// `(json-get KEY PAYLOAD)`. Top-level object lookup only. Returns the field
-/// as a number, string, or boolean (matching the JSON type), or nil if the
-/// payload isn't a JSON object, the key is missing, or the value is null /
-/// nested (object or array). No JSON path: keys are matched as exact strings,
-/// dots in keys are not special. Value-last so it threads:
-/// `(-> payload (json-get "temp") (round 1) (publish-to ...))`.
+/// `(json-get KEY PAYLOAD)`. Top-level object lookup; returns number /
+/// string / bool, or nil for missing / null / nested.
 fn callJsonGet(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const key = try state.asString(args[0]);
@@ -763,12 +692,8 @@ fn callJsonGet(ctx: *Context, args: []const Value) EvalError!Value {
     };
 }
 
-/// `(json-demux KEY ... PAYLOAD)`. Side-effecting demux: for each KEY found
-/// in the top-level JSON object, publishes its value to
-/// `<current-subject>.<key>`. Skips missing keys, null values, and nested
-/// objects/arrays silently. Returns nil. Value-last so it can sit at the end
-/// of a pipeline if needed, though typically it's the whole body:
-/// `(json-demux "temp" "hum" payload)`.
+/// `(json-demux KEY ... PAYLOAD)`. For each KEY in the top-level object,
+/// publishes its value to `<subject>.<key>`. Skips missing / null / nested.
 fn callJsonDemux(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len < 2) return error.ArityMismatch;
     const payload = try state.asString(args[args.len - 1]);
@@ -789,11 +714,8 @@ fn callJsonDemux(ctx: *Context, args: []const Value) EvalError!Value {
 
 const JsonLookupError = error{ Malformed, NotObject, KeyMissing, NestedValue } || Allocator.Error;
 
-/// Find KEY in a top-level JSON object payload and return its value as a
-/// rule Value (number / string / boolean / nil-for-null). Returns an error
-/// for missing keys, malformed payloads, non-object payloads, or values
-/// that are nested objects/arrays. Backed by `std.json.Scanner` so escape
-/// handling, number validation, and \uXXXX are someone else's problem.
+/// Find KEY in a top-level JSON object. Errors on malformed / non-object /
+/// nested values. Backed by `std.json.Scanner`.
 fn jsonLookup(arena: Allocator, payload: []const u8, key: []const u8) JsonLookupError!Value {
     var scanner = std.json.Scanner.initCompleteInput(arena, payload);
     defer scanner.deinit();
