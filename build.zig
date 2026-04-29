@@ -107,6 +107,13 @@ fn addNatsC(b: *std.Build, mod: *std.Build.Module) void {
         // asprintf stays hidden. macOS libc exposes asprintf unconditionally,
         // which is why this only breaks the Linux build.
         "-D_GNU_SOURCE",
+        // glib_dispatch_pool.c:_growPool does memcpy(dst, NULL, 0) on its
+        // first growth (pool->dispatchers is NULL, pool->cap is 0). C
+        // formally calls this UB, and on linux-arm64 with FORTIFY enabled
+        // glibc's __memcpy_chk traps on the NULL src even though size is 0.
+        // x86_64 happens not to trap. Disable FORTIFY for the nats.c TU.
+        "-U_FORTIFY_SOURCE",
+        "-D_FORTIFY_SOURCE=0",
         "-DNATS_STATIC",
         "-DNATS_HAS_TLS",
         "-Wno-deprecated-declarations",

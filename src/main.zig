@@ -179,13 +179,14 @@ pub fn main(init: std.process.Init) !void {
                 const cfg_ptr = try arena.create(bridge.Config);
                 cfg_ptr.* = cfg_val;
                 bridge_runtime = bridge.Bridge.init(gpa, cfg_ptr);
-                bridge_runtime.?.start() catch |err| {
-                    std.log.warn("bridge: start failed: {s}", .{@errorName(err)});
-                };
-                const bref: *bridge.Bridge = &bridge_runtime.?;
-                r.bridge_ctx = bref;
-                r.bridge_fn = bridgePublishTrampoline;
-                std.log.info("bridge: connected ({d} export filter(s), {d} server(s))", .{ cfg_ptr.exports.len, cfg_ptr.servers.len });
+                if (bridge_runtime.?.start()) |_| {
+                    const bref: *bridge.Bridge = &bridge_runtime.?;
+                    r.bridge_ctx = bref;
+                    r.bridge_fn = bridgePublishTrampoline;
+                    std.log.info("bridge: connected ({d} export filter(s), {d} server(s))", .{ cfg_ptr.exports.len, cfg_ptr.servers.len });
+                } else |err| {
+                    std.log.warn("bridge: start failed: {s} (forwarding disabled)", .{@errorName(err)});
+                }
             }
         }
     }
