@@ -4,7 +4,7 @@
 
 # monoblok
 
-monoblok is a broker that does that work once, before a message reaches subscribers. It can between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. Subscribers can connect also connect directly. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber. It speaks enough of the NATS core protocol so that existing clients are supported for `PUB` and `SUB`.
+monoblok is a broker that processes messages in-flight, before they reach subscribers. It can sit between publishers and a real message broker to condition messages in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. Subscribers can connect also connect directly. The cleanup logic is configured once, instead of being re-implemented in every subscriber. monoblok speaks enough of the NATS core protocol so that existing clients are supported for `PUB` and `SUB`.
 
 ### Key pattern
 
