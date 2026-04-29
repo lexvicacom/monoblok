@@ -1,13 +1,7 @@
 # monoblok public demo
 
 A shared monoblok instance for poking at patchbay rules without
-running your own server. Loaded from [`examples/demo.edn`](./examples/demo.edn).
-
-```
-Server:  nats://monoblok.rtd.pub:4222
-Auth:    none
-TLS:     no
-```
+running your own server. Loaded from [`examples/demo.edn`](../examples/demo.edn).
 
 **Shared, public, no auth.** Anyone can publish, anyone can
 subscribe to anything. Don't send secrets. Don't rely on `$LVC`
@@ -37,9 +31,9 @@ Now `nats pub` and `nats sub` go to the demo server by default.
 nats sub 'demo.>'
 
 # In another: drive some input.
-nats pub demo.sensors.temp 25.3
-nats pub demo.sensors.temp 25.34
-nats pub demo.sensors.temp 25.38
+nats pubdemo.sensors.temp 25.3
+nats pubdemo.sensors.temp 25.34
+nats pubdemo.sensors.temp 25.38
 ```
 
 Subject names starting with `$` (like `$LVC.*`) need single-quoting
@@ -117,57 +111,71 @@ plain ASCII numbers.
 ### Squelch (value dedup)
 
 ```
-pub demo.sensors.temp 42.01   # -> .stable emits "42.0"
-pub demo.sensors.temp 42.04   # -> rounds to 42.0, same, suppressed
-pub demo.sensors.temp 42.08   # -> rounds to 42.1, emits
-pub demo.sensors.temp 42.12   # -> rounds to 42.1, suppressed
+nats pubdemo.sensors.temp 42.01   # -> .stable emits "42.0"
+nats pubdemo.sensors.temp 42.04   # -> rounds to 42.0, same, suppressed
+nats pubdemo.sensors.temp 42.08   # -> rounds to 42.1, emits
+nats pubdemo.sensors.temp 42.12   # -> rounds to 42.1, suppressed
 ```
 
 ### Hold-off (time dedup)
 
 ```
-pub demo.sensors.temp 45      # -> .overload emits (first sight)
-pub demo.sensors.temp 46      # -> within 2s, suppressed
-pub demo.sensors.temp 47      # -> still within 2s, suppressed
+nats pubdemo.sensors.temp 45      # -> .overload emits (first sight)
+nats pubdemo.sensors.temp 46      # -> within 2s, suppressed
+nats pubdemo.sensors.temp 47      # -> still within 2s, suppressed
 # wait 2s
-pub demo.sensors.temp 48      # -> .overload emits
+nats pubdemo.sensors.temp 48      # -> .overload emits
 ```
 
 ### Transition (both edges, one rule)
 
 ```
-pub demo.sensors.temp 20      # first sight, no edge
-pub demo.sensors.temp 30      # crossed 28 -> .alert "hot"
-pub demo.sensors.temp 31      # still above, nothing
-pub demo.sensors.temp 25      # crossed back -> .ok "cool"
+nats pubdemo.sensors.temp 20      # first sight, no edge
+nats pubdemo.sensors.temp 30      # crossed 28 -> .alert "hot"
+nats pubdemo.sensors.temp 31      # still above, nothing
+nats pubdemo.sensors.temp 25      # crossed back -> .ok "cool"
 ```
 
 ### Counting threshold crossings
 
 ```
-pub demo.sensors.temp 10      # below 50, no spike, count unchanged
-pub demo.sensors.temp 60      # crosses 50 -> .spike, .count "1"
-pub demo.sensors.temp 70      # still above, no edge, count unchanged
-pub demo.sensors.temp 40      # drops below, no edge
-pub demo.sensors.temp 55      # crosses 50 again -> .spike, .count "2"
+nats pubdemo.sensors.temp 10      # below 50, no spike, count unchanged
+nats pubdemo.sensors.temp 60      # crosses 50 -> .spike, .count "1"
+nats pubdemo.sensors.temp 70      # still above, no edge, count unchanged
+nats pubdemo.sensors.temp 40      # drops below, no edge
+nats pubdemo.sensors.temp 55      # crosses 50 again -> .spike, .count "2"
 ```
 
 ### Alerts from logs
 
 ```
-pub demo.log.db "heartbeat ok"        # nothing
-pub demo.log.db "replication alert!"  # -> demo.alerts "[db] replication alert!"
+nats pubdemo.log.db "heartbeat ok"        # nothing
+nats pubdemo.log.db "replication alert!"  # -> demo.alerts "[db] replication alert!"
 ```
 
 ### Late-joining with `$LVC`
 
 ```
 # Someone else publishes, you weren't listening.
-pub demo.sensors.temp 23.5
+nats pubdemo.sensors.temp 23.5
 
 # Subscribe later. Normal SUB would see nothing until the next publish.
 # $LVC gives you the last value immediately.
-sub '$LVC.demo.sensors.temp'   # -> prints "23.5" on subscribe
+nats sub '$LVC.demo.sensors.temp'   # -> prints "23.5" on subscribe
+```
+
+### Bridge
+```
+(bridge
+   :servers  ("nats://127.0.0.1:4223")
+   :name     "monoblok-prod-1"
+   :export   ("demo.sensors.*.spike" "demo.alerts.>"))
+```
+
+You can connect to `monoblock.rtd.pub:4443` which is a real NATS to observe the above being relayed.
+
+```
+nats -s 127.0.0.1:4223 sub "demo.sensors.*.spike"
 ```
 
 ## What it can't do
@@ -176,7 +184,6 @@ sub '$LVC.demo.sensors.temp'   # -> prints "23.5" on subscribe
   read-only visitor sees nothing on `demo.>` until someone
   publishes.
 - **No auth.** Treat it as a whiteboard, not storage.
-- **No bridge.** Messages stay inside this server.
 - **No JetStream, queues, headers, request/reply.** Core NATS only
   (`PUB`, `SUB`, `UNSUB`, `PING`/`PONG`, `INFO`, `-ERR`).
 

@@ -30,21 +30,15 @@ const out_queued_warn_threshold: usize = 4 * 1024 * 1024;
 /// `--stats` flushes a summary line every this many inbound PUBs.
 const stats_interval: u64 = 10_000;
 
-/// Reserved prefix for the stats stream. Client publishes to `$STATS.*`
-/// are rejected (same rule as `$LVC.*`); the server emits to it on a
-/// wall-clock tick. Subscribers read via `$STATS.>` for live deltas; the
-/// stream is deliberately NOT cached by the LVC (router.publish skips
-/// storeLast for this prefix) because a tick-driven snapshot is stale
-/// the moment the next tick fires.
+/// Reserved prefix for the stats stream. Client PUBs are rejected; server
+/// emits on a wall-clock tick. Excluded from the LVC (see router.publish).
 const stats_prefix = "$STATS.";
 
 /// Wall-clock tick for `$STATS.*` publishes.
 const stats_tick_ms: u64 = 60_000;
 
-/// Shared-layout view of the bridge's counter struct. Server reads from a
-/// *const BridgeStats without importing bridge.zig directly (so the -Dbridge=false
-/// build still compiles server.zig unchanged). bridge.Stats starts with these
-/// fields in this order.
+/// Shared-layout view of `bridge.Stats`. Server reads via `*const BridgeStats`
+/// so it doesn't need to import bridge.zig directly.
 pub const BridgeStats = extern struct {
     published: u64 = 0,
     dropped: u64 = 0,
@@ -64,52 +58,37 @@ pub const Server = struct {
     listen_host: []const u8,
     listen_port: u16,
 
-    /// `--trace` mode: print each rule evaluation step (form, result,
-    /// elapsed time) to stderr. Read once per inbound PUB and copied into
-    /// `rules.Context.trace`; the rules module flips its eval path based
-    /// on the flag.
+    /// `--trace`: copied into `rules.Context.trace` per PUB.
     trace_enabled: bool = false,
 
-    /// `--stats` mode: print running-max summaries every `stats_interval`
-    /// PUBs. Counters are reset each time the line is printed.
+    /// `--stats`: print running-max summaries every `stats_interval` PUBs.
     stats_enabled: bool = false,
     stats_pubs: u64 = 0,
     stats_max_rule_publishes: u32 = 0,
     stats_max_out_hwm: usize = 0,
 
-    /// Cumulative total of inbound client PUBs since server start. Published
-    /// on the `$STATS.*` tick.
+    /// Cumulative inbound PUBs. Published on the `$STATS.*` tick.
     total_pubs: u64 = 0,
 
-    /// Optional pointer to the bridge's running counters. `emitStats` reads
-    /// these on the stats tick to publish `$STATS.bridge.*`. Avoids pulling
-    /// bridge.zig into server.zig directly.
+    /// Optional pointer to the bridge's counters; read on the stats tick.
     bridge_stats: ?*const BridgeStats = null,
 
-    /// Periodic `$STATS.*` publisher state. Timer fires every
-    /// `stats_tick_ms` and re-arms itself from the callback.
+    /// Periodic `$STATS.*` publisher; timer re-arms from its callback.
     stats_timer: xev.Timer = undefined,
     stats_completion: xev.Completion = undefined,
 
-    /// LVC snapshot config. If `snapshot_path` is null, no periodic dump
-    /// runs. If set, `snapshot_every_ms > 0` enables the dump timer.
-    /// `snapshot_io` is required when dumping is enabled (the worker
-    /// thread does its file I/O through it).
+    /// LVC snapshot config. `snapshot_every_ms > 0` enables periodic dumps;
+    /// `snapshot_io` is required when dumping.
     snapshot_path: ?[]const u8 = null,
     snapshot_every_ms: u64 = 0,
     snapshot_io: ?Io = null,
     snapshot_timer: xev.Timer = undefined,
     snapshot_completion: xev.Completion = undefined,
     /// Serialises dumps so a slow disk can't stack up multiple threads.
-    /// Set from loop thread before spawn; cleared from worker thread on
-    /// exit. Atomic so the worker's clear is observable.
     snapshot_in_flight: std.atomic.Value(bool) = .init(false),
 
-    /// Shutdown hook: a signal handler (installed by main) calls
-    /// `shutdown_async.notify()`, which fires `onShutdown` on the loop
-    /// thread. That callback writes a final synchronous snapshot (if
-    /// configured) and stops the loop. Optional — only initialised if
-    /// `shutdown_enabled` is true.
+    /// Signal handler calls `shutdown_async.notify()`, firing `onShutdown`
+    /// on the loop thread. Initialised only if `shutdown_enabled`.
     shutdown_enabled: bool = false,
     shutdown_async: xev.Async = undefined,
     shutdown_completion: xev.Completion = undefined,
@@ -172,9 +151,8 @@ pub const Server = struct {
         if (self.shutdown_enabled) self.shutdown_async.deinit();
     }
 
-    /// Exposed for the signal-handler trampoline in main.zig. Safe to call
-    /// from a signal handler: `Async.notify` only does a small non-blocking
-    /// write to an eventfd / mach port.
+    /// Async-signal-safe: `notify()` is a non-blocking write to an
+    /// eventfd / mach port.
     pub fn requestShutdown(self: *Server) void {
         if (!self.shutdown_enabled) return;
         self.shutdown_async.notify() catch {};
@@ -188,11 +166,8 @@ pub const Server = struct {
     ) xev.CallbackAction {
         _ = r catch {};
         const self = self_opt.?;
-        // Single-threaded loop invariant: while this callback is running,
-        // no read/parse/publish can interleave. Any PUB bytes that arrive
-        // on the wire during the snapshot sit in the kernel buffer and are
-        // dropped when the process exits — same semantics as any ungraceful
-        // NATS shutdown (PUBs are unacked).
+        // Loop is paused while we run; in-flight PUB bytes drop on exit,
+        // same as any ungraceful NATS shutdown.
         std.log.info("shutdown: writing final snapshot...", .{});
         self.snapshotSync() catch |err| {
             std.log.warn("shutdown: snapshot failed: {s}", .{@errorName(err)});
@@ -201,9 +176,7 @@ pub const Server = struct {
         return .disarm;
     }
 
-    /// Synchronous snapshot: collect entries and write inline on the loop
-    /// thread. Used only at shutdown, when blocking the loop is fine (we
-    /// are exiting). No-op if no snapshot path is configured.
+    /// Synchronous snapshot. Shutdown-only; blocks the loop.
     fn snapshotSync(self: *Server) !void {
         const path = self.snapshot_path orelse return;
         const io = self.snapshot_io orelse return;
@@ -237,15 +210,11 @@ pub const Server = struct {
         return .disarm;
     }
 
-    /// Publish the current cumulative totals to `$STATS.*`. Values are
-    /// u64 formatted as decimal; the router fan-outs and LVC caches them
-    /// like any other stream. `router.publish` copies the payload, so a
-    /// stack-local buffer is fine.
+    /// Publish cumulative totals to `$STATS.*`. `router.publish` copies
+    /// subject and payload, so the stack buffers are fine to reuse.
     fn emitStats(self: *Server) !void {
         try self.publishStat("$STATS.global.pubs", self.total_pubs);
 
-        // Reusing subj_buf across both bufPrints is safe because
-        // publishStat -> router.publish copies the subject before returning.
         var subj_buf: [64]u8 = undefined;
         for (self.rules.rules, 0..) |*rule, i| {
             const emit_subj = try std.fmt.bufPrint(&subj_buf, "$STATS.rules.{d}.emitted", .{i});
@@ -285,15 +254,10 @@ pub const Server = struct {
         return .disarm;
     }
 
-    /// Take a point-in-time copy of the LVC on the loop thread, then hand
-    /// it off to a worker thread for serialization + fsync + atomic
-    /// rename. The copy keeps the loop-side pause bounded (memcpy-only,
-    /// no I/O). If a prior dump is still writing we skip this tick.
-    ///
-    /// Invariant: `collect` runs on the loop thread, so no publish can
-    /// interleave with it (single-threaded loop). The worker thread only
-    /// touches the arena it was given — a private copy — so subsequent
-    /// mutations of `router.last_value` and `rule.state` are safe.
+    /// Loop-thread deep-copy into an arena, then hand off to a worker
+    /// thread for serialise + atomic rename. Skips if a prior dump is still
+    /// running. Worker only touches its private arena, so router/rule
+    /// mutations after `collect` returns are safe.
     fn kickSnapshot(self: *Server) !void {
         const path = self.snapshot_path orelse return;
         const io = self.snapshot_io orelse return;
@@ -304,9 +268,7 @@ pub const Server = struct {
         }
         errdefer self.snapshot_in_flight.store(false, .release);
 
-        // The worker owns this arena: all bytes it touches live here,
-        // and it frees the whole arena when done. Using the gpa backing
-        // means no cross-thread arena ownership issues.
+        // Worker owns this arena and frees it when done.
         const arena_ptr = try self.gpa.create(std.heap.ArenaAllocator);
         errdefer self.gpa.destroy(arena_ptr);
         arena_ptr.* = .init(self.gpa);
@@ -390,26 +352,22 @@ const Conn = struct {
     tcp: xev.TCP,
     router_conn: *router_mod.Conn,
 
-    // Read side
     rx: std.ArrayList(u8) = .empty,
     read_completion: xev.Completion = undefined,
     read_buf: [16 * 1024]u8 = undefined,
 
-    // Write side. We serialise writes ourselves via `write_in_flight` and
-    // use the non-queued `write` API (simpler, and we've seen queueWrite
-    // reuse-the-same-WriteRequest races under heavy load).
+    // We serialise writes ourselves via `write_in_flight` and use the
+    // non-queued `write` API; `xev.WriteQueue` raced under heavy load.
     write_completion: xev.Completion = undefined,
     write_in_flight: bool = false,
-    // In-flight bytes are owned by the Conn and freed on completion. We copy
-    // `router_conn.out` into this on each drain to free the outbound buffer
-    // back for more appends while the write is flying.
+    // Swapped with `router_conn.out` on each drain so appends can keep
+    // landing while the write is flying.
     in_flight_buf: std.ArrayList(u8) = .empty,
 
     close_completion: xev.Completion = undefined,
     closing: bool = false,
 
-    // Per-message arena, reset between messages so rule allocations don't
-    // accumulate across the connection's lifetime.
+    // Reset between messages to bound per-rule allocation lifetime.
     msg_arena: std.heap.ArenaAllocator,
 
     fn init(server: *Server, tcp: xev.TCP) !*Conn {
@@ -679,11 +637,9 @@ const Conn = struct {
 
         const total = buf.slice.len;
         if (written < total) {
-            // Partial write: resubmit with the remainder on the same
-            // completion. We're still "in flight"; don't clear state.
-            // buf.slice[written..] is only valid because in_flight_buf is
-            // not mutated while write_in_flight is true (maybeKickWrite
-            // bails early). Don't break that invariant.
+            // Resubmit the remainder. `buf.slice[written..]` stays valid
+            // because `maybeKickWrite` won't touch `in_flight_buf` while
+            // `write_in_flight` is true.
             self.tcp.write(
                 loop,
                 &self.write_completion,
@@ -723,18 +679,8 @@ const Conn = struct {
     }
 };
 
-/// Re-entry hook installed on every inbound `rules.Context`. After a
-/// patchbay-emitted publish has been fanned out, the eval layer calls this
-/// with the new (subject, payload) so downstream rules whose filter matches
-/// the emitted subject can fire too. The depth check that prevents
-/// runaway loops lives in `Context.emit` (caps at `Context.max_depth`),
-/// not here, so this stays a thin dispatcher.
-///
-/// The child Context inherits arena, gpa, publisher, trace flag, and the
-/// re-entry hook itself, but starts with fresh per-PUB counters
-/// (`rule_publishes`, `trace_emissions`) and an incremented `depth`. The
-/// parent's counters aren't bumped by this nested run; the only signal
-/// that propagates back is the side-effecting publishes themselves.
+/// Dispatch a patchbay-emitted publish back through the ruleset on a child
+/// Context with `depth + 1`. The depth cap lives in `Context.emit`.
 fn ruleReentry(
     reentry_ctx: ?*anyopaque,
     parent: *rules_mod.Context,

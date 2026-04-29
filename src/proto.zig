@@ -121,7 +121,7 @@ fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Parse
     const nbytes = std.fmt.parseInt(usize, nbytes_str, 10) catch return error.InvalidArgs;
     if (nbytes > max_payload) return error.PayloadTooLarge;
 
-    // Need payload bytes + trailing CRLF (or at least LF — we're lenient).
+    // Need payload bytes + trailing CRLF (or at least LF; we're lenient).
     const after_header = buf[line_end..];
     if (after_header.len < nbytes + 1) return error.NeedMoreData;
     const payload = after_header[0..nbytes];
