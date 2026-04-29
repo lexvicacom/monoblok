@@ -36,9 +36,20 @@ monoblok --port 4222 examples/json-massive/massive.edn
 # terminal 2: start the producer
 node examples/json-massive/mock_producer.js
 
-# terminal 3: peek at the firehose
+# terminal 3: peek at the raw stream
 nats sub '>'
 ```
+
+<p align="center">
+  <img src="sub.png" alt="nats sub raw stream">
+</p>
+
+The raw stream makes the conditioning visible: raw `T.<SYM>` JSON frames
+land alongside the demuxed `T.<SYM>.p` / `.s` scalar streams and the
+deduplicated `T.<SYM>.p.stable` mirror. One screenshot is usually enough
+to see that subscribers downstream of monoblok can pick the exact slice
+they need (a single field, a rounded mirror, an alert) without parsing
+the original JSON or re-implementing the dedupe.
 
 ## Subject map
 
