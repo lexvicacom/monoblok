@@ -602,6 +602,8 @@ const Conn = struct {
                     .gpa = gpa,
                     .now_ms = self.server.loop.now(),
                     .trace = self.server.trace_enabled,
+                    .reentry_ctx = self.server,
+                    .reentry_fn = ruleReentry,
                 };
                 self.server.rules.run(&ctx) catch |err| {
                     std.log.warn("rule error: {s}", .{@errorName(err)});
@@ -720,3 +722,38 @@ const Conn = struct {
         return .disarm;
     }
 };
+
+/// Re-entry hook installed on every inbound `rules.Context`. After a
+/// patchbay-emitted publish has been fanned out, the eval layer calls this
+/// with the new (subject, payload) so downstream rules whose filter matches
+/// the emitted subject can fire too. The depth check that prevents
+/// runaway loops lives in `Context.emit` (caps at `Context.max_depth`),
+/// not here, so this stays a thin dispatcher.
+///
+/// The child Context inherits arena, gpa, publisher, trace flag, and the
+/// re-entry hook itself, but starts with fresh per-PUB counters
+/// (`rule_publishes`, `trace_emissions`) and an incremented `depth`. The
+/// parent's counters aren't bumped by this nested run; the only signal
+/// that propagates back is the side-effecting publishes themselves.
+fn ruleReentry(
+    reentry_ctx: ?*anyopaque,
+    parent: *rules_mod.Context,
+    subject: []const u8,
+    payload: []const u8,
+) anyerror!void {
+    const self: *Server = @ptrCast(@alignCast(reentry_ctx.?));
+    var child: rules_mod.Context = .{
+        .subject = subject,
+        .payload = payload,
+        .publisher = parent.publisher,
+        .arena = parent.arena,
+        .gpa = parent.gpa,
+        .now_ms = parent.now_ms,
+        .trace = parent.trace,
+        .depth = parent.depth + 1,
+        .max_depth = parent.max_depth,
+        .reentry_ctx = parent.reentry_ctx,
+        .reentry_fn = parent.reentry_fn,
+    };
+    try self.rules.run(&child);
+}

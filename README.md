@@ -4,26 +4,27 @@
 
 # monoblok
 
-Every team I've worked on has written the same subscriber, usually three or four times, usually subtly differently each time: read a messy stream, clean it up, republish it. Data can move quickly but the speed doesn't always carry value, most of it is noise.
+monoblok is a broker that processes messages in-flight, before they reach subscribers. It can sit between publishers and a real message broker to condition messages in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. Subscribers can connect also connect directly. The cleanup logic is configured once, instead of being re-implemented in every subscriber. monoblok speaks enough of the NATS core protocol so that existing clients are supported for `PUB` and `SUB`.
 
->monoblok is a broker that does that work once, before a message reaches subscribers. It sits between your publishers and your real message broker and conditions the signal in flight: deadband, debounce, dedupe, demux JSON payloads into per-field subjects. The cleanup logic is stable, configured once, instead of being re-implemented in every subscriber.
+### Key pattern
 
-The pattern: publishers PUB to monoblok instead of directly to NATS, using the exact same NATS client. No code changes. monoblok does the conditioning, then forwards to your real cluster. Subscribers get a stream that's already correct.
+Publishers PUB to monoblok instead of directly to NATS, using any NATS client. monoblok does the conditioning, then forwards to a real cluster, or to subscribers who are directly connected. Either way, subscribers get a stream that's already been processed.
 
-Useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where the data moves fast but most of the movement isn't worth a downstream message.
+This is useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where the data moves fast but most of the movement isn't worth a downstream message. 
 
-Under the hood it's a single small binary written in Zig, speaking the NATS wire protocol so any `nats` client works unchanged. The conditioning lives in a routing DSL called **patchbay** (round, deadband, squelch, moving-avg, rising/falling edges, OHLC bars), with last-value streams on `$LVC.*` for late subscribers. JSON frames like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and conditioned the same way. It's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-for) so the cleaned-up streams roll into your existing cluster. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
+It's a single small binary written in Zig, speaking the NATS wire protocol so any `nats` client works unchanged. The conditioning lives in a routing DSL called **patchbay** (round, deadband, squelch, moving-avg, rising/falling edges, OHLC bars), with last-value streams on `$LVC.*` for late subscribers. JSON frames like `{"temp":12.5,"hum":80}` can be [demuxed onto scalar sub-subjects](#json-frames) and conditioned the same way. 
+
+It's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-for) so the cleaned-up streams effortlessly into your existing cluster. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
 ## Try it out with no install
 
-A public demo server runs at `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats (tiny server, shared, no rate limiting, don't send secrets).
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats.
 
 ## Install on your hardware
 
 Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Each platform ships two `.tar.gz` archives: the default (includes the [outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the target box) and a `-nobridge` variant with no external runtime dependencies.
 
-
-Pick the latest tag from the releases page and substitute it for `VERSION` below (e.g. `v0.0.24`).
+Pick the latest tag from the releases page and substitute it for `VERSION` below (e.g. `v0.0.26`).
 
 **macOS (Apple Silicon):**
 
@@ -32,7 +33,10 @@ VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-macos-aarch64.tar.gz"
 tar -xzf "monoblok-${VERSION}-macos-aarch64.tar.gz"
 sudo install "monoblok-${VERSION}-macos-aarch64/monoblok" /usr/local/bin/monoblok
-brew install openssl@3       # only needed for the bridge build; skip if you grabbed the -nobridge tarball
+
+# only needed for the bridge build; skip if you grabbed the -nobridge tarball
+brew install openssl@3
+
 monoblok --port 4222 --patchbay "monoblok-${VERSION}-macos-aarch64/patchbay.edn"
 ```
 
@@ -44,7 +48,10 @@ VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-linux-x86_64.tar.gz"
 tar -xzf "monoblok-${VERSION}-linux-x86_64.tar.gz"
 sudo install "monoblok-${VERSION}-linux-x86_64/monoblok" /usr/local/bin/monoblok
-sudo apt install libssl-dev pkg-config   # only needed for the bridge build; skip if you grabbed the -nobridge tarball
+
+# only needed for the bridge build; skip if you grabbed the -nobridge tarball
+sudo apt install libssl-dev pkg-config
+
 monoblok --port 4222 --patchbay "monoblok-${VERSION}-linux-x86_64/patchbay.edn"
 ```
 
@@ -56,8 +63,7 @@ nats sub 'sensors.*'
 nats pub sensors.temp 42.5
 ```
 
-For more, see next section.
-If you don't want OpenSSL on the box at all, grab the `-nobridge` tarball (e.g. `monoblok-${VERSION}-linux-x86_64-nobridge.tar.gz`) and skip the dependency-install step.
+> If you don't want OpenSSL on the box at all, grab the `-nobridge` tarball (e.g. `monoblok-${VERSION}-linux-x86_64-nobridge.tar.gz`) and skip the dependency-install step.
 
 ### Running as a systemd service on Linux
 
@@ -69,11 +75,11 @@ sudo systemctl enable --now monoblok
 journalctl -u monoblok -f
 ```
 
-The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, creates a `monoblok` system user, and registers the unit. Snapshots live under `/var/lib/monoblok/state.mblk` (created by systemd's `StateDirectory=`, owned by the service user) and are written every 10 seconds, plus once on `systemctl stop`. stdout/stderr land in the systemd journal (`journalctl -u monoblok`), so log rotation, structured fields, and `--since`/`--until` filtering are free.
+The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, creates a `monoblok` system user, and registers the unit. Snapshots live under `/var/lib/monoblok/state.mblk` (created by systemd's `StateDirectory=`, owned by the service user) and are written every 10 seconds, plus once on `systemctl stop`. stdout/stderr land in the systemd journal (`journalctl -u monoblok`). Edit the unit file to suit.
 
 ## Driving the demo patchbay
 
-The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the server, then in another shell subscribe so you can watch the derived traffic show up:
+Once up and running, the shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the server, then in another shell subscribe so you can watch the derived traffic show up:
 
 ```
 nats sub 'sensors.>'       # in one shell
@@ -113,7 +119,7 @@ nats sub 'events.>'        # in another (for the alert rule)
 
 Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
 
-## What is signal conditioning?
+## So, what is signal conditioning?
 
 Borrowed from electronics, where it means cleaning up a raw analog reading before anything downstream has to deal with it: smoothing noise, ignoring tiny wobbles, snapping to a grid, suppressing duplicates. A temperature sensor that reports 22.031, 22.028, 22.034, 22.031 fifty times a second is technically accurate but annoying to work with; you want "22.0, and tell me when it actually changes."
 
@@ -168,7 +174,7 @@ Per-PUB cost depends on what the matching rule actually does (a cheap `contains?
 
 ### Example patchbays
 
-The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios: [`sensors.edn`](./examples/sensors.edn) (round + squelch on a noisy sensor), [`office-temp.edn`](./examples/office-temp.edn) (deadband + moving-average alert/all-clear), [`ticker.edn`](./examples/ticker.edn) (market data with bridge), [`bars.edn`](./examples/bars.edn) (tick-count OHLC bars per symbol), [`json-frames.edn`](./examples/json-frames.edn) (demux a JSON-emitting device into scalar sub-subjects), [`rental-car.edn`](./examples/rental-car.edn), and [`bridge.edn`](./examples/bridge.edn). Run any of them with `monoblok --patchbay examples/<file>.edn`.
+The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios: [`sensors.edn`](./examples/sensors.edn) (round + squelch on a noisy sensor), [`office-temp.edn`](./examples/office-temp.edn) (deadband + moving-average alert/all-clear), [`ticker.edn`](./examples/ticker.edn) (market data with bridge), [`bars.edn`](./examples/bars.edn) (tick-count OHLC bars per symbol), [`json-frames.edn`](./examples/json-frames.edn) (demux a JSON-emitting device into scalar sub-subjects), [`rental-car.edn`](./examples/rental-car.edn), and [`bridge.edn`](./examples/bridge.edn). Run any of them with `monoblok examples/<file>.edn` (the first non-flag argument is treated as the patchbay path; `--patchbay FILE` is the explicit form). To form-lint without starting the server: `monoblok --validate examples/<file>.edn`. For a full end-to-end demo with a synthetic market-data producer (stocks, options, crypto, forex), see [`json-massive/`](./examples/json-massive/).
 
 ### Patchbay with Claude Code
 
@@ -316,7 +322,7 @@ Useful for seeing how much headroom you have under the warn thresholds. No outpu
 
 `--trace` prints every patchbay form the evaluator visits to stderr, with the form's result and the elapsed time spent inside it. One line per inbound PUB lists the subject and payload; each matching rule prints its filter, then the body is unrolled with one indented line per call, and a `=> result [duration]` line per call afterwards. Per-rule and per-form timings include nested calls. After all rules run, a `total [duration]` line shows the wall time across the whole PUB.
 
-Side-effecting ops (`publish`, `publish-to`, `count`, `json-demux`, `ohlc-bar`) all return `nil`, so the trace replaces the bare `=> nil` at the leaf with `=> published "subj" payload [duration]` so you can tell "did the thing" from "was suppressed". Forms that returned `nil` because a gate stopped the flow get a parenthetical hint: `=> nil (squelched)`, `=> nil (within deadband)`, `=> nil (no rising edge)`, `=> nil (branch not taken)`, etc. The hint is a static gloss on the head symbol (it doesn't know the precise reason — `rising-edge` shows the same hint on first sight and on stayed-false), but it's enough to disambiguate suppression from successful side-effects in most cases.
+Side-effecting ops (`publish`, `publish-to`, `count`, `json-demux`, `bar`) all return `nil`, so the trace replaces the bare `=> nil` at the leaf with `=> published "subj" payload [duration]` so you can tell "did the thing" from "was suppressed". Forms that returned `nil` because a gate stopped the flow get a parenthetical hint: `=> nil (squelched)`, `=> nil (within deadband)`, `=> nil (no rising edge)`, `=> nil (branch not taken)`, etc. The hint is a static gloss on the head symbol (it doesn't know the precise reason — `rising-edge` shows the same hint on first sight and on stayed-false), but it's enough to disambiguate suppression from successful side-effects in most cases.
 
 ```
 $ monoblok --port 4222 --patchbay patchbay.edn --trace
@@ -363,9 +369,9 @@ The cap is one core's worth of throughput per instance, and the interesting ques
 
 ### Deploying
 
-Pick a 2-vCPU VM with 256 MB of RAM. monoblok runs on one core, the kernel net stack and io_uring workers use the other; a 1-vCPU box makes them fight over the same core (~1.6× slowdown, see [Benchmarks](#benchmarks)). More than two cores is wasted spend (the extras sit idle). Builds ship for `linux-aarch64` and `linux-x86_64`.
+Pick a 2-vCPU VM with at least 256 MB of RAM. monoblok runs on one core, the kernel net stack and io_uring workers will use the other; a 1-vCPU box makes them share the same core (~1.6× slowdown, see [Benchmarks](#benchmarks)). More than two cores is wasted spend (the extras sit idle). Deploy builds ship for `linux-aarch64` and `linux-x86_64`.
 
-Concretely: Hetzner CAX11 (2 vCPU Ampere Altra, about €5/mo) is the sweet spot, AWS `t4g.small` or `c7g.large` / `c8g.large` if you want Graviton, Oracle Ampere A1 free tier for kicking the tyres (only 1 vCPU, ideally 2). The CAX11 sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded.
+On the low end, a Hetzner CAX11 (2 vCPU Ampere Altra, about €5/mo) is the sweet spot, AWS `t4g.small` or `c7g.large` / `c8g.large` if you want Graviton, Oracle Ampere A1 free tier for kicking the tyres (only 1 vCPU, ideally 2). The CAX11 sustains ~2.4M msgs/sec PUB and ~2.1M msgs/sec on a 10-subscriber fan-out with the demo patchbay loaded.
 
 The systemd unit in [scripts/](./scripts/) plus `--snapshot` handles restarts: the unit restarts on failure, the snapshot reloads LVC values and gate/window state on startup, so a crash or reboot loses at most one snapshot interval (10 s by default) of in-flight conditioning state. Subscribers reconnect automatically.
 
