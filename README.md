@@ -391,7 +391,7 @@ bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
 
 ## Benchmarks
 
-`nats-server` is a mature Go codebase doing a lot more than monoblok (accounting, metrics, slow-consumer detection, clustering, JetStream, TLS, auth). These numbers are informational, not a "faster than nats-server" claim. monoblok is benchmarked with an **empty patchbay**, so this is raw PUB/SUB + fan-out only; a real patchbay adds work per matching publish.
+This section is more of a FYI than anything scientific. `nats-server` is a proven, mature Go codebase doing a lot more than monoblok (accounting, metrics, slow-consumer detection, clustering, JetStream, TLS, auth). These numbers are informational full throttle and not real-world use relevant and certainly not not a "faster than nats-server" claim. monoblok is benchmarked with an **empty patchbay**, so this is raw PUB/SUB + fan-out only; a real patchbay adds work per matching publish.
 
 Numbers are msgs/sec from `nats bench`, single run each. monoblok built `--release=safe`, vs `nats-server` v2.12.7.
 
@@ -408,7 +408,7 @@ Numbers are msgs/sec from `nats bench`, single run each. monoblok built `--relea
 | 1 pub → 10 subs     |    8.67M/s |      4.03M/s | +115% |
 | 1 pub → 50 subs     |   11.18M/s |      2.97M/s | +276% |
 
-Fan-out is where monoblok pulls ahead hardest, but multi-publisher and pub-only rows hold their own too. The 1-sub row is the standing exception, likely a low-concurrency bug. `--release=fast` adds ~10–15% on top. Take this all with a pinch of salt. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo :)**
+Fan-out is where monoblok pulls ahead hardest, but multi-publisher and pub-only rows hold their own too. The 1-sub row is the standing exception, likely a low-concurrency bug. `--release=fast` adds ~10–15% on top. Take this all with a pinch of salt. **NATS is still the reliable, tuned Porsche and monoblok is a rusty Civic with a bolted-on eBay turbo.**
 
 ### Patchbay overhead
 
