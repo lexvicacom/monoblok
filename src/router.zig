@@ -19,11 +19,10 @@ pub const Conn = struct {
     /// bytes that need to be written. Single-threaded, no locking needed.
     kick_ctx: ?*anyopaque = null,
     kick_fn: ?*const fn (ctx: *anyopaque) void = null,
-    /// Refcount for lifetime across fan-out. Starts at 1.
-    refs: std.atomic.Value(u32) = .init(1),
     /// Set before `removeAllFor`; checked by fan-out and `writeMsg` to
-    /// short-circuit work on a dying conn.
-    closed: std.atomic.Value(bool) = .init(false),
+    /// short-circuit work on a dying conn. Plain bool: only the loop thread
+    /// reads or writes it.
+    closed: bool = false,
     /// Largest `out.items.len` observed on this conn between drains. The
     /// server reads this after each PUB dispatch to detect slow-consumer
     /// blow-ups, and resets it when it kicks a write.
@@ -33,25 +32,18 @@ pub const Conn = struct {
         if (c.kick_fn) |f| if (c.kick_ctx) |ctx| f(ctx);
     }
 
-    pub fn retain(c: *Conn) void {
-        _ = c.refs.fetchAdd(1, .monotonic);
-    }
-
-    pub fn release(c: *Conn) void {
-        // Standard release-on-dec, acquire-on-last-drop refcount fence.
-        if (c.refs.fetchSub(1, .release) == 1) {
-            _ = c.refs.load(.acquire);
-            c.out.deinit(c.gpa);
-            c.gpa.destroy(c);
-        }
+    /// Free `out` and destroy `c`. Called once, by the server's close path.
+    pub fn deinit(c: *Conn) void {
+        c.out.deinit(c.gpa);
+        c.gpa.destroy(c);
     }
 
     pub fn markClosed(c: *Conn) void {
-        c.closed.store(true, .release);
+        c.closed = true;
     }
 
     pub fn isClosed(c: *const Conn) bool {
-        return c.closed.load(.acquire);
+        return c.closed;
     }
 
     pub fn writeMsg(
@@ -540,7 +532,7 @@ test "router: literal subs go in the literal bucket, wildcards in wildcard list"
     defer router.deinit();
 
     const a = try makeConn(testing.allocator, 1);
-    defer a.release();
+    defer a.deinit();
     try router.subscribe(a, "foo.bar", "1");
     try router.subscribe(a, "foo.*", "2");
     try router.subscribe(a, "baz.>", "3");
@@ -557,9 +549,9 @@ test "router: literal-only publish does not touch wildcard subs" {
     defer router.deinit();
 
     const a = try makeConn(testing.allocator, 1);
-    defer a.release();
+    defer a.deinit();
     const b = try makeConn(testing.allocator, 2);
-    defer b.release();
+    defer b.deinit();
 
     try router.subscribe(a, "foo.bar", "1");
     try router.subscribe(b, "other.>", "2");
@@ -575,7 +567,7 @@ test "router: wildcard sub matches via wildcard path" {
     defer router.deinit();
 
     const a = try makeConn(testing.allocator, 1);
-    defer a.release();
+    defer a.deinit();
     try router.subscribe(a, "foo.*", "1");
 
     try router.publish("foo.bar", "x");
@@ -590,7 +582,7 @@ test "router: max_msgs auto-unsub drops sub from literal bucket" {
     defer router.deinit();
 
     const a = try makeConn(testing.allocator, 1);
-    defer a.release();
+    defer a.deinit();
     try router.subscribe(a, "foo.bar", "1");
     try router.unsubscribe(a, "1", 2);
 
@@ -608,7 +600,7 @@ test "router: max_msgs auto-unsub drops wildcard sub" {
     defer router.deinit();
 
     const a = try makeConn(testing.allocator, 1);
-    defer a.release();
+    defer a.deinit();
     try router.subscribe(a, "foo.*", "1");
     try router.unsubscribe(a, "1", 1);
 
@@ -625,7 +617,7 @@ test "router: removeAllFor cleans up across both paths" {
 
     const a = try makeConn(testing.allocator, 1);
     const b = try makeConn(testing.allocator, 2);
-    defer b.release();
+    defer b.deinit();
 
     try router.subscribe(a, "foo.bar", "1");
     try router.subscribe(a, "foo.*", "2");
@@ -634,7 +626,7 @@ test "router: removeAllFor cleans up across both paths" {
 
     a.markClosed();
     router.removeAllFor(a);
-    a.release();
+    a.deinit();
 
     try testing.expectEqual(@as(usize, 1), router.literal_subs.count());
     try testing.expectEqual(@as(usize, 1), router.wildcard_subs.items.len);
@@ -648,7 +640,7 @@ test "router: empty bucket is reclaimed when last sub leaves" {
     defer router.deinit();
 
     const a = try makeConn(testing.allocator, 1);
-    defer a.release();
+    defer a.deinit();
     try router.subscribe(a, "foo.bar", "1");
     try testing.expectEqual(@as(usize, 1), router.literal_subs.count());
 
@@ -661,9 +653,9 @@ test "router: bucket key survives owner sub leaving while others remain" {
     defer router.deinit();
 
     const a = try makeConn(testing.allocator, 1);
-    defer a.release();
+    defer a.deinit();
     const b = try makeConn(testing.allocator, 2);
-    defer b.release();
+    defer b.deinit();
 
     try router.subscribe(a, "foo.bar", "1");
     try router.subscribe(b, "foo.bar", "2");

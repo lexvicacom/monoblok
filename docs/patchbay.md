@@ -261,13 +261,14 @@ about the spacing.
 ; Up to 5 alerts per minute, regardless of how they arrive.
 (on "alerts.>"
   (-> payload
-      (throttle (window-ms 60000) 5)
+      (throttle :ms 60000 5)
       (publish-to (subject-append "rate-limited"))))
 ```
 
-`WINDOW` is `(ticks N)` or `(window-ms N)`. Tick form counts the last
-`N` evaluations; time form counts pass timestamps in the last `N` ms
-(walker-evicted). Per (rule, subject, window-kind).
+`WINDOW` is either a bare integer `N` (tick window) or `:ms N` (time
+window). Tick form counts the last `N` evaluations; time form counts
+pass timestamps in the last `N` ms (walker-evicted). Per (rule,
+subject, window-kind).
 
 ## Windowed aggregates
 
@@ -276,13 +277,12 @@ call site gets its own buffer, keyed by `(rule, subject, op, window
 kind)`, so a tick-windowed and a time-windowed `moving-avg` on the same
 rule and subject keep independent state.
 
-A window is either a tick count or a wall-clock duration. Window
-descriptors are values, returned by two pure builtins:
+A window is either a tick count or a wall-clock duration:
 
-| form              | returns                | meaning                              |
-|-------------------|------------------------|--------------------------------------|
-| `(ticks N)`       | window descriptor      | last N samples (fixed-cap ring)      |
-| `(window-ms N)`   | window descriptor      | last N ms of wall-clock time         |
+| form     | meaning                                |
+|----------|----------------------------------------|
+| `N`      | last N samples (fixed-cap ring)        |
+| `:ms N`  | last N ms of wall-clock time           |
 
 Wall-clock time is the ingress timestamp stamped once per inbound PUB
 (same source `hold-off` reads). For windows that elapse without a new
@@ -293,11 +293,11 @@ bar.
 
 | form                       | returns | cost                                |
 |----------------------------|---------|-------------------------------------|
-| `(moving-avg WINDOW X)`    | number  | O(1) per update for `(ticks N)`     |
-|                            |         | O(n) per update for `(window-ms N)` |
+| `(moving-avg WINDOW X)`    | number  | O(1) per update for tick form       |
+|                            |         | O(n) per update for `:ms` form      |
 | `(moving-sum WINDOW X)`    | number  | same as `moving-avg`                |
-| `(moving-max WINDOW X)`    | number  | O(1) amortized for `(ticks N)`      |
-|                            |         | O(n) per update for `(window-ms N)` |
+| `(moving-max WINDOW X)`    | number  | O(1) amortized for tick form        |
+|                            |         | O(n) per update for `:ms` form      |
 | `(moving-min WINDOW X)`    | number  | same as `moving-max`                |
 
 Tick rings allocate `N × 8 B` plus a small deque for max/min and `N` is
@@ -305,15 +305,15 @@ fixed at first call. Time rings grow with event rate × window: storage
 is unbounded in principle, bounded in practice by however many samples
 arrive inside the window. Aggregate readers do an O(n) scan over the
 live window, which is fine at sensor / ticker rates; if you want
-sub-microsecond updates over wide time windows, prefer `(ticks N)` with
-a generous `N`.
+sub-microsecond updates over wide time windows, prefer the tick form
+with a generous `N`.
 
 ```edn
 ; Smooth with a 10-sample moving average, and only emit when the
 ; smoothed value drifts by at least 1.0.
 (on "sensors.*"
   (-> payload-float
-      (moving-avg (ticks 10))
+      (moving-avg 10)
       (deadband 1.0)
       (publish-to (subject-append "smoothed"))))
 
@@ -322,15 +322,15 @@ a generous `N`.
 ; you want a stable "last 5 seconds" view.
 (on "sensors.*"
   (-> payload-float
-      (moving-avg (window-ms 5000))
+      (moving-avg :ms 5000)
       (publish-to (subject-append "avg5s"))))
 
 ; Volatility detector: alert if the spread over the last 20 samples
 ; exceeds 5 units. Ring ops return numbers, so the non-threaded form
 ; is often clearer when you need multiple windows at once.
 (on "sensors.*"
-  (when (> (- (moving-max (ticks 20) payload-float)
-              (moving-min (ticks 20) payload-float)) 5.0)
+  (when (> (- (moving-max 20 payload-float)
+              (moving-min 20 payload-float)) 5.0)
     (publish (subject-append "volatile") payload)))
 ```
 
@@ -352,10 +352,10 @@ share state with `moving-*` even on the same subject.
 | `(stddev WINDOW X)`           | number  | population stddev of X over WINDOW            |
 | `(variance WINDOW X)`         | number  | population variance of X over WINDOW          |
 
-`rate` requires `(window-ms N)` — "rate over the last N samples" has
-no time unit, so passing `(ticks N)` is a type error. `X` is evaluated
-but its value ignored: the op counts pushes, not magnitudes. Useful
-for "events/sec on this subject," "alerts/sec," etc.
+`rate` requires the `:ms N` form — "rate over the last N samples" has
+no time unit, so passing a bare tick count is a type error. `X` is
+evaluated but its value ignored: the op counts pushes, not magnitudes.
+Useful for "events/sec on this subject," "alerts/sec," etc.
 
 `percentile`, `median`, `stddev`, and `variance` all read the window
 and return immediately — no warm-up. On the first sample they return
@@ -368,19 +368,19 @@ percentile/median (sort copy) and O(n) for stddev/variance.
 ; outlier.
 (on "rpc.latency.*"
   (-> payload-float
-      (percentile (ticks 200) 0.99)
+      (percentile 200 0.99)
       (publish-to (subject-append "p99"))))
 
 ; Live event rate per subject, expressed in Hz.
 (on "events.>"
   (-> payload
-      (rate (window-ms 1000))
+      (rate :ms 1000)
       (publish-to (subject-append "rate-hz"))))
 
 ; Volatility flag: alert if the price stddev over the last minute
 ; jumps above 0.5.
 (on "MARKET.*"
-  (when (> (stddev (window-ms 60000) payload-float) 0.5)
+  (when (> (stddev :ms 60000 payload-float) 0.5)
     (publish (subject-append "volatile") payload)))
 ```
 
@@ -408,7 +408,7 @@ branches.
 ```edn
 ; Alert on cross-up, all-clear on cross-down, in a single rule.
 (on "temp.*.*"
-  (transition (> (moving-avg (ticks 60) payload-float) 28.0)
+  (transition (> (moving-avg 60 payload-float) 28.0)
     (publish-to (subject-append "alert") "hot")
     (publish-to (subject-append "ok")    "cool")))
 ```
@@ -472,8 +472,8 @@ easily write the threaded form `(-> payload (json-get "temp") ...)`.
 
 `(bar WINDOW X)` is an OHLC bar accumulator for streams where you want
 open / high / low / close summaries instead of every tick. `WINDOW` is
-either `(ticks N)` (close every N samples) or `(window-ms N)` (close
-every N ms of wall-clock time, aligned to `floor(now/N)*N`). Each call
+either `N` (close every N samples) or `:ms N` (close every N ms of
+wall-clock time, aligned to `floor(now/N)*N`). Each call
 folds one sample into the in-progress bar; on close the rule publishes
 four sub-subjects under `<subject>.bar`:
 
@@ -501,13 +501,13 @@ within roughly half its tick of the wall-clock boundary.
 ```edn
 ; 60-tick OHLC bars per symbol on a market feed.
 (on "MARKET.*"
-  (bar (ticks 60) payload-float))
+  (bar 60 payload-float))
 
 ; 1-minute aligned OHLC bars on the same feed. Bars cover wall-clock
 ; minutes (00:00..00:01, 00:01..00:02, ...) regardless of how many
 ; ticks land in each.
 (on "MARKET.*"
-  (bar (window-ms 60000) payload-float))
+  (bar :ms 60000 payload-float))
 ```
 
 A subscriber to `MARKET.AAPL.bar.>` then sees a clean burst of four

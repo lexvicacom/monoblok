@@ -374,9 +374,8 @@ fn printUsage() void {
         \\                   Patchbay clock-walker cadence (default 2000).
         \\                   Lower = tighter time-bar close / time-ring
         \\                   eviction latency, higher idle CPU. Only
-        \\                   `(bar (window-ms ...))` and `(window-ms ...)
-        \\                   moving-*` rules care; if you have neither,
-        \\                   crank it up.
+        \\                   `:ms`-windowed `bar` and `moving-*` rules
+        \\                   care; if you have neither, crank it up.
         \\  --stats-tick-ms MS
         \\                   `$STATS.*` publish cadence (default 60000).
         \\  --validate       Form-lint the patchbay file and exit. Same

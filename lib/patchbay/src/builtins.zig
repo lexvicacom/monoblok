@@ -33,7 +33,6 @@ const Op = enum {
     contains, starts_with, ends_with, subject_token,
     round, quantize, clamp, min, max, abs, sign,
     squelch, deadband, changed, delta, hold_off,
-    window_ms, ticks,
     moving_avg, moving_sum, moving_max, moving_min,
     rate, percentile, median, stddev, variance, throttle,
     rising_edge, falling_edge,
@@ -73,8 +72,6 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "changed?", .changed },
     .{ "delta", .delta },
     .{ "hold-off", .hold_off },
-    .{ "window-ms", .window_ms },
-    .{ "ticks", .ticks },
     .{ "rate", .rate },
     .{ "percentile", .percentile },
     .{ "median", .median },
@@ -150,8 +147,6 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .changed => callChanged(ctx, evaled),
         .delta => callDelta(ctx, evaled),
         .hold_off => callHoldOff(ctx, evaled),
-        .window_ms => callWindow(evaled, .time_ms),
-        .ticks => callWindow(evaled, .ticks),
         .moving_avg => callMoving(ctx, evaled, .avg),
         .moving_sum => callMoving(ctx, evaled, .sum),
         .moving_max => callMoving(ctx, evaled, .max),
@@ -242,7 +237,7 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const now = (try ctx.eval_fn(ctx, args[0])).isTruthy();
 
-    const key = try state.stateKey(ctx.arena, "transition", ctx.subject);
+    const key = try state.keyForOp(ctx.arena, "transition", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
     if (!slot.found_existing) {
         slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
@@ -286,7 +281,7 @@ fn coercePayload(arena: Allocator, v: Value) EvalError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list, .keyword, .window => error.TypeMismatch,
+        .list, .keyword => error.TypeMismatch,
     };
 }
 
@@ -468,7 +463,7 @@ fn callSquelch(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const encoded = try state.encodeForState(ctx.arena, args[0]);
-    const key = try state.stateKey(ctx.arena, "squelch", ctx.subject);
+    const key = try state.keyForOp(ctx.arena, "squelch", ctx.subject);
     const changed = try state.stateEqualsOrStore(ctx.gpa, rule, key, encoded);
     if (!changed) rule.publishes_suppressed += 1;
     return if (changed) args[0] else .nil;
@@ -483,7 +478,7 @@ fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
     const x = try state.asNumber(args[1]);
     if (delta < 0) return error.TypeMismatch;
 
-    const key = try state.stateKey(ctx.arena, "deadband", ctx.subject);
+    const key = try state.keyForOp(ctx.arena, "deadband", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
     if (!slot.found_existing) {
         slot.value_ptr.* = .{ .number = x };
@@ -503,7 +498,7 @@ fn callChanged(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const encoded = try state.encodeForState(ctx.arena, args[0]);
-    const key = try state.stateKey(ctx.arena, "changed?", ctx.subject);
+    const key = try state.keyForOp(ctx.arena, "changed?", ctx.subject);
     const changed = try state.stateEqualsOrStore(ctx.gpa, rule, key, encoded);
     if (!changed) rule.publishes_suppressed += 1;
     return .{ .boolean = changed };
@@ -514,7 +509,7 @@ fn callDelta(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const x = try state.asNumber(args[0]);
-    const key = try state.stateKey(ctx.arena, "delta", ctx.subject);
+    const key = try state.keyForOp(ctx.arena, "delta", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
     if (!slot.found_existing) {
         slot.value_ptr.* = .{ .number = x };
@@ -535,7 +530,7 @@ fn callHoldOff(ctx: *Context, args: []const Value) EvalError!Value {
     if (ms < 0) return error.TypeMismatch;
     const now: f64 = @floatFromInt(ctx.now_ms);
 
-    const key = try state.stateKey(ctx.arena, "hold-off", ctx.subject);
+    const key = try state.keyForOp(ctx.arena, "hold-off", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
     if (!slot.found_existing) {
         slot.value_ptr.* = .{ .number = now };
@@ -563,7 +558,7 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
         .rising => "rising-edge",
         .falling => "falling-edge",
     };
-    const key = try state.stateKey(ctx.arena, op_name, ctx.subject);
+    const key = try state.keyForOp(ctx.arena, op_name, ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
     if (!slot.found_existing) {
         slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
@@ -582,20 +577,31 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
 
 // --- Window descriptors -------------------------------------------------
 
-/// `(window-ms N)` / `(ticks N)`. Pure: returns a window descriptor that
-/// the next windowed op (`moving-*`, `bar`, ...) consumes. Never appears
-/// in source as a literal — only produced at eval time.
-fn callWindow(args: []const Value, kind: WindowKind) EvalError!Value {
-    if (args.len != 1) return error.ArityMismatch;
-    const n_f = try state.asNumber(args[0]);
+/// Parse a window argument starting at `args[idx]`. Two source shapes:
+///   - bare number  → ticks (e.g. `(moving-avg 10 X)`)
+///   - `:ms N`      → time, N milliseconds (e.g. `(moving-avg :ms 5000 X)`)
+/// Returns the parsed spec plus the number of arg slots consumed.
+fn takeWindow(args: []const Value, idx: usize) EvalError!struct {
+    spec: WindowSpec,
+    consumed: usize,
+} {
+    if (idx >= args.len) return error.ArityMismatch;
+    const head = args[idx];
+    if (head == .keyword) {
+        if (!std.mem.eql(u8, head.keyword, "ms")) return error.TypeMismatch;
+        if (idx + 1 >= args.len) return error.ArityMismatch;
+        const n_f = try state.asNumber(args[idx + 1]);
+        if (n_f < 1) return error.TypeMismatch;
+        return .{
+            .spec = .{ .kind = .time_ms, .n = @intFromFloat(n_f) },
+            .consumed = 2,
+        };
+    }
+    const n_f = try state.asNumber(head);
     if (n_f < 1) return error.TypeMismatch;
-    return .{ .window = .{ .kind = kind, .n = @intFromFloat(n_f) } };
-}
-
-fn asWindow(v: Value) EvalError!WindowSpec {
-    return switch (v) {
-        .window => |w| w,
-        else => error.TypeMismatch,
+    return .{
+        .spec = .{ .kind = .ticks, .n = @intFromFloat(n_f) },
+        .consumed = 1,
     };
 }
 
@@ -603,16 +609,16 @@ fn asWindow(v: Value) EvalError!WindowSpec {
 
 const MovingKind = enum { avg, sum, max, min };
 
-/// `(moving-{avg,sum,max,min} WINDOW X)`. WINDOW is `(ticks N)` for a
-/// fixed-cap ring or `(window-ms N)` for a time-evicted ring. The ring
-/// allocates on first sight and is keyed per (rule, op, subject, kind),
-/// so the same op with both window kinds gets distinct slots. First
-/// call's aggregate is over that one sample.
+/// `(moving-{avg,sum,max,min} N X)` — fixed-cap ring over the last N
+/// samples. `(moving-{avg,sum,max,min} :ms N X)` — time-evicted ring over
+/// the last N ms. The ring allocates on first sight and is keyed per
+/// (rule, op, subject, window-kind), so a rule that uses both forms gets
+/// distinct slots. First call's aggregate is over that one sample.
 fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Value {
-    if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const window = try asWindow(args[0]);
-    const x = try state.asNumber(args[1]);
+    const win = try takeWindow(args, 0);
+    if (args.len != win.consumed + 1) return error.ArityMismatch;
+    const x = try state.asNumber(args[win.consumed]);
 
     const op_name = switch (kind) {
         .avg => "moving-avg",
@@ -620,21 +626,13 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
         .max => "moving-max",
         .min => "moving-min",
     };
-    const tag: []const u8 = switch (window.kind) {
-        .ticks => "t",
-        .time_ms => "m",
-    };
-    const key = try std.fmt.allocPrint(
-        ctx.arena,
-        "{s}/{s}:{s}",
-        .{ op_name, tag, ctx.subject },
-    );
+    const key = try state.keyForWindow(ctx.arena, op_name, mapWinKind(win.spec.kind), ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
 
-    switch (window.kind) {
+    switch (win.spec.kind) {
         .ticks => {
             if (!slot.found_existing) {
-                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, window.n) };
+                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, win.spec.n) };
             }
             const ring = &slot.value_ptr.ring;
             try ring.push(ctx.gpa, x);
@@ -647,7 +645,7 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
         },
         .time_ms => {
             if (!slot.found_existing) {
-                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
+                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(win.spec.n) };
             }
             const ring = &slot.value_ptr.time_ring;
             try ring.push(ctx.gpa, x, ctx.now_ms);
@@ -663,14 +661,13 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
 
 // --- Window helpers (shared by rate / percentile / stddev / throttle) ---
 
-/// Build the per-(rule, op, kind, subject) state-slot key. Same shape
-/// `callMoving` uses; t = ticks, m = window-ms.
-fn windowKey(arena: Allocator, op_name: []const u8, kind: WindowKind, subject: []const u8) ![]const u8 {
-    const tag: []const u8 = switch (kind) {
-        .ticks => "t",
-        .time_ms => "m",
+/// Map the eval-side WindowKind onto state's KeyKind. The two enums have
+/// the same shape but live in different modules.
+fn mapWinKind(k: WindowKind) state.KeyKind {
+    return switch (k) {
+        .ticks => .ticks,
+        .time_ms => .time_ms,
     };
-    return std.fmt.allocPrint(arena, "{s}/{s}:{s}", .{ op_name, tag, subject });
 }
 
 /// Snapshot the live window's f64 values into an arena-owned slice.
@@ -708,7 +705,7 @@ fn pushIntoWindow(
     window: WindowSpec,
     x: f64,
 ) !*state.StateEntry {
-    const key = try windowKey(ctx.arena, op_name, window.kind, ctx.subject);
+    const key = try state.keyForWindow(ctx.arena, op_name, mapWinKind(window.kind), ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
     switch (window.kind) {
         .ticks => {
@@ -729,44 +726,45 @@ fn pushIntoWindow(
 
 // --- Rate ---------------------------------------------------------------
 
-/// `(rate WINDOW X)`. Events per second over WINDOW. Counts pushes;
+/// `(rate :ms N X)`. Events per second over the last N ms. Counts pushes;
 /// X's value is ignored but evaluated (so it threads through `->`).
-/// `(window-ms N)` returns count_in_window / (N/1000). `(ticks N)` is
-/// rejected because "rate over the last N samples" has no time unit.
+/// Tick-window form is rejected: "rate over the last N samples" has no
+/// time unit.
 fn callRate(ctx: *Context, args: []const Value) EvalError!Value {
-    if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const window = try asWindow(args[0]);
-    if (window.kind != .time_ms) return error.TypeMismatch;
+    const win = try takeWindow(args, 0);
+    if (args.len != win.consumed + 1) return error.ArityMismatch;
+    if (win.spec.kind != .time_ms) return error.TypeMismatch;
     // Push a placeholder so the time_ring's eviction reflects our event.
-    const slot_value = try pushIntoWindow(ctx, rule, "rate", window, 0);
+    const slot_value = try pushIntoWindow(ctx, rule, "rate", win.spec, 0);
     const n = slot_value.time_ring.len();
-    const seconds = @as(f64, @floatFromInt(window.n)) / 1000.0;
+    const seconds = @as(f64, @floatFromInt(win.spec.n)) / 1000.0;
     return .{ .number = @as(f64, @floatFromInt(n)) / seconds };
 }
 
 // --- Percentile / median ------------------------------------------------
 
-/// `(percentile WINDOW P X)`. P in [0, 1]. Linear interpolation between
-/// neighbours. O(n log n) per call (sort copy).
+/// `(percentile WINDOW P X)`. WINDOW is `N` (ticks) or `:ms N` (time).
+/// P in [0, 1]. Linear interpolation between neighbours. O(n log n) per
+/// call (sort copy).
 fn callPercentile(ctx: *Context, args: []const Value) EvalError!Value {
-    if (args.len != 3) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const window = try asWindow(args[0]);
-    const p = try state.asNumber(args[1]);
+    const win = try takeWindow(args, 0);
+    if (args.len != win.consumed + 2) return error.ArityMismatch;
+    const p = try state.asNumber(args[win.consumed]);
     if (p < 0 or p > 1) return error.TypeMismatch;
-    const x = try state.asNumber(args[2]);
-    const slot_value = try pushIntoWindow(ctx, rule, "percentile", window, x);
+    const x = try state.asNumber(args[win.consumed + 1]);
+    const slot_value = try pushIntoWindow(ctx, rule, "percentile", win.spec, x);
     return .{ .number = try percentileOf(ctx.arena, slot_value.*, p) };
 }
 
 /// `(median WINDOW X)`. Sugar for `(percentile WINDOW 0.5 X)`.
 fn callMedian(ctx: *Context, args: []const Value) EvalError!Value {
-    if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const window = try asWindow(args[0]);
-    const x = try state.asNumber(args[1]);
-    const slot_value = try pushIntoWindow(ctx, rule, "median", window, x);
+    const win = try takeWindow(args, 0);
+    if (args.len != win.consumed + 1) return error.ArityMismatch;
+    const x = try state.asNumber(args[win.consumed]);
+    const slot_value = try pushIntoWindow(ctx, rule, "median", win.spec, x);
     return .{ .number = try percentileOf(ctx.arena, slot_value.*, 0.5) };
 }
 
@@ -787,29 +785,30 @@ fn percentileOf(arena: Allocator, slot_value: state.StateEntry, p: f64) EvalErro
 
 const StdVarKind = enum { stddev, variance };
 
-/// `(stddev WINDOW X)` / `(variance WINDOW X)`. Population variance
-/// (divides by n, not n-1). Two-pass over the live window.
+/// `(stddev WINDOW X)` / `(variance WINDOW X)`. WINDOW is `N` (ticks) or
+/// `:ms N` (time). Population variance (divides by n, not n-1). Two-pass
+/// over the live window.
 fn callStdVar(ctx: *Context, args: []const Value, kind: StdVarKind) EvalError!Value {
-    if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const window = try asWindow(args[0]);
-    const x = try state.asNumber(args[1]);
+    const win = try takeWindow(args, 0);
+    if (args.len != win.consumed + 1) return error.ArityMismatch;
+    const x = try state.asNumber(args[win.consumed]);
     const op_name: []const u8 = switch (kind) {
         .stddev => "stddev",
         .variance => "variance",
     };
-    const key = try windowKey(ctx.arena, op_name, window.kind, ctx.subject);
+    const key = try state.keyForWindow(ctx.arena, op_name, mapWinKind(win.spec.kind), ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    switch (window.kind) {
+    switch (win.spec.kind) {
         .ticks => {
             if (!slot.found_existing) {
-                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, window.n) };
+                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, win.spec.n) };
             }
             try slot.value_ptr.ring.push(ctx.gpa, x);
         },
         .time_ms => {
             if (!slot.found_existing) {
-                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
+                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(win.spec.n) };
             }
             try slot.value_ptr.time_ring.push(ctx.gpa, x, ctx.now_ms);
         },
@@ -833,28 +832,28 @@ fn callStdVar(ctx: *Context, args: []const Value, kind: StdVarKind) EvalError!Va
 
 // --- Throttle -----------------------------------------------------------
 
-/// `(throttle WINDOW MAX X)`. Pass X through iff fewer than MAX events
-/// have already passed within WINDOW (inclusive of this evaluation).
-/// Tracks pass timestamps in the same `time_ring` machinery used by
-/// `(window-ms ...)` `moving-*`. Differs from `hold-off`: `hold-off` is
-/// "min interval between passes" (one timer); `throttle` is "max count
-/// per window" (a sliding bucket of timestamps).
+/// `(throttle WINDOW MAX X)`. WINDOW is `N` (ticks) or `:ms N` (time).
+/// Pass X through iff fewer than MAX events have already passed within
+/// WINDOW (inclusive of this evaluation). Tracks pass timestamps in the
+/// same `time_ring` machinery time-windowed `moving-*` uses. Differs from
+/// `hold-off`: `hold-off` is "min interval between passes" (one timer);
+/// `throttle` is "max count per window" (a sliding bucket of timestamps).
 fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
-    if (args.len != 3) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const window = try asWindow(args[0]);
-    const max_f = try state.asNumber(args[1]);
+    const win = try takeWindow(args, 0);
+    if (args.len != win.consumed + 2) return error.ArityMismatch;
+    const max_f = try state.asNumber(args[win.consumed]);
     if (max_f < 1) return error.TypeMismatch;
     const max: usize = @intFromFloat(max_f);
-    const x = args[2];
+    const x = args[win.consumed + 1];
 
-    const key = try windowKey(ctx.arena, "throttle", window.kind, ctx.subject);
+    const key = try state.keyForWindow(ctx.arena, "throttle", mapWinKind(win.spec.kind), ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
 
-    const passed: bool = switch (window.kind) {
+    const passed: bool = switch (win.spec.kind) {
         .ticks => blk: {
             if (!slot.found_existing) {
-                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, window.n) };
+                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, win.spec.n) };
             }
             const ring = &slot.value_ptr.ring;
             // Tick form: count the 1.0 entries among the live samples.
@@ -876,7 +875,7 @@ fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
         },
         .time_ms => blk: {
             if (!slot.found_existing) {
-                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
+                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(win.spec.n) };
             }
             const ring = &slot.value_ptr.time_ring;
             ring.evict(ctx.now_ms);
@@ -897,27 +896,23 @@ fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
 
 // --- OHLC bars ----------------------------------------------------------
 
-/// `(bar WINDOW PAYLOAD)`. WINDOW is `(ticks N)` (close every N samples)
-/// or `(window-ms N)` (close every N ms of wall-clock time, aligned to
+/// `(bar WINDOW PAYLOAD)`. WINDOW is `N` (close every N samples) or
+/// `:ms N` (close every N ms of wall-clock time, aligned to
 /// `floor(now/N)*N`). Emits `<subject>.bar.{open,high,low,close}` on
 /// close. Returns nil. Time bars also close from the server-side walker
-/// when the window elapses without a new tick — see `tickClocks`.
+/// when the window elapses without a new tick (see `tickClocks`).
 fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
-    if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const window = try asWindow(args[0]);
-    const x = try state.asNumber(args[1]);
+    const win = try takeWindow(args, 0);
+    if (args.len != win.consumed + 1) return error.ArityMismatch;
+    const x = try state.asNumber(args[win.consumed]);
 
-    const tag: []const u8 = switch (window.kind) {
-        .ticks => "t",
-        .time_ms => "m",
-    };
-    const key = try std.fmt.allocPrint(ctx.arena, "bar/{s}:{s}", .{ tag, ctx.subject });
+    const key = try state.keyForWindow(ctx.arena, "bar", mapWinKind(win.spec.kind), ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
 
-    switch (window.kind) {
-        .ticks => return updateTickBar(ctx, rule, slot, @intCast(window.n), x),
-        .time_ms => return updateTimeBar(ctx, rule, slot, window.n, x),
+    switch (win.spec.kind) {
+        .ticks => return updateTickBar(ctx, rule, slot, @intCast(win.spec.n), x),
+        .time_ms => return updateTimeBar(ctx, rule, slot, win.spec.n, x),
     }
 }
 
@@ -1050,7 +1045,7 @@ fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
         return .nil;
     }
 
-    const key = try state.stateKey(ctx.arena, "count", ctx.subject);
+    const key = try state.keyForOp(ctx.arena, "count", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
     const next: f64 = if (!slot.found_existing or slot.value_ptr.* == .empty)
         1

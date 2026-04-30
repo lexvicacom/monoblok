@@ -41,7 +41,7 @@ pub const default_stats_tick_ms: u64 = 60_000;
 /// Default wall-clock tick for the patchbay clock walker. The walker runs
 /// `eval.tickClocks` over every rule's state to close any time-windowed
 /// `bar` whose window elapsed without a closing PUB, and to evict stale
-/// samples from `(window-ms ...)` `moving-*` rings. 2s is a reasonable
+/// samples from `:ms`-windowed `moving-*` rings. 2s is a reasonable
 /// idle-CPU vs latency tradeoff: time-bar closes land within ~half-tick
 /// of their boundary, and the walker only does real work for `time_ring`
 /// / time-bar slots. Override via `Server.clock_tick_ms` (CLI flag
@@ -102,7 +102,7 @@ pub const Server = struct {
     stats_tick_ms: u64 = default_stats_tick_ms,
 
     /// Periodic patchbay clock walker; timer re-arms from its callback.
-    /// Only armed if at least one rule body uses `(window-ms ...)`. Without
+    /// Only armed if at least one rule body uses a `:ms` window. Without
     /// time-windowed ops the walker has nothing to do, so we skip it
     /// entirely (decided at `listen` time via `rulesUseTimeWindows`).
     clock_enabled: bool = false,
@@ -567,7 +567,7 @@ const Conn = struct {
         self.rx.deinit(gpa);
         self.in_flight_buf.deinit(gpa);
         self.msg_arena.deinit();
-        self.router_conn.release();
+        self.router_conn.deinit();
         gpa.destroy(self);
     }
 
