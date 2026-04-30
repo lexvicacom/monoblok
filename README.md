@@ -69,45 +69,40 @@ The installer drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/e
 
 ## Driving the demo patchbay
 
-Once up and running, the shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`. Start the server, then in another shell subscribe so you can watch the derived traffic show up:
+The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `sensors.*` and `log.app`:
+
+| derived subject              | rule                                                     |
+|------------------------------|----------------------------------------------------------|
+| `sensors.temp.high`          | mirror values `> 30.0`                                   |
+| `events.alerts`              | mirror anything containing `"alert"` from `log.app`      |
+| `sensors.temp.stable`        | round 1dp, drop duplicates                               |
+| `sensors.temp.delta`         | deadband 0.5                                             |
+| `sensors.temp.smoothed`      | 10-sample moving average, deadband 1.0                   |
+
+Start monoblok, then drive it with the `nats` CLI in two terminals:
 
 ```
-nats sub 'sensors.>'       # in one shell
-nats sub 'events.>'        # in another (for the alert rule)
+# terminal 1: subscribe to everything derived
+nats sub "sensors.>"
+
+# terminal 2: publish a few raw samples
+nats pub sensors.temp 22.031
+nats pub sensors.temp 22.034
+nats pub sensors.temp 31.5
 ```
 
-1. **`sensors.temp.high`, threshold.** Anything `> 30.0` is mirrored onto `.high`:
-   ```
-   nats pub sensors.temp 42.5
-   ```
+The subscriber sees `sensors.temp.stable` fire once (22.0, then the duplicate is squelched) and `sensors.temp.high` fire on the 31.5.
 
-2. **`events.alerts`, content match.** Any payload containing `"alert"` is mirrored onto `events.alerts` with the original subject prepended:
-   ```
-   nats pub log.app "kernel: alert!"
-   ```
+For the full picture (every rule exercised, publishes and per-subject deliveries captured side-by-side), the runnable scripts in [`examples/`](./examples/) do the legwork:
 
-3. **`sensors.temp.stable`, round + squelch pipeline.** Only emits on a change after rounding to 1 decimal. Send five values; you'll see three `.stable` messages with payloads `42`, `42.1`, `43`:
-   ```
-   for v in 42.01 42.04 42.08 42.12 43.00; do
-       nats pub sensors.temp "$v"
-   done
-   ```
+```
+bash examples/sensors.sh
+bash examples/demo.sh
+```
 
-4. **`sensors.temp.delta`, analog deadband.** Suppresses changes under `0.5`. Send six values; expect three `.delta` emissions (at `10.0`, `10.6`, `11.2`; the others are within deadband of the last accepted anchor):
-   ```
-   for v in 10.0 10.2 10.4 10.6 10.7 11.2; do
-       nats pub sensors.temp "$v"
-   done
-   ```
+Each one starts its own monoblok on port 14222, runs a scripted sequence of `nats pub`s with parallel `nats sub`s, and prints the captured publishes plus per-subject delivery tables. See [`examples/`](./examples/) for the full set.
 
-5. **`sensors.temp.smoothed`, 10-sample moving average + deadband `1.0`.** Needs a longer stream to drift the mean past each threshold:
-   ```
-   for v in 10 10 10 10 10 10 10 10 10 10 12 12 12 12 12 14 14 14 14 14; do
-       nats pub sensors.temp "$v"
-   done
-   ```
-
-Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
+In the examples, sstateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
 
 ## So, what is signal conditioning?
 
@@ -164,7 +159,22 @@ Per-PUB cost depends on what the matching rule actually does (a cheap `contains?
 
 ### Example patchbays
 
-The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios: [`sensors.edn`](./examples/sensors.edn) (round + squelch on a noisy sensor), [`office-temp.edn`](./examples/office-temp.edn) (deadband + moving-average alert/all-clear), [`ticker.edn`](./examples/ticker.edn) (market data with bridge), [`bars.edn`](./examples/bars.edn) (tick-count OHLC bars per symbol), [`json-frames.edn`](./examples/json-frames.edn) (demux a JSON-emitting device into scalar sub-subjects), [`rental-car.edn`](./examples/rental-car.edn), and [`bridge.edn`](./examples/bridge.edn). Run any of them with `monoblok examples/<file>.edn` (the first non-flag argument is treated as the patchbay path; `--patchbay FILE` is the explicit form). To form-lint without starting the server: `monoblok --validate examples/<file>.edn`. For a full end-to-end demo with a synthetic market-data producer (stocks, options, crypto, forex), see [`json-massive/`](./examples/json-massive/).
+The [`examples/`](./examples/) directory holds runnable patchbay files for common scenarios. Each `.edn` has a matching `.sh` that drives it end-to-end (starts monoblok, publishes a sequence, subscribes in parallel, prints `>>>` publishes and `<<<` deliveries with timing).
+
+| file                                              | what it shows                                                   |
+|---------------------------------------------------|-----------------------------------------------------------------|
+| [`sensors.edn`](./examples/sensors.edn)           | round + squelch on a noisy sensor                               |
+| [`office-temp.edn`](./examples/office-temp.edn)   | moving-average alert + all-clear via `transition` and `count`   |
+| [`ticker.edn`](./examples/ticker.edn)             | market data: round, squelch, big-jump alerts, bridge            |
+| [`bars.edn`](./examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
+| [`json-frames.edn`](./examples/json-frames.edn)   | `json-demux` a JSON-emitting device into scalar sub-subjects    |
+| [`rental-car.edn`](./examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
+| [`bridge.edn`](./examples/bridge.edn)             | forward selected subjects to a real NATS server                 |
+| [`demo.edn`](./examples/demo.edn)                 | tour of every primitive on `demo.sensors.*`                     |
+| [`lvc.edn`](./examples/lvc.edn)                   | `$LVC.>` cache replay: a late joiner gets the last value per subject |
+| [`json-massive/`](./examples/json-massive/)       | end-to-end demo with a synthetic Massive-shape market-data feed |
+
+Run a patchbay directly with `monoblok examples/<file>.edn` (the first non-flag argument is the patchbay path; `--patchbay FILE` is the explicit form). To form-lint without starting the server: `monoblok --validate examples/<file>.edn`.
 
 ### Patchbay with Claude Code
 
