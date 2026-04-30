@@ -100,9 +100,9 @@ bash examples/sensors.sh
 bash examples/demo.sh
 ```
 
-Each one starts its own monoblok on port 14222, runs a scripted sequence of `nats pub`s with parallel `nats sub`s, and prints the captured publishes (one `>>>` line each) plus per-subject delivery tables (with `T+seconds` deltas) at the end. See [`examples/`](./examples/) for the full set.
+Each one starts its own monoblok on port 14222, runs a scripted sequence of `nats pub`s with parallel `nats sub`s, and prints the captured publishes plus per-subject delivery tables. See [`examples/`](./examples/) for the full set.
 
-Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
+In the examples, sstateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
 
 ## So, what is signal conditioning?
 
