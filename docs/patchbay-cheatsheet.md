@@ -6,7 +6,7 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 
 | form | meaning |
 |------|---------|
-| `(on FILTER BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. |
+| `(on FILTER [:reentrant true] BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. `:reentrant true` (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8. |
 | `(bridge :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. See bridge keywords below. |
 
 ## Bound symbols

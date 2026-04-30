@@ -134,7 +134,8 @@ error, not a silent reinterpretation.
 `(publish SUBJECT PAYLOAD)` validates `SUBJECT` as a publishable
 subject (no wildcards, no `$LVC.*`) and enqueues a fan-out. Returns
 `nil`. Publishes from rules participate in normal delivery + LVC
-caching but are not themselves fed back through rule evaluation.
+caching. By default they are not fed back through rule evaluation;
+opt in per rule with `:reentrant true` (see "Re-entry" below).
 
 `(publish-to SUBJECT VALUE)` is the same thing with args flipped so it
 slots on the tail of a `->` pipeline. Coerces numeric `VALUE` to its
@@ -142,6 +143,38 @@ canonical string form. If `VALUE` is `nil` (which is what a gate
 returns when it suppresses), `publish-to` is a no-op. That nil
 short-circuit is what makes the pipeline form below read
 top-to-bottom.
+
+## Re-entry
+
+By default, a publish from inside a rule is delivered to subscribers
+and the LVC, but is not matched against other rules. That keeps rule
+graphs predictable: one inbound message produces one round of rule
+evaluation, full stop.
+
+Opt in per rule with `:reentrant true` between the filter and the body:
+
+```edn
+(on "devices.*" :reentrant true
+  (json-demux "temp" "hum" payload))
+
+(on "devices.*.temp"
+  (-> payload-float
+      (round 0)
+      (publish-to (subject-append "stable"))))
+```
+
+The first rule is reentrant, so its demuxed `devices.kitchen.temp`
+emission re-enters rule evaluation and the second rule fires on it.
+The second rule is not reentrant, so its `...temp.stable` emission
+goes to subscribers only and stops there.
+
+A reentrant rule whose emission matches its own filter would loop
+forever, so re-entry is depth-capped (default 8). The original PUB
+runs at depth 0, and each level of re-entry increments by one;
+emissions past the cap are dropped silently.
+
+`:reentrant` is the only rule option currently recognised. Unknown
+options are a load error.
 
 ## Threading with `->`
 
