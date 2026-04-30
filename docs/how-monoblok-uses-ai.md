@@ -6,7 +6,7 @@ There's no shame in using Claude or any of the other assistants, but there's som
 
 [This is an interesting area](https://github.com/melissawm/open-source-ai-contribution-policies) [for sure](https://simonwillison.net/2026/Apr/30/zig-anti-ai/).
 
->Did I write every line of code? **No,** it's 2026. Do I understand the architecture? **Yes,** I thought of it - that's whether it's good or bad, I'll let you draw conclusions.
+>Did I write every line of code? **No,** it's 2026. Do I understand the architecture? **Yes,** I thought of it - whether it's good or bad, I'll let you draw conclusions.
 
 The valuable/interesting parts of monoblok are the **ideas** - the the bits bolted onto the
 NATS-inspired core (the patchbay DSL, `$LVC.*` last-value streams,

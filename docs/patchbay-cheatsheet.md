@@ -87,13 +87,12 @@ on nil, so a chain of gates self-terminates.
 
 ## Windows
 
-Windowed ops take a **window descriptor** as their first argument.
-Descriptors are values produced by two pure builtins:
+Windowed ops take a **window** as their first argument(s):
 
 | form | meaning |
 |------|---------|
-| `(ticks N)` | last N samples; fixed-cap ring |
-| `(window-ms N)` | last N ms of wall-clock time (ingress timestamp). The server walker also evicts on its ~500ms tick. |
+| `N` (bare integer) | last N samples; fixed-cap ring |
+| `:ms N` | last N ms of wall-clock time (ingress timestamp). The server walker also evicts on its ~500ms tick. |
 
 Slots are keyed `(rule, op, kind, subject)`, so the same op with both
 window kinds keeps distinct state.
@@ -102,13 +101,13 @@ window kinds keeps distinct state.
 
 | form | returns |
 |------|---------|
-| `(moving-avg WINDOW X)` | running mean over WINDOW |
-| `(moving-sum WINDOW X)` | running sum over WINDOW |
-| `(moving-max WINDOW X)` / `(moving-min WINDOW X)` | window extremes |
-| `(rate WINDOW X)` | events per second; **`(window-ms N)` only**. X is evaluated but ignored — counts pushes. |
-| `(percentile WINDOW P X)` | Pth percentile (P in [0, 1]) |
-| `(median WINDOW X)` | sugar for `(percentile WINDOW 0.5 X)` |
-| `(stddev WINDOW X)` / `(variance WINDOW X)` | population stats |
+| `(moving-avg N X)` / `(moving-avg :ms N X)` | running mean over the window |
+| `(moving-sum N X)` / `(moving-sum :ms N X)` | running sum over the window |
+| `(moving-max N X)` / `(moving-min N X)` (and `:ms` forms) | window extremes |
+| `(rate :ms N X)` | events per second; **`:ms` only**. X is evaluated but ignored — counts pushes. |
+| `(percentile N P X)` / `(percentile :ms N P X)` | Pth percentile (P in [0, 1]) |
+| `(median N X)` / `(median :ms N X)` | sugar for `(percentile WINDOW 0.5 X)` |
+| `(stddev N X)` / `(variance N X)` (and `:ms` forms) | population stats |
 
 ## Rate gates
 

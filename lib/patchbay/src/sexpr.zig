@@ -9,10 +9,6 @@ pub const Value = union(enum) {
     keyword: []const u8, // EDN-style :foo (used in config forms like (bridge :servers [...]))
     string: []const u8,
     list: []const Value,
-    /// Window descriptor produced at runtime by `(window-ms N)` / `(ticks N)`.
-    /// Never appears in parsed source; the parser doesn't emit it. Consumed
-    /// by windowed ops (`moving-*`, `bar`, ...).
-    window: WindowSpec,
 
     pub fn isTruthy(v: Value) bool {
         return switch (v) {
@@ -23,6 +19,8 @@ pub const Value = union(enum) {
     }
 };
 
+/// Window descriptor parsed from a windowed op's leading arg(s) (`N` or
+/// `:ms N`). Consumed at the call site, never a Value.
 pub const WindowKind = enum { ticks, time_ms };
 
 pub const WindowSpec = struct {

@@ -9,7 +9,7 @@
 ;; the 60-sample moving average crosses above 28°C, "ok" once when it
 ;; drops back below. One predicate, one ring buffer, one prev slot.
 (on "temp.*.*"
-  (transition (> (moving-avg (ticks 60) payload-float) 28.0)
+  (transition (> (moving-avg 60 payload-float) 28.0)
     (publish-to (subject-append "alert") "hot")
     (publish-to (subject-append "ok")    "cool")))
 
@@ -19,4 +19,4 @@
 ;; running total. (rising-edge fires once per transition, so this is a
 ;; counter of *crossings*, not samples.)
 (on "temp.*.*"
-  (count (rising-edge (> (moving-avg (ticks 60) payload-float) 28.0))))
+  (count (rising-edge (> (moving-avg 60 payload-float) 28.0))))

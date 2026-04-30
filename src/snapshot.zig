@@ -1,12 +1,13 @@
-//! Snapshot file format (v2).
+//! Snapshot file format (v3).
 //!
-//! v2 added time-windowed state: a `time_ring` variant and three extra
-//! fields on `ohlc`. v1 snapshots aren't read; a version bump on a fresh
+//! v3 changed the per-rule state-key format: every key now carries an
+//! explicit window-kind byte (`/n`, `/t`, or `/m`), so v2 keys won't
+//! match. v2 snapshots aren't read; a version bump on a fresh
 //! `--snapshot` path just means starting empty.
 //!
 //! Layout:
 //!   magic     "MBLK"   (4 bytes)
-//!   version   u8       (currently 2)
+//!   version   u8       (currently 3)
 //!   reserved  [3]u8    (zero)
 //!   records   repeated tagged entries:
 //!     kind u8
@@ -61,7 +62,7 @@ const patchbay = @import("patchbay");
 const rules_mod = patchbay.eval;
 
 pub const magic = "MBLK";
-pub const version: u8 = 2;
+pub const version: u8 = 3;
 pub const header_len = 8;
 
 pub const max_field_len: u32 = 16 * 1024 * 1024;
@@ -723,9 +724,9 @@ test "rule state variants round-trip" {
 
     const rs = [_]RuleStateEntry{
         .{ .rule_idx = 0, .filter = "a.>", .key = "empty_k", .value = .empty },
-        .{ .rule_idx = 1, .filter = "b.*", .key = "squelch:x.y", .value = .{ .bytes = bytes_entry } },
-        .{ .rule_idx = 2, .filter = "c", .key = "deadband:foo", .value = .{ .number = 3.14 } },
-        .{ .rule_idx = 3, .filter = "d", .key = "moving-avg:q", .value = .{ .ring = .{
+        .{ .rule_idx = 1, .filter = "b.*", .key = "squelch/n:x.y", .value = .{ .bytes = bytes_entry } },
+        .{ .rule_idx = 2, .filter = "c", .key = "deadband/n:foo", .value = .{ .number = 3.14 } },
+        .{ .rule_idx = 3, .filter = "d", .key = "moving-avg/t:q", .value = .{ .ring = .{
             .buf = buf,
             .counter = 7,
             .sum = 6.75,

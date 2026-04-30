@@ -97,15 +97,15 @@ Idempotent filters (per-rule, per-subject state; first sight always passes / is 
 - `(delta X)` numeric difference since last X (0 on first sight)
 - `(hold-off MS X)` pass X on first sight and again only after MS ms have elapsed since the last pass; nil otherwise. Time source is the server-stamped per-message clock, so all ops in one evaluation see the same "now".
 
-Window descriptors (pure values, fed to windowed ops):
+Windows (used as the first arg(s) of windowed ops):
 
-- `(ticks N)` last N samples; ring is fixed-cap, allocated once
-- `(window-ms N)` last N ms of wall-clock time (ingress timestamp); samples evict by age, the server walker also evicts on its ~500ms tick so quiet streams don't keep stale data
+- bare integer `N` — last N samples; ring is fixed-cap, allocated once
+- `:ms N` — last N ms of wall-clock time (ingress timestamp); samples evict by age, the server walker also evicts on its ~500ms tick so quiet streams don't keep stale data
 
 Windowed aggregates (per `(rule, subject, op, window-kind)` slot — tick and time variants on the same rule + subject keep distinct state):
 
-- `(moving-avg WINDOW X)`, `(moving-sum WINDOW X)`, `(moving-max WINDOW X)`, `(moving-min WINDOW X)`. WINDOW is `(ticks N)` or `(window-ms N)`. Tick form is O(1) per update; time form is O(n) over the live window.
-- `(rate WINDOW X)` events per second. `(window-ms N)` only — `(ticks N)` is rejected because rate needs a time unit. X is evaluated but ignored; the op counts pushes.
+- `(moving-avg WINDOW X)`, `(moving-sum WINDOW X)`, `(moving-max WINDOW X)`, `(moving-min WINDOW X)`. WINDOW is `N` (ticks) or `:ms N` (time). Tick form is O(1) per update; time form is O(n) over the live window.
+- `(rate :ms N X)` events per second. Tick form is rejected because rate needs a time unit. X is evaluated but ignored; the op counts pushes.
 - `(percentile WINDOW P X)` Pth percentile (P in [0, 1]). `(median WINDOW X)` is sugar for `(percentile WINDOW 0.5 X)`. O(n log n) per call.
 - `(stddev WINDOW X)`, `(variance WINDOW X)` population stddev / variance over WINDOW. O(n).
 - `(throttle WINDOW MAX X)` pass X iff fewer than MAX events have already passed within WINDOW (then record this pass). Differs from `hold-off`: `hold-off` is min-interval-between-passes; `throttle` is max-count-per-window.
@@ -121,7 +121,7 @@ JSON (top-level object only, no JSON path, value-last):
 
 Bars (side-effecting, per (rule, subject, window-kind)):
 
-- `(bar WINDOW X)` accumulates X into an in-progress bar. WINDOW is `(ticks N)` (close every N samples) or `(window-ms N)` (close every N ms of wall-clock time, aligned to `floor(now/N)*N`). On close, publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume isn't reported (N for tick bars, varies for time bars; pair with `(count)` if you need it). Time bars also close from the server walker if a window elapses without a new sample, so close events land within ~half the walker tick (~500ms) of the boundary.
+- `(bar WINDOW X)` accumulates X into an in-progress bar. WINDOW is `N` (close every N samples) or `:ms N` (close every N ms of wall-clock time, aligned to `floor(now/N)*N`). On close, publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume isn't reported (N for tick bars, varies for time bars; pair with `(count)` if you need it). Time bars also close from the server walker if a window elapses without a new sample, so close events land within ~half the walker tick (~500ms) of the boundary.
 
 Running counters (side-effecting, per (rule, subject)):
 
@@ -157,8 +157,7 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 
 - Re-implementing `squelch` / `deadband` with `if` and a hand-rolled "last value" (there is no way to store state outside the gate primitives; the gates ARE the state).
 - Using `=` to compare a number and a string. `=` is tag-strict; compare with `<` / `>` or parse first.
-- Changing `N` in `(moving-avg (ticks N) ...)` between invocations on the same rule. The first call's `N` wins for the lifetime of the slot.
-- Passing a bare number where a window is expected. `(moving-avg 10 X)` is no longer valid; write `(moving-avg (ticks 10) X)` for the equivalent behaviour.
+- Changing `N` in `(moving-avg N ...)` between invocations on the same rule. The first call's `N` wins for the lifetime of the slot.
 - Assuming `first sight` fires an edge. `rising-edge` / `falling-edge` / `transition` all stay quiet until they have seen at least one prior value.
 
 ## Bridge form (optional, zero or one at top level)
@@ -201,7 +200,7 @@ as-is. Nothing flows back.
 ; Smooth + deadband in one pipeline.
 (on "sensors.*"
   (-> payload-float
-      (moving-avg (ticks 10))
+      (moving-avg 10)
       (deadband 1.0)
       (publish-to (subject-append "smoothed"))))
 
@@ -209,41 +208,41 @@ as-is. Nothing flows back.
 ; off on the next push or on the server's clock walker.
 (on "sensors.*"
   (-> payload-float
-      (moving-avg (window-ms 5000))
+      (moving-avg :ms 5000)
       (publish-to (subject-append "avg5s"))))
 
 ; Sustained-heat alert and all-clear, one rule, one ring.
 (on "temp.*.*"
-  (transition (> (moving-avg (ticks 60) payload-float) 28.0)
+  (transition (> (moving-avg 60 payload-float) 28.0)
     (publish-to (subject-append "alert") "hot")
     (publish-to (subject-append "ok")    "cool")))
 
 ; Volatility: two windows, non-threaded form.
 (on "sensors.*"
-  (when (> (- (moving-max (ticks 20) payload-float)
-              (moving-min (ticks 20) payload-float)) 5.0)
+  (when (> (- (moving-max 20 payload-float)
+              (moving-min 20 payload-float)) 5.0)
     (publish (subject-append "volatile") payload)))
 
 ; 1-minute aligned OHLC bars on a market feed. Bars close on the next
 ; tick that crosses a wall-clock minute boundary, or from the server
 ; walker if the feed goes quiet.
 (on "MARKET.*"
-  (bar (window-ms 60000) payload-float))
+  (bar :ms 60000 payload-float))
 
 ; Live events/sec per subject, useful for monitoring dashboards.
 (on "events.>"
-  (-> payload (rate (window-ms 1000)) (publish-to (subject-append "hz"))))
+  (-> payload (rate :ms 1000) (publish-to (subject-append "hz"))))
 
 ; Tail-latency monitor: only flag rules where p99 over the last 200
 ; samples exceeds a threshold.
 (on "rpc.latency.*"
-  (when (> (percentile (ticks 200) 0.99 payload-float) 250.0)
+  (when (> (percentile 200 0.99 payload-float) 250.0)
     (publish (subject-append "slow") payload)))
 
 ; At most 5 alerts per minute, regardless of how they arrive.
 (on "alerts.>"
   (-> payload
-      (throttle (window-ms 60000) 5)
+      (throttle :ms 60000 5)
       (publish-to (subject-append "rate-limited"))))
 ```
 

@@ -25,8 +25,6 @@ pub const StateEntry = state.StateEntry;
 pub const Ohlc = state.Ohlc;
 pub const Ring = state.Ring;
 pub const TimeRing = state.TimeRing;
-pub const WindowKind = sexpr.WindowKind;
-pub const WindowSpec = sexpr.WindowSpec;
 
 pub const LoadError = load.LoadError;
 pub const ValidateFailure = load.ValidateFailure;
@@ -90,16 +88,22 @@ pub const Context = struct {
     reentry_fn: ?*const fn (reentry_ctx: ?*anyopaque, parent: *Context, subject: []const u8, payload: []const u8) anyerror!void = null,
 
     /// Single emission point used by every side-effecting op. Bumps
-    /// counters, records the trace entry, and (under the depth cap)
-    /// invokes the re-entry hook.
+    /// counters, records the trace entry, and (when the emitting rule is
+    /// `:reentrant true`, under the depth cap) invokes the re-entry hook.
     pub fn emit(ctx: *Context, subject: []const u8, payload: []const u8) EvalError!void {
         ctx.publisher.publish(subject, payload) catch return error.PublishFailed;
         ctx.rule_publishes += 1;
         if (ctx.current_rule) |r| r.publishes_emitted += 1;
         recordTraceEmit(ctx, subject, payload);
-        if (ctx.reentry_fn) |f| {
-            if (ctx.depth < ctx.max_depth) {
-                f(ctx.reentry_ctx, ctx, subject, payload) catch return error.PublishFailed;
+        // Re-entry is opt-in per emitting rule. Default-off avoids
+        // surprise rule-graph cascades; rules that genuinely need to feed
+        // each other declare it explicitly via `:reentrant true`.
+        const reentrant = if (ctx.current_rule) |r| r.reentrant else false;
+        if (reentrant) {
+            if (ctx.reentry_fn) |f| {
+                if (ctx.depth < ctx.max_depth) {
+                    f(ctx.reentry_ctx, ctx, subject, payload) catch return error.PublishFailed;
+                }
             }
         }
     }
@@ -133,12 +137,7 @@ pub const RuleSet = struct {
     /// two means a wildcard rule defined before a literal one fires after.
     pub fn run(self: *const RuleSet, ctx: *Context) !void {
         if (self.rules.len == 0) return;
-        ctx.eval_fn = if (ctx.trace) evalTraced else evalNormal;
-        ctx.trace_emissions = .empty;
-        if (ctx.trace) {
-            std.debug.print("trace: {s} {s}\n", .{ ctx.subject, ctx.payload });
-        }
-        const t_pub_start: u64 = if (ctx.trace) monotonicNs() else 0;
+        const t_pub_start = beginRun(ctx);
 
         if (self.literal_index.get(ctx.subject)) |idxs| {
             for (idxs) |i| try runOne(self.rules, i, ctx);
@@ -149,35 +148,30 @@ pub const RuleSet = struct {
             try runOne(self.rules, i, ctx);
         }
 
-        ctx.current_rule = null;
-        if (ctx.trace) {
-            const ns = monotonicNs() -| t_pub_start;
-            std.debug.print("total [{s}]\n", .{formatNs(ns)});
-        }
+        endRun(ctx, t_pub_start);
     }
 };
 
-/// Returns true if any rule body contains a `(window-ms ...)` form. Used
-/// by the server at load time to decide whether to arm the periodic clock
-/// walker; if no rule can produce time-bar or time-ring state, the walker
-/// has nothing to do and the timer is pure overhead.
+/// Returns true if any rule body contains a `:ms` keyword (the time-window
+/// sentinel). Used by the server at load time to decide whether to arm the
+/// periodic clock walker; if no rule can produce time-bar or time-ring
+/// state, the walker has nothing to do and the timer is pure overhead.
+/// Over-arms harmlessly if `:ms` appears in some unrelated keyword slot,
+/// since the walker only does work for slots that actually exist.
 pub fn rulesUseTimeWindows(rules: []const Rule) bool {
-    for (rules) |r| if (valueUsesTimeWindow(r.body)) return true;
+    for (rules) |r| if (valueHasMsKeyword(r.body)) return true;
     return false;
 }
 
-fn valueUsesTimeWindow(v: Value) bool {
-    const items = switch (v) {
-        .list => |xs| xs,
-        else => return false,
+fn valueHasMsKeyword(v: Value) bool {
+    return switch (v) {
+        .keyword => |k| std.mem.eql(u8, k, "ms"),
+        .list => |items| blk: {
+            for (items) |item| if (valueHasMsKeyword(item)) break :blk true;
+            break :blk false;
+        },
+        else => false,
     };
-    if (items.len > 0) {
-        if (items[0] == .symbol and std.mem.eql(u8, items[0].symbol, "window-ms")) {
-            return true;
-        }
-    }
-    for (items) |item| if (valueUsesTimeWindow(item)) return true;
-    return false;
 }
 
 /// Walk every rule's state and:
@@ -211,7 +205,7 @@ pub fn tickClocks(
                     if (bar.count == 0) continue;     // empty bar, nothing to close
                     const window_ms_i: i64 = @intCast(bar.window_ms);
                     if (now_ms - bar.window_start_ms < window_ms_i) continue;
-                    const subject = parseSubjectFromBarKey(key) orelse continue;
+                    const subject = state.parseBarSubject(key) orelse continue;
                     try emitBar(arena, publisher, subject, bar.open, bar.high, bar.low, bar.last_close);
                     rule.publishes_emitted += 4;
                     // Reset; the next PUB starts a fresh window.
@@ -223,15 +217,6 @@ pub fn tickClocks(
             }
         }
     }
-}
-
-/// Bar slot keys are `"bar/m:<subject>"` — see `callBar` in builtins.zig.
-/// Anything else (e.g. tick bars at `"bar/t:..."`, or non-bar slots) is
-/// ignored.
-fn parseSubjectFromBarKey(key: []const u8) ?[]const u8 {
-    const prefix = "bar/m:";
-    if (!std.mem.startsWith(u8, key, prefix)) return null;
-    return key[prefix.len..];
 }
 
 fn emitBar(
@@ -307,32 +292,29 @@ fn runOne(rules: []Rule, i: u32, ctx: *Context) !void {
     }
 }
 
+/// Linear-scan variant for callers that don't have a `RuleSet` (validate,
+/// tests). `RuleSet.run` is what the server hot path uses. Both share
+/// `runOne` and the begin/end helpers below.
 pub fn run(rules: []Rule, ctx: *Context) !void {
-    ctx.eval_fn = if (ctx.trace) evalTraced else evalNormal;
-    // Reset; the per-message arena was wiped between PUBs.
-    ctx.trace_emissions = .empty;
-    if (ctx.trace) {
-        std.debug.print("trace: {s} {s}\n", .{ ctx.subject, ctx.payload });
-    }
-    const t_pub_start: u64 = if (ctx.trace) monotonicNs() else 0;
+    const t_pub_start = beginRun(ctx);
     for (rules, 0..) |*rule, i| {
         if (!subject_mod.matches(rule.filter, ctx.subject)) continue;
-        ctx.current_rule = rule;
-        ctx.trace_depth = 0;
-        if (ctx.trace) {
-            std.debug.print("  rule {d} (on \"{s}\") matched\n", .{ i, rule.filter });
-            ctx.trace_depth = 1;
-            const t_start = monotonicNs();
-            _ = try ctx.eval_fn(ctx, rule.body);
-            const ns = monotonicNs() -| t_start;
-            std.debug.print("  rule {d} done [{s}]\n", .{ i, formatNs(ns) });
-        } else {
-            _ = try ctx.eval_fn(ctx, rule.body);
-        }
+        try runOne(rules, @intCast(i), ctx);
     }
+    endRun(ctx, t_pub_start);
+}
+
+fn beginRun(ctx: *Context) u64 {
+    ctx.eval_fn = if (ctx.trace) evalTraced else evalNormal;
+    ctx.trace_emissions = .empty;
+    if (ctx.trace) std.debug.print("trace: {s} {s}\n", .{ ctx.subject, ctx.payload });
+    return if (ctx.trace) monotonicNs() else 0;
+}
+
+fn endRun(ctx: *Context, t_start: u64) void {
     ctx.current_rule = null;
     if (ctx.trace) {
-        const ns = monotonicNs() -| t_pub_start;
+        const ns = monotonicNs() -| t_start;
         std.debug.print("total [{s}]\n", .{formatNs(ns)});
     }
 }
@@ -341,10 +323,13 @@ pub fn run(rules: []Rule, ctx: *Context) !void {
 
 fn evalNormal(ctx: *Context, v: Value) EvalError!Value {
     return switch (v) {
-        .nil, .boolean, .number, .string, .window => v,
+        // Keywords self-evaluate so windowed ops can take a `:ms NUMBER`
+        // pair as a sentinel for time windows. Outside of that role they're
+        // meaningless, and any op that receives one as a regular arg will
+        // type-error in `state.asString`/`asNumber`.
+        .nil, .boolean, .number, .string, .keyword => v,
         .symbol => |s| evalSymbol(ctx, s),
         .list => |items| builtins.evalCall(ctx, items),
-        .keyword => error.UnknownSymbol, // keywords are config-only, not rule body values
     };
 }
 
@@ -474,10 +459,6 @@ fn formatValue(v: Value) void {
                 formatValue(it);
             }
             std.debug.print(")", .{});
-        },
-        .window => |w| switch (w.kind) {
-            .ticks => std.debug.print("(ticks {d})", .{w.n}),
-            .time_ms => std.debug.print("(window-ms {d})", .{w.n}),
         },
     }
 }
