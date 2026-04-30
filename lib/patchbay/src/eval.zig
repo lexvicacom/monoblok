@@ -157,6 +157,29 @@ pub const RuleSet = struct {
     }
 };
 
+/// Returns true if any rule body contains a `(window-ms ...)` form. Used
+/// by the server at load time to decide whether to arm the periodic clock
+/// walker; if no rule can produce time-bar or time-ring state, the walker
+/// has nothing to do and the timer is pure overhead.
+pub fn rulesUseTimeWindows(rules: []const Rule) bool {
+    for (rules) |r| if (valueUsesTimeWindow(r.body)) return true;
+    return false;
+}
+
+fn valueUsesTimeWindow(v: Value) bool {
+    const items = switch (v) {
+        .list => |xs| xs,
+        else => return false,
+    };
+    if (items.len > 0) {
+        if (items[0] == .symbol and std.mem.eql(u8, items[0].symbol, "window-ms")) {
+            return true;
+        }
+    }
+    for (items) |item| if (valueUsesTimeWindow(item)) return true;
+    return false;
+}
+
 /// Walk every rule's state and:
 ///   - close any time-windowed `bar` whose aligned window has fully
 ///     elapsed (`now_ms >= window_start + window_ms`); emit its
