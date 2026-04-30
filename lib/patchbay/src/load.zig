@@ -15,6 +15,7 @@ pub const Rule = state.Rule;
 pub const LoadError = error{
     InvalidRuleForm,
     UnknownTopLevel,
+    UnknownRuleOption,
 } || sexpr.ParseError || subject_mod.Error;
 
 pub fn loadRules(arena: Allocator, source: []const u8) LoadError![]Rule {
@@ -35,9 +36,30 @@ pub fn loadRulesReporting(arena: Allocator, source: []const u8, parse_err_offset
         if (items.len < 2 or items[0] != .symbol) return error.UnknownTopLevel;
         // Other modules claim their own top-level forms (e.g. `bridge`).
         if (!std.mem.eql(u8, items[0].symbol, "on")) continue;
-        if (items.len != 3 or items[1] != .string) return error.InvalidRuleForm;
+        // Shape: (on FILTER [:KW VAL]* BODY). At minimum filter + body.
+        if (items.len < 3 or items[1] != .string) return error.InvalidRuleForm;
         try subject_mod.validateFilter(items[1].string);
-        try out.append(arena, .{ .filter = items[1].string, .body = items[2] });
+
+        var rule: Rule = .{ .filter = items[1].string, .body = items[items.len - 1] };
+
+        // Walk the optional :keyword value pairs between filter and body.
+        // Even count required; last item is the body.
+        const opts = items[2 .. items.len - 1];
+        if (opts.len % 2 != 0) return error.InvalidRuleForm;
+        var i: usize = 0;
+        while (i < opts.len) : (i += 2) {
+            if (opts[i] != .keyword) return error.InvalidRuleForm;
+            const kw = opts[i].keyword;
+            const val = opts[i + 1];
+            if (std.mem.eql(u8, kw, "reentrant")) {
+                if (val != .boolean) return error.InvalidRuleForm;
+                rule.reentrant = val.boolean;
+            } else {
+                return error.UnknownRuleOption;
+            }
+        }
+
+        try out.append(arena, rule);
     }
     return try out.toOwnedSlice(arena);
 }

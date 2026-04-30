@@ -19,6 +19,12 @@ pub const Rule = struct {
     /// stored payloads are owned by `gpa`.
     state: std.StringHashMapUnmanaged(StateEntry) = .empty,
 
+    /// Opt-in: when true, publishes this rule emits re-enter the patchbay
+    /// and may match other rules. Default false avoids surprise rule-graph
+    /// cascades — most rules don't need to feed each other. Set via
+    /// `(on FILTER :reentrant true BODY)`.
+    reentrant: bool = false,
+
     /// Cumulative totals, exposed via `$STATS.rules.<i>.*`.
     publishes_emitted: u64 = 0,
     publishes_suppressed: u64 = 0,
@@ -246,14 +252,55 @@ pub fn encodeForState(arena: Allocator, v: Value) StateError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list, .keyword, .window => error.TypeMismatch,
+        .list, .keyword => error.TypeMismatch,
     };
 }
 
-/// Build a state-table key `"op:subject"` so distinct ops on the same
-/// subject don't alias each other's slot.
-pub fn stateKey(arena: Allocator, op_name: []const u8, subject: []const u8) Allocator.Error![]const u8 {
-    return std.fmt.allocPrint(arena, "{s}:{s}", .{ op_name, subject });
+/// Per-(rule, op, window-kind, subject) state-table key. Plain bytes so
+/// the HashMap hashes/eqs them as-is and the snapshot file format is
+/// unchanged. Kind is `n` for non-windowed ops, `t` for ticks, `m` for
+/// time-ms; encoded in one byte so there's nothing to ambiguate.
+///
+/// On-the-wire shape: `"<op_name>/<kind>:<subject>"` (e.g. `"squelch/n:foo"`,
+/// `"moving-avg/t:foo.bar"`, `"bar/m:MARKET.AAPL"`). Construct via
+/// `keyForOp` / `keyForWindow`; introspect via `parseBarSubject`. Don't
+/// build keys ad-hoc with `allocPrint` — the format lives here.
+pub const KeyKind = enum { none, ticks, time_ms };
+
+fn kindByte(k: KeyKind) u8 {
+    return switch (k) {
+        .none => 'n',
+        .ticks => 't',
+        .time_ms => 'm',
+    };
+}
+
+pub fn keyForOp(arena: Allocator, op_name: []const u8, subject: []const u8) Allocator.Error![]const u8 {
+    return keyFor(arena, op_name, .none, subject);
+}
+
+pub fn keyForWindow(
+    arena: Allocator,
+    op_name: []const u8,
+    kind: KeyKind,
+    subject: []const u8,
+) Allocator.Error![]const u8 {
+    std.debug.assert(kind != .none);
+    return keyFor(arena, op_name, kind, subject);
+}
+
+fn keyFor(arena: Allocator, op_name: []const u8, kind: KeyKind, subject: []const u8) Allocator.Error![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}/{c}:{s}", .{ op_name, kindByte(kind), subject });
+}
+
+/// Reverse of `keyForWindow(op="bar", kind=.time_ms, subject)`. Returns the
+/// subject for time-bar slots, null for everything else. Used by the
+/// patchbay clock walker to address a bar's emission subject without
+/// carrying it on the slot.
+pub fn parseBarSubject(key: []const u8) ?[]const u8 {
+    const prefix = "bar/m:";
+    if (!std.mem.startsWith(u8, key, prefix)) return null;
+    return key[prefix.len..];
 }
 
 pub const StateSlot = struct {
@@ -323,6 +370,5 @@ pub fn valueEql(a: Value, b: Value) bool {
         .keyword => |s| std.mem.eql(u8, s, b.keyword),
         .string => |s| std.mem.eql(u8, s, b.string),
         .list => false, // lists aren't comparable in our dialect
-        .window => |w| w.kind == b.window.kind and w.n == b.window.n,
     };
 }

@@ -24,7 +24,7 @@
 ;;    Watch `demo.sensors.*.smoothed`.
 (on "demo.sensors.*"
   (-> payload-float
-      (moving-avg (ticks 10))
+      (moving-avg 10)
       (deadband 1.0)
       (publish-to (subject-append "smoothed"))))
 
@@ -33,7 +33,7 @@
 ;;     Watch `demo.sensors.*.avg5s`.
 (on "demo.sensors.*"
   (-> payload-float
-      (moving-avg (window-ms 5000))
+      (moving-avg :ms 5000)
       (publish-to (subject-append "avg5s"))))
 
 ;; 4. Delta + squelch: emit the per-tick change, but only when it

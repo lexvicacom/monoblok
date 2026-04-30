@@ -37,7 +37,7 @@
 ; when the smoothed value drifts by >= 1.0.
 (on "sensors.*"
   (-> payload-float
-      (moving-avg (ticks 10))
+      (moving-avg 10)
       (deadband 1.0)
       (publish-to (subject-append "smoothed"))))
 
@@ -45,14 +45,14 @@
 ; on the next push or the server's clock walker, whichever is sooner.
 (on "sensors.*"
   (-> payload-float
-      (moving-avg (window-ms 5000))
+      (moving-avg :ms 5000)
       (publish-to (subject-append "avg5s"))))
 
 ; 1-minute aligned OHLC bars on a price stream. Bars close on the next
 ; tick that crosses a wall-clock minute boundary, or from the server
 ; walker if the feed goes quiet.
 ;(on "MARKET.*"
-;  (bar (window-ms 60000) payload-float))
+;  (bar :ms 60000 payload-float))
 
 ; Outbound NATS bridge (commented out). Zero or one (bridge ...) form
 ; at top level. See docs/patchbay-cheatsheet.md for the full keyword

@@ -241,7 +241,7 @@ test "moving-avg smooths a stream" {
     // Rule fires when the 3-sample moving avg crosses 10.
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (when (> (moving-avg (ticks 3) payload-float) 10.0)
+        \\  (when (> (moving-avg 3 payload-float) 10.0)
         \\    (publish (subject-append "hot") payload)))
     );
     defer deinitRules(rules, testing.allocator);
@@ -274,7 +274,7 @@ test "moving-max and moving-min track window extremes" {
 
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (when (> (- (moving-max (ticks 3) payload-float) (moving-min (ticks 3) payload-float)) 5.0)
+        \\  (when (> (- (moving-max 3 payload-float) (moving-min 3 payload-float)) 5.0)
         \\    (publish (subject-append "spread") payload)))
     );
     defer deinitRules(rules, testing.allocator);
@@ -306,7 +306,7 @@ test "moving-avg composes with deadband" {
     // Smooth then gate: only emit if the smoothed value drifts by >= 1.0.
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (when (deadband 1.0 (moving-avg (ticks 3) payload-float))
+        \\  (when (deadband 1.0 (moving-avg 3 payload-float))
         \\    (publish (subject-append "drift") payload)))
     );
     defer deinitRules(rules, testing.allocator);
@@ -379,7 +379,7 @@ test "thread -> expands moving-avg pipeline" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (-> payload-float
-        \\      (moving-avg (ticks 3))
+        \\      (moving-avg 3)
         \\      (deadband 1.0)
         \\      (publish-to (subject-append "drift"))))
     );
@@ -916,7 +916,7 @@ test "bar emits open/high/low/close every N ticks" {
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar (ticks 4) payload-float))
+        \\  (bar 4 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -963,7 +963,7 @@ test "bar state is per-subject" {
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar (ticks 2) payload-float))
+        \\  (bar 2 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1072,7 +1072,7 @@ test "moving-avg with window-ms evicts by age" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (-> payload-float
-        \\      (moving-avg (window-ms 1000))
+        \\      (moving-avg :ms 1000)
         \\      (publish-to (subject-append "avg"))))
     );
     defer deinitRules(rules, testing.allocator);
@@ -1121,8 +1121,8 @@ test "ticks and window-ms keep distinct slots on the same rule" {
     const rules = try loadRules(arena,
         \\(on "x.*"
         \\  (do
-        \\    (-> payload-float (moving-avg (ticks 2))     (publish-to "tick.avg"))
-        \\    (-> payload-float (moving-avg (window-ms 1000)) (publish-to "time.avg"))))
+        \\    (-> payload-float (moving-avg 2)     (publish-to "tick.avg"))
+        \\    (-> payload-float (moving-avg :ms 1000) (publish-to "time.avg"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1162,7 +1162,7 @@ test "bar with window-ms closes on the next tick after the boundary" {
     // 1s aligned bars. Boundary at floor(now/1000)*1000.
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar (window-ms 1000) payload-float))
+        \\  (bar :ms 1000 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1206,7 +1206,7 @@ test "tickClocks closes a stalled time bar" {
 
     const loaded = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar (window-ms 1000) payload-float))
+        \\  (bar :ms 1000 payload-float))
     );
     defer deinitRules(loaded, testing.allocator);
 
@@ -1244,7 +1244,7 @@ test "rate over a 1s window reports events per second" {
     const rules = try loadRules(arena,
         \\(on "x"
         \\  (-> payload-float
-        \\      (rate (window-ms 1000))
+        \\      (rate :ms 1000)
         \\      (publish-to "hz")))
     );
     defer deinitRules(rules, testing.allocator);
@@ -1298,7 +1298,7 @@ test "rate rejects (ticks N) — needs a time window" {
     const arena = arena_state.allocator();
 
     const rules = try loadRules(arena,
-        \\(on "x" (-> payload-float (rate (ticks 10)) (publish-to "hz")))
+        \\(on "x" (-> payload-float (rate 10) (publish-to "hz")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1323,7 +1323,7 @@ test "percentile interpolates between window samples" {
     const rules = try loadRules(arena,
         \\(on "lat"
         \\  (-> payload-float
-        \\      (percentile (ticks 5) 0.5)
+        \\      (percentile 5 0.5)
         \\      (publish-to "p50")))
     );
     defer deinitRules(rules, testing.allocator);
@@ -1351,7 +1351,7 @@ test "median is sugar for percentile 0.5" {
     const arena = arena_state.allocator();
 
     const rules = try loadRules(arena,
-        \\(on "x" (-> payload-float (median (ticks 4)) (publish-to "med")))
+        \\(on "x" (-> payload-float (median 4) (publish-to "med")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1380,8 +1380,8 @@ test "stddev and variance over a tick window" {
     const rules = try loadRules(arena,
         \\(on "x"
         \\  (do
-        \\    (-> payload-float (stddev (ticks 8))   (publish-to "sd"))
-        \\    (-> payload-float (variance (ticks 8)) (publish-to "var"))))
+        \\    (-> payload-float (stddev 8)   (publish-to "sd"))
+        \\    (-> payload-float (variance 8) (publish-to "var"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1413,7 +1413,7 @@ test "throttle passes at most MAX per ticks window" {
     const rules = try loadRules(arena,
         \\(on "x"
         \\  (-> payload
-        \\      (throttle (ticks 5) 2)
+        \\      (throttle 5 2)
         \\      (publish-to "out")))
     );
     defer deinitRules(rules, testing.allocator);
@@ -1447,7 +1447,7 @@ test "throttle passes at most MAX per window-ms" {
     const rules = try loadRules(arena,
         \\(on "x"
         \\  (-> payload
-        \\      (throttle (window-ms 1000) 3)
+        \\      (throttle :ms 1000 3)
         \\      (publish-to "out")))
     );
     defer deinitRules(rules, testing.allocator);
@@ -1496,7 +1496,7 @@ test "tickClocks evicts old samples from time-ring moving-avg" {
     const loaded = try loadRules(arena,
         \\(on "x"
         \\  (-> payload-float
-        \\      (moving-avg (window-ms 1000))
+        \\      (moving-avg :ms 1000)
         \\      (publish-to "avg")))
     );
     defer deinitRules(loaded, testing.allocator);
@@ -1564,7 +1564,7 @@ test "staged rules: demuxed subject re-enters and matches downstream" {
     // Second rule consumes that demuxed subject and republishes a
     // "stable" mirror, only reachable via re-entry.
     const rules = try loadRules(arena,
-        \\(on "devices.*"
+        \\(on "devices.*" :reentrant true
         \\  (json-demux "temp" payload))
         \\(on "devices.*.temp"
         \\  (-> payload-float
@@ -1606,7 +1606,7 @@ test "re-entry depth cap prevents runaway loops" {
     // this would loop forever; with the cap we get exactly max_depth + 1
     // emissions (the original + one per allowed re-entry).
     const rules = try loadRules(arena,
-        \\(on "loop.>"
+        \\(on "loop.>" :reentrant true
         \\  (publish (subject-append "x") payload))
     );
     defer deinitRules(rules, testing.allocator);
@@ -1630,4 +1630,41 @@ test "re-entry depth cap prevents runaway loops" {
     // depth 0 emits, depth 1 emits, depth 2 emits, depth 3 emits, depth 4 blocked.
     // So 4 total emissions (one per allowed level, 0..max_depth inclusive).
     try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+}
+
+test "re-entry is opt-in: non-reentrant rule does not feed downstream rules" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Same staged shape as the demux test, but the upstream rule is NOT
+    // marked :reentrant — its emission must not match the downstream rule.
+    const rules = try loadRules(arena,
+        \\(on "devices.*"
+        \\  (json-demux "temp" payload))
+        \\(on "devices.*.temp"
+        \\  (-> payload-float
+        \\      (round 0)
+        \\      (publish-to (subject-append "stable"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    const rs = try buildRuleSet(arena, rules);
+    var harness: ReentryHarness = .{ .rs = &rs };
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "devices.kitchen",
+        .payload = "{\"temp\":12.7}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .reentry_ctx = &harness,
+        .reentry_fn = ReentryHarness.hook,
+    };
+    try rs.run(&ctx);
+
+    // Only the demux emission; the staged rule never sees it.
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("devices.kitchen.temp", tp.buf.items[0].subject);
 }
