@@ -19,7 +19,18 @@ settle 0.3
 for v in 20.01 20.04 20.06 20.5 21.0 27.5 28.5 29.0 27.0 41.0 42.0 41.5 51.0 52.0 49.0 53.0; do
     pub demo.sensors.temp "$v"
     sleep 0.05
+    echo "publish: $v"
 done
+
+
+sleep 2
+
+for v in 2227.5 28.5 29.0 27.0 341.0 42.0 41.5 51.0 52.0 49.0 53.0; do
+    pub demo.sensors.temp "$v"
+    sleep 0.05
+    echo "publish: $v"
+done
+
 
 pub demo.log.kernel "kernel: alert! disk almost full"
 pub demo.log.kernel "kernel: routine info"
