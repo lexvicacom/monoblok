@@ -8,6 +8,10 @@
             .url = "git+https://github.com/mitchellh/libxev#a82a04eabb46b0611c72d6d0e32db2d9dcf2e745",
             .hash = "libxev-0.0.0-86vtcwIRFACVrx54GaHsMFFlyC4dTi0tcVh10V7btRUc",
         },
+        .nats = .{
+            .url = "https://github.com/nats-io/nats.zig/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "nats-0.1.0-991asSaJHwDW4HKS48mXiDMmBrr_yAk1P3RNEW5cudKa",
+        },
     },
     .paths = .{
         "build.zig",
