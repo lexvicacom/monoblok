@@ -6,10 +6,13 @@ const Allocator = std.mem.Allocator;
 const subject_mod = @import("subject.zig");
 const state = @import("state.zig");
 const eval = @import("eval.zig");
+const sexpr = @import("sexpr.zig");
 
 const Value = state.Value;
 const Context = eval.Context;
 const EvalError = eval.EvalError;
+const WindowKind = sexpr.WindowKind;
+const WindowSpec = sexpr.WindowSpec;
 
 const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread, transition };
 
@@ -30,7 +33,9 @@ const Op = enum {
     contains, starts_with, ends_with, subject_token,
     round, quantize, clamp, min, max, abs, sign,
     squelch, deadband, changed, delta, hold_off,
+    window_ms, ticks,
     moving_avg, moving_sum, moving_max, moving_min,
+    rate, percentile, median, stddev, variance, throttle,
     rising_edge, falling_edge,
     json_get, json_demux,
     bar,
@@ -68,6 +73,14 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "changed?", .changed },
     .{ "delta", .delta },
     .{ "hold-off", .hold_off },
+    .{ "window-ms", .window_ms },
+    .{ "ticks", .ticks },
+    .{ "rate", .rate },
+    .{ "percentile", .percentile },
+    .{ "median", .median },
+    .{ "stddev", .stddev },
+    .{ "variance", .variance },
+    .{ "throttle", .throttle },
     .{ "moving-avg", .moving_avg },
     .{ "moving-sum", .moving_sum },
     .{ "moving-max", .moving_max },
@@ -137,10 +150,18 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .changed => callChanged(ctx, evaled),
         .delta => callDelta(ctx, evaled),
         .hold_off => callHoldOff(ctx, evaled),
+        .window_ms => callWindow(evaled, .time_ms),
+        .ticks => callWindow(evaled, .ticks),
         .moving_avg => callMoving(ctx, evaled, .avg),
         .moving_sum => callMoving(ctx, evaled, .sum),
         .moving_max => callMoving(ctx, evaled, .max),
         .moving_min => callMoving(ctx, evaled, .min),
+        .rate => callRate(ctx, evaled),
+        .percentile => callPercentile(ctx, evaled),
+        .median => callMedian(ctx, evaled),
+        .stddev => callStdVar(ctx, evaled, .stddev),
+        .variance => callStdVar(ctx, evaled, .variance),
+        .throttle => callThrottle(ctx, evaled),
         .rising_edge => callEdge(ctx, evaled, .rising),
         .falling_edge => callEdge(ctx, evaled, .falling),
         .json_get => callJsonGet(ctx, evaled),
@@ -265,7 +286,7 @@ fn coercePayload(arena: Allocator, v: Value) EvalError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list, .keyword => error.TypeMismatch,
+        .list, .keyword, .window => error.TypeMismatch,
     };
 }
 
@@ -559,19 +580,38 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
     return if (fired) args[0] else .nil;
 }
 
+// --- Window descriptors -------------------------------------------------
+
+/// `(window-ms N)` / `(ticks N)`. Pure: returns a window descriptor that
+/// the next windowed op (`moving-*`, `bar`, ...) consumes. Never appears
+/// in source as a literal — only produced at eval time.
+fn callWindow(args: []const Value, kind: WindowKind) EvalError!Value {
+    if (args.len != 1) return error.ArityMismatch;
+    const n_f = try state.asNumber(args[0]);
+    if (n_f < 1) return error.TypeMismatch;
+    return .{ .window = .{ .kind = kind, .n = @intFromFloat(n_f) } };
+}
+
+fn asWindow(v: Value) EvalError!WindowSpec {
+    return switch (v) {
+        .window => |w| w,
+        else => error.TypeMismatch,
+    };
+}
+
 // --- Windowed aggregates ------------------------------------------------
 
 const MovingKind = enum { avg, sum, max, min };
 
-/// `(moving-{avg,sum,max,min} N X)`. Push X into an N-wide ring and
-/// return the aggregate over the current window. Ring allocates on first
-/// sight; first call's aggregate is over just that one sample.
+/// `(moving-{avg,sum,max,min} WINDOW X)`. WINDOW is `(ticks N)` for a
+/// fixed-cap ring or `(window-ms N)` for a time-evicted ring. The ring
+/// allocates on first sight and is keyed per (rule, op, subject, kind),
+/// so the same op with both window kinds gets distinct slots. First
+/// call's aggregate is over that one sample.
 fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const n_f = try state.asNumber(args[0]);
-    if (n_f < 1) return error.TypeMismatch;
-    const n: usize = @intFromFloat(n_f);
+    const window = try asWindow(args[0]);
     const x = try state.asNumber(args[1]);
 
     const op_name = switch (kind) {
@@ -580,39 +620,318 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
         .max => "moving-max",
         .min => "moving-min",
     };
-    const key = try state.stateKey(ctx.arena, op_name, ctx.subject);
+    const tag: []const u8 = switch (window.kind) {
+        .ticks => "t",
+        .time_ms => "m",
+    };
+    const key = try std.fmt.allocPrint(
+        ctx.arena,
+        "{s}/{s}:{s}",
+        .{ op_name, tag, ctx.subject },
+    );
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    if (!slot.found_existing) {
-        slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, n) };
-    }
-    const ring = &slot.value_ptr.ring;
-    try ring.push(ctx.gpa, x);
 
+    switch (window.kind) {
+        .ticks => {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, window.n) };
+            }
+            const ring = &slot.value_ptr.ring;
+            try ring.push(ctx.gpa, x);
+            return .{ .number = switch (kind) {
+                .avg => ring.mean(),
+                .sum => ring.sum,
+                .max => ring.max(),
+                .min => ring.min(),
+            } };
+        },
+        .time_ms => {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
+            }
+            const ring = &slot.value_ptr.time_ring;
+            try ring.push(ctx.gpa, x, ctx.now_ms);
+            return .{ .number = switch (kind) {
+                .avg => ring.mean(),
+                .sum => ring.sum(),
+                .max => ring.max(),
+                .min => ring.min(),
+            } };
+        },
+    }
+}
+
+// --- Window helpers (shared by rate / percentile / stddev / throttle) ---
+
+/// Build the per-(rule, op, kind, subject) state-slot key. Same shape
+/// `callMoving` uses; t = ticks, m = window-ms.
+fn windowKey(arena: Allocator, op_name: []const u8, kind: WindowKind, subject: []const u8) ![]const u8 {
+    const tag: []const u8 = switch (kind) {
+        .ticks => "t",
+        .time_ms => "m",
+    };
+    return std.fmt.allocPrint(arena, "{s}/{s}:{s}", .{ op_name, tag, subject });
+}
+
+/// Snapshot the live window's f64 values into an arena-owned slice.
+/// Caller owns nothing extra; both slot variants are visited.
+fn collectWindow(arena: Allocator, slot_value: state.StateEntry) ![]f64 {
+    return switch (slot_value) {
+        .ring => |r| blk: {
+            const n = r.len();
+            const out = try arena.alloc(f64, n);
+            const cap = r.buf.len;
+            // Logical samples are buf[(counter - n + i) % cap].
+            const start = r.counter - @as(u64, n);
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                out[i] = r.buf[@intCast((start + @as(u64, i)) % cap)];
+            }
+            break :blk out;
+        },
+        .time_ring => |r| blk: {
+            const out = try arena.alloc(f64, r.samples.items.len);
+            for (r.samples.items, 0..) |s, i| out[i] = s.value;
+            break :blk out;
+        },
+        else => &[_]f64{},
+    };
+}
+
+/// Push X into a (rule, op, subject, window-kind) ring, allocating the
+/// slot if needed. Returns a pointer to the slot's StateEntry so callers
+/// can read aggregates back.
+fn pushIntoWindow(
+    ctx: *Context,
+    rule: *state.Rule,
+    op_name: []const u8,
+    window: WindowSpec,
+    x: f64,
+) !*state.StateEntry {
+    const key = try windowKey(ctx.arena, op_name, window.kind, ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+    switch (window.kind) {
+        .ticks => {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, window.n) };
+            }
+            try slot.value_ptr.ring.push(ctx.gpa, x);
+        },
+        .time_ms => {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
+            }
+            try slot.value_ptr.time_ring.push(ctx.gpa, x, ctx.now_ms);
+        },
+    }
+    return slot.value_ptr;
+}
+
+// --- Rate ---------------------------------------------------------------
+
+/// `(rate WINDOW X)`. Events per second over WINDOW. Counts pushes;
+/// X's value is ignored but evaluated (so it threads through `->`).
+/// `(window-ms N)` returns count_in_window / (N/1000). `(ticks N)` is
+/// rejected because "rate over the last N samples" has no time unit.
+fn callRate(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 2) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const window = try asWindow(args[0]);
+    if (window.kind != .time_ms) return error.TypeMismatch;
+    // Push a placeholder so the time_ring's eviction reflects our event.
+    const slot_value = try pushIntoWindow(ctx, rule, "rate", window, 0);
+    const n = slot_value.time_ring.len();
+    const seconds = @as(f64, @floatFromInt(window.n)) / 1000.0;
+    return .{ .number = @as(f64, @floatFromInt(n)) / seconds };
+}
+
+// --- Percentile / median ------------------------------------------------
+
+/// `(percentile WINDOW P X)`. P in [0, 1]. Linear interpolation between
+/// neighbours. O(n log n) per call (sort copy).
+fn callPercentile(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 3) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const window = try asWindow(args[0]);
+    const p = try state.asNumber(args[1]);
+    if (p < 0 or p > 1) return error.TypeMismatch;
+    const x = try state.asNumber(args[2]);
+    const slot_value = try pushIntoWindow(ctx, rule, "percentile", window, x);
+    return .{ .number = try percentileOf(ctx.arena, slot_value.*, p) };
+}
+
+/// `(median WINDOW X)`. Sugar for `(percentile WINDOW 0.5 X)`.
+fn callMedian(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 2) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const window = try asWindow(args[0]);
+    const x = try state.asNumber(args[1]);
+    const slot_value = try pushIntoWindow(ctx, rule, "median", window, x);
+    return .{ .number = try percentileOf(ctx.arena, slot_value.*, 0.5) };
+}
+
+fn percentileOf(arena: Allocator, slot_value: state.StateEntry, p: f64) EvalError!f64 {
+    const buf = try collectWindow(arena, slot_value);
+    if (buf.len == 0) return 0;
+    std.mem.sort(f64, buf, {}, comptime std.sort.asc(f64));
+    if (buf.len == 1) return buf[0];
+    const idx = p * @as(f64, @floatFromInt(buf.len - 1));
+    const lo: usize = @intFromFloat(@floor(idx));
+    const hi: usize = @intFromFloat(@ceil(idx));
+    if (lo == hi) return buf[lo];
+    const frac = idx - @floor(idx);
+    return buf[lo] + (buf[hi] - buf[lo]) * frac;
+}
+
+// --- Stddev / variance --------------------------------------------------
+
+const StdVarKind = enum { stddev, variance };
+
+/// `(stddev WINDOW X)` / `(variance WINDOW X)`. Population variance
+/// (divides by n, not n-1). Two-pass over the live window.
+fn callStdVar(ctx: *Context, args: []const Value, kind: StdVarKind) EvalError!Value {
+    if (args.len != 2) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const window = try asWindow(args[0]);
+    const x = try state.asNumber(args[1]);
+    const op_name: []const u8 = switch (kind) {
+        .stddev => "stddev",
+        .variance => "variance",
+    };
+    const key = try windowKey(ctx.arena, op_name, window.kind, ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+    switch (window.kind) {
+        .ticks => {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, window.n) };
+            }
+            try slot.value_ptr.ring.push(ctx.gpa, x);
+        },
+        .time_ms => {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
+            }
+            try slot.value_ptr.time_ring.push(ctx.gpa, x, ctx.now_ms);
+        },
+    }
+    const buf = try collectWindow(ctx.arena, slot.value_ptr.*);
+    if (buf.len == 0) return .{ .number = 0 };
+    var mean: f64 = 0;
+    for (buf) |v| mean += v;
+    mean /= @as(f64, @floatFromInt(buf.len));
+    var sumsq: f64 = 0;
+    for (buf) |v| {
+        const d = v - mean;
+        sumsq += d * d;
+    }
+    const variance = sumsq / @as(f64, @floatFromInt(buf.len));
     return .{ .number = switch (kind) {
-        .avg => ring.mean(),
-        .sum => ring.sum,
-        .max => ring.max(),
-        .min => ring.min(),
+        .variance => variance,
+        .stddev => @sqrt(variance),
     } };
+}
+
+// --- Throttle -----------------------------------------------------------
+
+/// `(throttle WINDOW MAX X)`. Pass X through iff fewer than MAX events
+/// have already passed within WINDOW (inclusive of this evaluation).
+/// Tracks pass timestamps in the same `time_ring` machinery used by
+/// `(window-ms ...)` `moving-*`. Differs from `hold-off`: `hold-off` is
+/// "min interval between passes" (one timer); `throttle` is "max count
+/// per window" (a sliding bucket of timestamps).
+fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 3) return error.ArityMismatch;
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const window = try asWindow(args[0]);
+    const max_f = try state.asNumber(args[1]);
+    if (max_f < 1) return error.TypeMismatch;
+    const max: usize = @intFromFloat(max_f);
+    const x = args[2];
+
+    const key = try windowKey(ctx.arena, "throttle", window.kind, ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+
+    const passed: bool = switch (window.kind) {
+        .ticks => blk: {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .ring = try state.Ring.init(ctx.gpa, window.n) };
+            }
+            const ring = &slot.value_ptr.ring;
+            // Tick form: count the 1.0 entries among the live samples.
+            // Push 1.0 on pass, 0.0 on suppress so eviction is implicit
+            // when the ring rolls.
+            const fill = ring.len();
+            const cap = ring.buf.len;
+            const start = ring.counter - @as(u64, fill);
+            var passes_in_window: usize = 0;
+            var i: usize = 0;
+            while (i < fill) : (i += 1) {
+                if (ring.buf[@intCast((start + @as(u64, i)) % cap)] == 1.0) {
+                    passes_in_window += 1;
+                }
+            }
+            const now_passing = passes_in_window < max;
+            try ring.push(ctx.gpa, if (now_passing) 1.0 else 0.0);
+            break :blk now_passing;
+        },
+        .time_ms => blk: {
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
+            }
+            const ring = &slot.value_ptr.time_ring;
+            ring.evict(ctx.now_ms);
+            const now_passing = ring.len() < max;
+            if (now_passing) {
+                try ring.push(ctx.gpa, 1.0, ctx.now_ms);
+            }
+            break :blk now_passing;
+        },
+    };
+
+    if (!passed) {
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+    return x;
 }
 
 // --- OHLC bars ----------------------------------------------------------
 
-/// `(bar N PAYLOAD)`. Tick-count bar accumulator; every Nth call closes a
-/// bar and publishes `<subject>.bar.{open,high,low,close}`. Returns nil.
-/// In-progress bar survives snapshot reload (saved `cap` wins until close).
+/// `(bar WINDOW PAYLOAD)`. WINDOW is `(ticks N)` (close every N samples)
+/// or `(window-ms N)` (close every N ms of wall-clock time, aligned to
+/// `floor(now/N)*N`). Emits `<subject>.bar.{open,high,low,close}` on
+/// close. Returns nil. Time bars also close from the server-side walker
+/// when the window elapses without a new tick — see `tickClocks`.
 fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const n_f = try state.asNumber(args[0]);
-    if (n_f < 1) return error.TypeMismatch;
-    const n: u32 = @intFromFloat(n_f);
+    const window = try asWindow(args[0]);
     const x = try state.asNumber(args[1]);
 
-    const key = try state.stateKey(ctx.arena, "bar", ctx.subject);
+    const tag: []const u8 = switch (window.kind) {
+        .ticks => "t",
+        .time_ms => "m",
+    };
+    const key = try std.fmt.allocPrint(ctx.arena, "bar/{s}:{s}", .{ tag, ctx.subject });
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+
+    switch (window.kind) {
+        .ticks => return updateTickBar(ctx, rule, slot, @intCast(window.n), x),
+        .time_ms => return updateTimeBar(ctx, rule, slot, window.n, x),
+    }
+}
+
+fn updateTickBar(
+    ctx: *Context,
+    rule: *state.Rule,
+    slot: state.StateSlot,
+    cap: u32,
+    x: f64,
+) EvalError!Value {
     if (!slot.found_existing or slot.value_ptr.* == .empty) {
-        slot.value_ptr.* = .{ .ohlc = .{ .open = x, .high = x, .low = x, .count = 1, .cap = n } };
+        slot.value_ptr.* = .{ .ohlc = .{
+            .open = x, .high = x, .low = x, .count = 1, .cap = cap,
+        } };
     } else {
         const bar = &slot.value_ptr.ohlc;
         if (bar.count == 0) {
@@ -632,13 +951,83 @@ fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
         rule.publishes_suppressed += 1;
         return .nil;
     }
+    try emitBarFields(ctx, bar.open, bar.high, bar.low, x);
+    bar.count = 0;
+    return .nil;
+}
 
-    // Bar closes on this tick. Emit four sub-subjects, then reset.
+fn updateTimeBar(
+    ctx: *Context,
+    rule: *state.Rule,
+    slot: state.StateSlot,
+    window_ms: u64,
+    x: f64,
+) EvalError!Value {
+    const window_ms_i: i64 = @intCast(window_ms);
+    const aligned = @divFloor(ctx.now_ms, window_ms_i) * window_ms_i;
+
+    if (!slot.found_existing or slot.value_ptr.* == .empty) {
+        slot.value_ptr.* = .{ .ohlc = .{
+            .open = x, .high = x, .low = x,
+            .count = 1, .cap = 0,
+            .window_ms = window_ms,
+            .window_start_ms = aligned,
+            .last_close = x,
+        } };
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+
+    const bar = &slot.value_ptr.ohlc;
+    if (bar.count == 0) {
+        bar.open = x;
+        bar.high = x;
+        bar.low = x;
+        bar.count = 1;
+        bar.window_ms = window_ms;
+        bar.window_start_ms = aligned;
+        bar.last_close = x;
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+
+    // Close the previous window if this tick crossed its boundary, then
+    // start a fresh one with this sample. The latest sample in the closed
+    // window is whatever was last seen *before* the boundary, which is
+    // what `bar.high`/`bar.low` already reflect — but we don't carry an
+    // explicit prev-close, so we reuse `bar.high`'s sample slot
+    // accounting: we just emit open/high/low and use bar's last seen as
+    // close. For wall-clock bars, "close" = the most recent sample value
+    // accepted into this bar before the boundary crossed. That's not
+    // tracked separately, so instead we treat it as: when the new tick
+    // crosses the boundary, the previous bar closes at `bar.high or low`?
+    // No: emit close = the prior sample's value. We track it via a new
+    // field on the in-flight bar.
+    if (bar.window_start_ms != aligned) {
+        try emitBarFields(ctx, bar.open, bar.high, bar.low, bar.last_close);
+        bar.open = x;
+        bar.high = x;
+        bar.low = x;
+        bar.count = 1;
+        bar.window_start_ms = aligned;
+        bar.last_close = x;
+        rule.publishes_suppressed += 1;
+        return .nil;
+    }
+    if (x > bar.high) bar.high = x;
+    if (x < bar.low) bar.low = x;
+    bar.count += 1;
+    bar.last_close = x;
+    rule.publishes_suppressed += 1;
+    return .nil;
+}
+
+fn emitBarFields(ctx: *Context, open: f64, high: f64, low: f64, close: f64) EvalError!void {
     const fields = [_]struct { name: []const u8, val: f64 }{
-        .{ .name = "open", .val = bar.open },
-        .{ .name = "high", .val = bar.high },
-        .{ .name = "low", .val = bar.low },
-        .{ .name = "close", .val = x },
+        .{ .name = "open", .val = open },
+        .{ .name = "high", .val = high },
+        .{ .name = "low", .val = low },
+        .{ .name = "close", .val = close },
     };
     for (fields) |f| {
         const subj = try std.fmt.allocPrint(ctx.arena, "{s}.bar.{s}", .{ ctx.subject, f.name });
@@ -646,8 +1035,6 @@ fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
         subject_mod.validatePublish(subj) catch return error.InvalidSubject;
         try ctx.emit(subj, out);
     }
-    bar.count = 0;
-    return .nil;
 }
 
 // --- Counters -----------------------------------------------------------

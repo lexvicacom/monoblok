@@ -1,17 +1,27 @@
-; Tick-count OHLC bars over a market feed.
+; OHLC bars over a market feed.
 ;
 ; Producers publish raw prices on MARKET.<SYM> (e.g. MARKET.AAPL "182.34").
-; Every 60 ticks per symbol, `bar` emits four sub-subjects:
+; A bar closes either every 60 ticks per symbol or every wall-clock minute,
+; depending on the window descriptor. On close, `bar` emits four sub-subjects:
 ;   MARKET.AAPL.bar.open   first price in the bar
 ;   MARKET.AAPL.bar.high   max price seen
 ;   MARKET.AAPL.bar.low    min price seen
-;   MARKET.AAPL.bar.close  60th price (the one that closed the bar)
+;   MARKET.AAPL.bar.close  last price seen in the bar
 ;
-; State is per (rule, subject), so each ticker builds its own bars. The
-; in-progress bar is part of the snapshot, so a restart mid-bar resumes
-; without losing the open / high / low collected so far.
+; State is per (rule, subject, window kind), so each ticker builds its
+; own bars and tick + time forms keep distinct slots. The in-progress
+; bar is part of the snapshot, so a restart mid-bar resumes without
+; losing the open / high / low collected so far. Time bars also close
+; from the server's clock walker if a window elapses without a new tick.
+
+; Tick bars: every 60 trades, regardless of how long that takes.
 (on "MARKET.*"
-  (bar 60 payload-float))
+  (bar (ticks 60) payload-float))
+
+; Wall-clock bars, aligned to whole minutes. Useful when you want a
+; clean per-minute chart row regardless of trade rate.
+;(on "MARKET.*"
+;  (bar (window-ms 60000) payload-float))
 
 ; Downstream alerting can sit on the closed-bar stream and stay clean of
 ; intra-bar noise. Example: alert if the bar's close jumps by >= 1.0
