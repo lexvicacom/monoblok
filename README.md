@@ -22,7 +22,7 @@ A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats
 
 ## Install on your hardware
 
-Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Each platform ships two `.tar.gz` archives: the default (includes the [outbound NATS bridge](#outbound-nats-bridge), needs OpenSSL on the target box) and a `-nobridge` variant with no external runtime dependencies.
+Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries are on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). The binary is statically self-contained (no system libraries beyond libc).
 
 Pick the latest tag from the releases page and substitute it for `VERSION` below (e.g. `v0.0.26`).
 
@@ -33,10 +33,6 @@ VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-macos-aarch64.tar.gz"
 tar -xzf "monoblok-${VERSION}-macos-aarch64.tar.gz"
 sudo install "monoblok-${VERSION}-macos-aarch64/monoblok" /usr/local/bin/monoblok
-
-# only needed for the bridge build; skip if you grabbed the -nobridge tarball
-brew install openssl@3
-
 monoblok --port 4222 --patchbay "monoblok-${VERSION}-macos-aarch64/patchbay.edn"
 ```
 
@@ -48,10 +44,6 @@ VERSION=v0.0.26
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-linux-x86_64.tar.gz"
 tar -xzf "monoblok-${VERSION}-linux-x86_64.tar.gz"
 sudo install "monoblok-${VERSION}-linux-x86_64/monoblok" /usr/local/bin/monoblok
-
-# only needed for the bridge build; skip if you grabbed the -nobridge tarball
-sudo apt install libssl-dev pkg-config
-
 monoblok --port 4222 --patchbay "monoblok-${VERSION}-linux-x86_64/patchbay.edn"
 ```
 
@@ -62,8 +54,6 @@ nats sub 'sensors.*'
 (new shell)
 nats pub sensors.temp 42.5
 ```
-
-> If you don't want OpenSSL on the box at all, grab the `-nobridge` tarball (e.g. `monoblok-${VERSION}-linux-x86_64-nobridge.tar.gz`) and skip the dependency-install step.
 
 ### Running as a systemd service on Linux
 
@@ -248,7 +238,7 @@ Rules are indexed by position in the patchbay file, 0-based. Client publishes to
   <img src="bridge.png" alt="bridge" width="720">
 </p>
 
-monoblok can forward a subset of local publishes to a real NATS cluster, so it can sit in front of (or alongside) a NATS deployment and hand off selected traffic. **Export-only**: nothing flows in from the remote. TLS and `.creds` files are supported; the upstream connection uses vendored [nats.c](https://github.com/nats-io/nats.c) and dyn-linked OpenSSL.
+monoblok can forward a subset of local publishes to a real NATS cluster, so it can sit in front of (or alongside) a NATS deployment and hand off selected traffic. **Export-only**: nothing flows in from the remote. TLS and `.creds` files are supported; the upstream connection uses vendored [nats.zig](https://github.com/nats-io/nats.zig) (pure Zig, std.crypto.tls), so there is no system OpenSSL dependency.
 
 Typical shape:
 
@@ -288,17 +278,17 @@ Full keyword reference:
 | `:max-reconnect`            | number          | `-1` for unlimited                                |
 | `:reconnect-wait-ms`        | number          | base delay between reconnect attempts             |
 
-Auth precedence: `:creds` > `:user`/`:password` > `:token`. If TLS is on but `:tls-ca` isn't set, nats.c falls back to the system trust store.
+Auth precedence: `:creds` > `:user`/`:password` > `:token`. If TLS is on but `:tls-ca` isn't set, nats.zig falls back to the system trust store.
 
 ### Semantics
 
 A local publish (from a NATS client or from a patchbay rule) whose subject matches **any** `:export` filter is forwarded to the remote as-is. Subjects that don't match any filter never leave the server. Fan-out order is: local subscribers served first, bridge second — so a slow or reconnecting remote can't starve local delivery.
 
-Reconnects are handled by nats.c internally. During the reconnect window, publishes are buffered up to the library default; once the buffer is full, further publishes count as dropped. Counters are published on the `$STATS.*` tick as `$STATS.bridge.published` and `$STATS.bridge.dropped`.
+Reconnects are handled by nats.zig internally. During the reconnect window, publishes are buffered up to the library default; once the buffer is full, further publishes count as dropped. Counters are published on the `$STATS.*` tick as `$STATS.bridge.published` and `$STATS.bridge.dropped`.
 
 ### Disabling the bridge
 
-The bridge is on by default. Turn it off at build time with `zig build -Dbridge=false`, which also removes the OpenSSL link dependency. Both variants are published to each release as `-nobridge` and (default) archives — pick whichever fits the target box. Or simply do not add a `bridge` form to your config if you do not need it.
+If you don't need the bridge, leave the `(bridge ...)` form out of the patchbay file. The runtime cost is zero when no config is present, and there is no separate "no-bridge" build to manage.
 
 
 ## Observability
@@ -427,26 +417,14 @@ The cost scales with **matching rules per PUB**, not total rules in the file: 1 
 
 ## Building from source
 
-Zig 0.16.0. OpenSSL at runtime is required when the bridge is enabled (the default); skip it if you build with `-Dbridge=false`.
-
-```
-# macOS
-brew install openssl@3
-
-# Debian / Ubuntu
-sudo apt install libssl-dev pkg-config
-```
-
-Then:
+Zig 0.16.0. No system libraries required (the NATS bridge uses vendored [nats.zig](https://github.com/nats-io/nats.zig), pure-Zig with `std.crypto.tls`).
 
 ```
 zig build --release=safe
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
 ```
 
-Release binaries are built natively on each target architecture, not cross-compiled. The `.github/workflows/release.yml` pipeline uses three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), and `macos-latest` (aarch64). Each runs `zig build --release=safe` assuming OpenSSL is installed locally.
-
-Each release ships **two variants per platform**: with the NATS bridge (requires OpenSSL on the target box) and without (`-nobridge` suffix, no runtime deps). Grab the bridge variant if you want to forward traffic to a real NATS cluster; grab the `-nobridge` variant if you just want a standalone pub/sub broker with no external deps.
+Release binaries are built natively on each target architecture by `.github/workflows/release.yml`, which uses three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), and `macos-latest` (aarch64). Each runs `zig build --release=safe` and ships one tarball per platform.
 
 ## AI
 Yes, Claude helps. [Some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md)

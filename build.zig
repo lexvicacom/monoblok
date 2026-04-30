@@ -4,23 +4,17 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Bridge (outbound NATS connection via nats.zig — pure Zig, no system deps).
-    const bridge = b.option(bool, "bridge", "Build the outbound NATS bridge") orelse true;
-
     const libxev_dep = b.dependency("libxev", .{
         .target = target,
         .optimize = optimize,
     });
 
-    const nats_dep = if (bridge) b.dependency("nats", .{
+    const nats_dep = b.dependency("nats", .{
         .target = target,
         .optimize = optimize,
-    }) else null;
+    });
 
     const manifest_mod = b.createModule(.{ .root_source_file = b.path("build.zig.zon") });
-
-    const build_options = b.addOptions();
-    build_options.addOption(bool, "bridge", bridge);
 
     // Patchbay: the s-expression DSL evaluator, decoupled from the daemon.
     // Lives in lib/patchbay/ as a module so it can be embedded by other
@@ -44,14 +38,10 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "xev", .module = libxev_dep.module("xev") },
             .{ .name = "manifest", .module = manifest_mod },
-            .{ .name = "build_options", .module = build_options.createModule() },
             .{ .name = "patchbay", .module = patchbay_mod },
+            .{ .name = "nats", .module = nats_dep.module("nats") },
         },
     });
-
-    if (bridge) {
-        exe_mod.addImport("nats", nats_dep.?.module("nats"));
-    }
 
     const exe = b.addExecutable(.{
         .name = "monoblok",

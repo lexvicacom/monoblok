@@ -11,10 +11,9 @@ pub const proto = @import("proto.zig");
 pub const router = @import("router.zig");
 pub const server = @import("server.zig");
 pub const snapshot = @import("snapshot.zig");
-pub const bridge = if (build_options.bridge) @import("bridge.zig") else {};
+pub const bridge = @import("bridge.zig");
 
 const manifest = @import("manifest");
-const build_options = @import("build_options");
 
 const Flag = enum { port, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, validate, help, version };
 
@@ -162,29 +161,27 @@ pub fn main(init: std.process.Init) !void {
 
     // Bridge config comes from the top-level `(bridge ...)` form in the
     // patchbay file.
-    var bridge_runtime: if (build_options.bridge) ?bridge.Bridge else ?void = null;
-    if (build_options.bridge) {
-        if (patchbay_src) |src| {
-            const cfg_opt = bridge.loadConfig(arena, src) catch |err| blk: {
-                std.log.warn("bridge: config parse failed: {s}", .{@errorName(err)});
-                break :blk null;
-            };
-            if (cfg_opt) |cfg_val| {
-                const cfg_ptr = try arena.create(bridge.Config);
-                cfg_ptr.* = cfg_val;
-                bridge_runtime = bridge.Bridge.init(gpa, cfg_ptr);
-                if (bridge_runtime.?.start()) |_| {
-                    const bref: *bridge.Bridge = &bridge_runtime.?;
-                    r.bridge_ctx = bref;
-                    r.bridge_fn = bridgePublishTrampoline;
-                    std.log.info("bridge: connected ({d} export filter(s), {d} server(s))", .{ cfg_ptr.exports.len, cfg_ptr.servers.len });
-                } else |err| {
-                    std.log.warn("bridge: start failed: {s} (forwarding disabled)", .{@errorName(err)});
-                }
+    var bridge_runtime: ?bridge.Bridge = null;
+    if (patchbay_src) |src| {
+        const cfg_opt = bridge.loadConfig(arena, src) catch |err| blk: {
+            std.log.warn("bridge: config parse failed: {s}", .{@errorName(err)});
+            break :blk null;
+        };
+        if (cfg_opt) |cfg_val| {
+            const cfg_ptr = try arena.create(bridge.Config);
+            cfg_ptr.* = cfg_val;
+            bridge_runtime = bridge.Bridge.init(gpa, cfg_ptr);
+            if (bridge_runtime.?.start()) |_| {
+                const bref: *bridge.Bridge = &bridge_runtime.?;
+                r.bridge_ctx = bref;
+                r.bridge_fn = bridgePublishTrampoline;
+                std.log.info("bridge: connected ({d} export filter(s), {d} server(s))", .{ cfg_ptr.exports.len, cfg_ptr.servers.len });
+            } else |err| {
+                std.log.warn("bridge: start failed: {s} (forwarding disabled)", .{@errorName(err)});
             }
         }
     }
-    defer if (build_options.bridge) if (bridge_runtime) |*b| b.deinit();
+    defer if (bridge_runtime) |*b| b.deinit();
 
     // Process-wide random ID, 16 upper-hex chars (nats-server nuid-like).
     var id_bytes: [8]u8 = undefined;
@@ -206,7 +203,7 @@ pub fn main(init: std.process.Init) !void {
         .listen_port = port,
         .stats_enabled = stats_enabled,
         .trace_enabled = trace_enabled,
-        .bridge_stats = if (build_options.bridge and bridge_runtime != null)
+        .bridge_stats = if (bridge_runtime != null)
             @ptrCast(&bridge_runtime.?.stats)
         else
             null,
@@ -252,7 +249,6 @@ fn onSignalRequestShutdown(_: std.posix.SIG) callconv(.c) void {
 }
 
 fn bridgePublishTrampoline(ctx: *anyopaque, subj: []const u8, payload: []const u8) void {
-    if (!build_options.bridge) return;
     const b: *bridge.Bridge = @ptrCast(@alignCast(ctx));
     b.publish(subj, payload);
 }
@@ -355,5 +351,5 @@ test {
     _ = rules;
     _ = router;
     _ = snapshot;
-    if (build_options.bridge) _ = bridge;
+    _ = bridge;
 }
