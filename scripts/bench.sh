@@ -125,10 +125,11 @@ MB_PID=$!
 sleep 0.3
 kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
 
-# Cooldown between rows. Back-to-back 500k+ msg runs throttle laptop CPUs;
-# 5s is enough to let the cores cool back to baseline. Tune via
-# BENCH_COOLDOWN_S if you want a different value.
-COOLDOWN_S="${BENCH_COOLDOWN_S:-5}"
+# Cooldown between rows. Back-to-back 500k+ msg runs can throttle laptop
+# CPUs; bump BENCH_COOLDOWN_S to 5 if you're chasing publishable numbers
+# and want the cores fully cool between rows. Default of 1 keeps the
+# whole script under a minute on a healthy machine.
+COOLDOWN_S="${BENCH_COOLDOWN_S:-1}"
 
 echo "Running monoblok benchmarks..."
 MB_1=$(run_pub 1 1000000 64);    sleep "$COOLDOWN_S"

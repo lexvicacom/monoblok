@@ -35,9 +35,17 @@ EDN comments (`;` to end of line).
 The router receives NATS publishes. For each publish, every top-level
 `(on FILTER BODY)` whose `FILTER` matches the incoming subject runs its
 `BODY` against that message. Subject wildcards: `*` matches one dot
-token, `>` matches one or more trailing tokens. Messages published
-**from** a rule go out through normal fan-out but do **not** re-enter
-rule evaluation (no loops).
+token, `>` matches one or more trailing tokens.
+
+By default, messages published **from** a rule go out through normal
+fan-out but do **not** re-enter rule evaluation, so chains don't form
+unless you ask for them. Opt a rule into re-entry with `(on FILTER
+:reentrant true BODY)`: its emissions then feed back through every
+matching rule (including itself), capped at depth 8 so a rule whose
+emission matches its own filter can't loop forever. Reach for it when
+you genuinely want a multi-stage pipeline (e.g. `json-demux` head rule
+emitting scalars that downstream rules condition); otherwise leave it
+off.
 
 There is also an optional `(bridge ...)` top-level form for forwarding
 local publishes to a remote NATS cluster. It is export-only.
@@ -150,7 +158,7 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 - For one-sided alerts that still need to thread, use `rising-edge` / `falling-edge`.
 - When you need multiple windows on the same stream (e.g. max - min spread), drop out of `->` and write the explicit nested form. `->` only threads one value.
 - Keep subjects hierarchical: emit into `<input-subject>.<suffix>` via `subject-append` so downstream subscribers can pick the granularity they want.
-- Don't publish back into a subject your own rule matches unless you have explicitly thought about it - rules don't loop, but a second rule on the output subject might.
+- Don't publish back into a subject your own rule matches unless you have explicitly thought about it. Rules without `:reentrant true` don't loop, but adding it on a rule whose emission can match its own filter (or another `:reentrant` rule's filter) is how you build cascades — keep the depth cap (8) in mind and prefer non-reentrant unless you genuinely need staging.
 - For sensors that emit JSON frames, prefer `json-demux` at the head of the rule chain to fan fields out to scalar sub-subjects, then write the rest of your patchbay against those scalars. Reach for `json-get` inline only when you genuinely want one field on the existing subject.
 
 ## Anti-patterns
