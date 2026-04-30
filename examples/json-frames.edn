@@ -33,5 +33,4 @@
 (on "devices.*"
   (-> payload
       (json-get "batt")
-      (deadband 0.1)
       (publish-to (subject-append "battery"))))
