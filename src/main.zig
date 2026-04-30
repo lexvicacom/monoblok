@@ -15,7 +15,7 @@ pub const bridge = @import("bridge.zig");
 
 const manifest = @import("manifest");
 
-const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, validate, help, version };
+const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, clock_tick_ms, stats_tick_ms, validate, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -28,6 +28,8 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--trace", .trace },
     .{ "--snapshot", .snapshot },
     .{ "--snapshot-every", .snapshot_every },
+    .{ "--clock-tick-ms", .clock_tick_ms },
+    .{ "--stats-tick-ms", .stats_tick_ms },
     .{ "--validate", .validate },
     .{ "--help", .help },
     .{ "-h", .help },
@@ -48,6 +50,8 @@ pub fn main(init: std.process.Init) !void {
     var trace_enabled = false;
     var snapshot_path: ?[]const u8 = null;
     var snapshot_every_s: u32 = 0;
+    var clock_tick_ms: u64 = server.default_clock_tick_ms;
+    var stats_tick_ms: u64 = server.default_stats_tick_ms;
     var validate_only = false;
 
     var it = try init.minimal.args.iterateAllocator(gpa);
@@ -80,6 +84,16 @@ pub fn main(init: std.process.Init) !void {
             .snapshot_every => {
                 const v = it.next() orelse fatal("--snapshot-every requires a value in seconds");
                 snapshot_every_s = std.fmt.parseInt(u32, v, 10) catch fatal("invalid --snapshot-every value");
+            },
+            .clock_tick_ms => {
+                const v = it.next() orelse fatal("--clock-tick-ms requires a value in milliseconds");
+                clock_tick_ms = std.fmt.parseInt(u64, v, 10) catch fatal("invalid --clock-tick-ms value");
+                if (clock_tick_ms == 0) fatal("--clock-tick-ms must be > 0");
+            },
+            .stats_tick_ms => {
+                const v = it.next() orelse fatal("--stats-tick-ms requires a value in milliseconds");
+                stats_tick_ms = std.fmt.parseInt(u64, v, 10) catch fatal("invalid --stats-tick-ms value");
+                if (stats_tick_ms == 0) fatal("--stats-tick-ms must be > 0");
             },
             .validate => validate_only = true,
             .help => {
@@ -222,6 +236,8 @@ pub fn main(init: std.process.Init) !void {
         else
             0,
         .snapshot_io = fsio,
+        .clock_tick_ms = clock_tick_ms,
+        .stats_tick_ms = stats_tick_ms,
         .shutdown_enabled = true,
     };
 
@@ -354,6 +370,15 @@ fn printUsage() void {
         \\                   Write the snapshot every SECONDS (atomic
         \\                   write via .tmp + rename). 0 or omitted =
         \\                   load-only. Requires --snapshot.
+        \\  --clock-tick-ms MS
+        \\                   Patchbay clock-walker cadence (default 2000).
+        \\                   Lower = tighter time-bar close / time-ring
+        \\                   eviction latency, higher idle CPU. Only
+        \\                   `(bar (window-ms ...))` and `(window-ms ...)
+        \\                   moving-*` rules care; if you have neither,
+        \\                   crank it up.
+        \\  --stats-tick-ms MS
+        \\                   `$STATS.*` publish cadence (default 60000).
         \\  --validate       Form-lint the patchbay file and exit. Same
         \\                   check that runs at startup; useful for
         \\                   editor / pre-commit / CI flows. Requires
