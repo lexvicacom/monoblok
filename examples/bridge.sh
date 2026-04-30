@@ -32,7 +32,10 @@ pub telemetry.troubledwater 3
 
 settle 0.6
 
-note "Three telemetry.troubledwater publishes were sent into monoblok. Each one is delivered locally (and re-emitted under .echoed by a local rule, which also matches telemetry.>), and the bridge forwards every match to the standalone nats-server on port $REMOTE_PORT."
+note \
+    "Three telemetry.troubledwater publishes were sent into monoblok." \
+    "Each one is delivered locally (and re-emitted under .echoed by a local rule, which also matches telemetry.>)." \
+    "The bridge forwards every match to the standalone nats-server on port $REMOTE_PORT."
 show "publishes"                       _pubs.log
 show "local telemetry.> (echoes too)"  local.txt
 show "remote telemetry.> (forwarded)"  remote.txt

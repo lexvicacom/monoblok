@@ -23,7 +23,10 @@ pub devices.kitchen '{"temp":22.01}'
 
 settle 0.5
 
-note "Six JSON frames and one garbage payload were published to devices.kitchen. json-demux fans each named field out to devices.kitchen.<field>, downstream rules round and deadband those scalars into stable mirrors, and the malformed/missing-field cases self-skip without erroring."
+note \
+    "Six JSON frames and one garbage payload were published to devices.kitchen." \
+    "json-demux fans each named field out to devices.kitchen.<field>." \
+    "Downstream rules round and deadband those scalars into stable mirrors, and the malformed/missing-field cases self-skip without erroring."
 show "publishes"           _pubs.log
 show "raw frames"          raw.txt
 show "demuxed temp"        temp.txt

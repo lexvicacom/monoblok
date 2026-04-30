@@ -21,7 +21,10 @@ for i in $(seq 1 130); do
 done
 settle 0.5
 
-note "Streamed 130 AAPL ticks. Bars close every 60 ticks, so two complete bars are emitted and a third is in progress. A >= 1.0 close-to-close move triggers an alert."
+note \
+    "Streamed 130 AAPL ticks." \
+    "Bars close every 60 ticks, so two complete bars are emitted and a third is in progress." \
+    "A >= 1.0 close-to-close move triggers an alert."
 show "publishes (last 8)"  _pubs.log 8
 show "raw ticks (last 8)"  raw.txt 8
 show "bar opens"           bar_open.txt

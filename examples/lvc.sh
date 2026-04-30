@@ -23,6 +23,9 @@ pub room.office.temp  "23.4"
 
 settle 0.4
 
-note "Five values were published to room.* with no subscribers attached. A late joiner then subscribed to \$LVC.> and immediately received the cached last value per subject (the first three rows below, sub-millisecond timestamps). Two further publishes arrived live afterwards on \$LVC.<subject>."
+note \
+    "Five values were published to room.* with no subscribers attached." \
+    "A late joiner then subscribed to \$LVC.> and immediately received the cached last value per subject (the first three rows below, sub-millisecond timestamps)." \
+    "Two further publishes arrived live afterwards on \$LVC.<subject>."
 show "publishes"              _pubs.log
 show "late joiner on \$LVC.>" lvc.txt

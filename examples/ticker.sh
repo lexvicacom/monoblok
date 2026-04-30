@@ -15,7 +15,10 @@ done
 
 settle 0.5
 
-note "Streamed eight AAPL ticks. The stable mirror gets 3dp values with duplicates squelched; a >= 1.0 jump between consecutive ticks fans out an alert under alerts.market.AAPL."
+note \
+    "Streamed eight AAPL ticks." \
+    "The stable mirror gets 3dp values with duplicates squelched." \
+    "A >= 1.0 jump between consecutive ticks fans out an alert under alerts.market.AAPL."
 show "publishes"        _pubs.log
 show "raw ticks"        raw.txt
 show "stable mirror"    stable.txt

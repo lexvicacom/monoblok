@@ -14,7 +14,9 @@ done
 
 settle 0.4
 
-note "Seven jittery temperature samples were published. The patchbay rounds to 1dp and squelches duplicates, so the stable mirror sees only distinct rounded values."
+note \
+    "Seven jittery temperature samples were published." \
+    "The patchbay rounds to 1dp and squelches duplicates, so the stable mirror sees only distinct rounded values."
 show "publishes"       _pubs.log
 show "raw publishes"   raw.txt
 show "stable mirror"   stable.txt

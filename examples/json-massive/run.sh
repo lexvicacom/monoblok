@@ -22,13 +22,13 @@ NATS_PORT="$PORT" node "$ROOT/examples/json-massive/mock_producer.js" \
 PRODUCER_PID=$!
 EXTRA_PIDS+=("$PRODUCER_PID")
 
-echo "running mock_producer for ${DURATION}s (DURATION=$DURATION)..."
+echo "mock producer running for ${DURATION}s (DURATION=$DURATION)..."
 sleep "$DURATION"
 
 { kill "$PRODUCER_PID" 2>/dev/null && wait "$PRODUCER_PID"; } 2>/dev/null || true
 settle 0.4
 
-note "A Node mock_producer drove a high-rate Massive-shape feed into monoblok for ${DURATION}s, mixing stocks, options, crypto, and forex. The tables show the stock-trade slice plus the alerts.> fan-in across all asset classes."
+note "A synthetic producer drove a high-rate Massive-shape feed into monoblok for ${DURATION}s, mixing stocks, options, crypto, and forex.\nThe tables show the stock-trade slice plus the alerts.> fan-in across all asset classes."
 show "raw stock trades (last 8)"      trades.txt        8
 show "demuxed prices (last 8)"        trade_prices.txt  8
 show "stable mirror (last 8)"         trade_stable.txt  8

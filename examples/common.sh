@@ -92,6 +92,11 @@ show() {
     fi
     local src="$TMP/$file"
     if [ -n "$max" ]; then
+        local total
+        total=$(wc -l <"$src" | tr -d ' ')
+        if [ "$total" -gt "$max" ]; then
+            echo "(showing last $max of $total lines, full file: $src)"
+        fi
         tail -n "$max" "$src" | python3 "$ROOT/examples/_tabulate.py"
     else
         python3 "$ROOT/examples/_tabulate.py" <"$src"
@@ -105,5 +110,7 @@ settle() {
 
 note() {
     echo
-    echo "--- $* ---"
+    for line in "$@"; do
+        echo "  * $line"
+    done
 }

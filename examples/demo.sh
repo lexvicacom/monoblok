@@ -26,7 +26,9 @@ pub demo.log.kernel "kernel: routine info"
 
 settle 0.6
 
-note "Drove demo.sensors.temp through a climb from 20 to 53, plus two demo.log.kernel lines. Each rule below is showcased by a different output stream (squelch, deadband, moving averages, transition edges, hold-off, rising-edge, and the log-to-alerts mirror)."
+note \
+    "Drove demo.sensors.temp through a climb from 20 to 53, plus two demo.log.kernel lines." \
+    "Each rule below is showcased by a different output stream (squelch, deadband, moving averages, transition edges, hold-off, rising-edge, and the log-to-alerts mirror)."
 show "publishes"               _pubs.log
 show "stable mirror"           stable.txt
 show "deadband (>0.5 moves)"   delta.txt

@@ -17,7 +17,10 @@ while [ $i -lt 30 ]; do pub car.42.rpm "8000"; i=$((i+1)); done
 
 settle 0.6
 
-note "Drove small RPM and coolant moves first (RPM quantized to 50rpm buckets and squelched, coolant deadbanded by 1.0), then floored the engine: 30 publishes at 8000rpm. The 5s hold-off collapses that spam into exactly one over-rev alert."
+note \
+    "Drove small RPM and coolant moves first (RPM quantized to 50rpm buckets and squelched, coolant deadbanded by 1.0)." \
+    "Then floored the engine: 30 publishes at 8000rpm." \
+    "The 5s hold-off collapses that spam into exactly one over-rev alert."
 show "publishes (last 12)"                     _pubs.log 12
 show "rpm quantized+squelched (50rpm buckets)" rpm.txt
 show "over-rev alert (hold-off 5s)"            alert.txt
