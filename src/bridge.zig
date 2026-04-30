@@ -1,11 +1,12 @@
 // Outbound NATS bridge. Forwards local publishes matching one of the
-// configured `:export` subject filters to a remote NATS cluster via nats.c.
+// configured `:export` subject filters to a remote NATS cluster via nats.zig
+// (pure-Zig client, no system OpenSSL dependency).
 //
 // Export-only: we do not subscribe on the remote. Messages flow local -> remote.
 //
-// Threading: nats.c runs its own sockets/io threads internally. We only call
-// into nats.c from the loop thread (natsConnection_Publish / _Destroy), which
-// is thread-safe in nats.c. No callbacks fire back at us.
+// Threading: nats.zig spawns its own io_task thread that drains a lock-free
+// publish ring buffer. `client.publish` is thread-safe and non-blocking, so we
+// can call it directly from the libxev loop thread.
 //
 // Integration: Server wires `bridgePublish` into Router.bridge_fn. Router
 // fan-out calls it once per local publish; subject-filter match happens here,
@@ -14,7 +15,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const nats = @import("nats_c.zig");
+const nats = @import("nats");
 const patchbay = @import("patchbay");
 const sexpr = patchbay.sexpr;
 const subject_mod = patchbay.subject;
@@ -27,10 +28,8 @@ pub const ConfigError = error{
 } || sexpr.ParseError;
 
 pub const StartError = error{
-    NatsOpenFailed,
-    OptsCreateFailed,
-    OptsApplyFailed,
     ConnectFailed,
+    BackendInitFailed,
 } || Allocator.Error;
 
 /// Parsed bridge config (owned by the caller's arena).
@@ -216,120 +215,104 @@ pub const Stats = extern struct {
 pub const Bridge = struct {
     gpa: Allocator,
     cfg: *const Config,
-    nc: ?*nats.natsConnection = null,
+    /// nats.zig requires a std.Io. Threaded is the safe default and works
+    /// without depending on any specific OS event loop. Lives here so its
+    /// address stays stable for the lifetime of the Client.
+    backend: ?std.Io.Threaded = null,
+    client: ?*nats.Client = null,
     stats: Stats = .{},
-    // Zero-terminated storage for strings we hand to nats.c (it expects C strings).
-    z_strings: std.ArrayList([:0]u8) = .empty,
 
     pub fn init(gpa: Allocator, cfg: *const Config) Bridge {
         return .{ .gpa = gpa, .cfg = cfg };
     }
 
     pub fn deinit(self: *Bridge) void {
-        if (self.nc) |c| {
-            nats.natsConnection_Close(c);
-            nats.natsConnection_Destroy(c);
-            self.nc = null;
+        if (self.client) |c| {
+            c.deinit();
+            self.client = null;
         }
-        for (self.z_strings.items) |s| self.gpa.free(s);
-        self.z_strings.deinit(self.gpa);
-        _ = nats.nats_Close();
+        if (self.backend) |*b| {
+            b.deinit();
+            self.backend = null;
+        }
     }
 
     pub fn start(self: *Bridge) StartError!void {
-        const s_open = nats.nats_Open(-1);
-        if (s_open != nats.NATS_OK) return error.NatsOpenFailed;
+        // Initialize Io backend in place so its address is stable.
+        self.backend = std.Io.Threaded.init(self.gpa, .{ .environ = .empty });
+        const io = self.backend.?.io();
 
-        var opts: ?*nats.natsOptions = null;
-        if (nats.natsOptions_Create(&opts) != nats.NATS_OK) return error.OptsCreateFailed;
-        defer nats.natsOptions_Destroy(opts);
-
-        try self.applyOpts(opts.?);
-
-        if (nats.natsConnection_Connect(&self.nc, opts) != nats.NATS_OK) {
-            self.nc = null;
+        // nats.zig's connect takes a single URL string. Try servers in order
+        // until one accepts; rely on reconnect/discovery for the rest.
+        var connect_err: ?anyerror = null;
+        for (self.cfg.servers) |server_url| {
+            const opts = self.buildOptions();
+            if (nats.Client.connect(self.gpa, io, server_url, opts)) |c| {
+                self.client = c;
+                connect_err = null;
+                break;
+            } else |err| {
+                connect_err = err;
+                std.log.warn("bridge: connect to {s} failed: {s}", .{ server_url, @errorName(err) });
+            }
+        }
+        if (self.client == null) {
+            self.backend.?.deinit();
+            self.backend = null;
+            std.log.warn("bridge: all servers failed (last err: {s})", .{
+                if (connect_err) |e| @errorName(e) else "unknown",
+            });
             return error.ConnectFailed;
         }
     }
 
-    fn zdup(self: *Bridge, s: []const u8) ![:0]u8 {
-        const z = try self.gpa.dupeZ(u8, s);
-        try self.z_strings.append(self.gpa, z);
-        return z;
-    }
-
-    fn applyOpts(self: *Bridge, opts: *nats.natsOptions) !void {
-        // Servers list.
-        const server_ptrs = try self.gpa.alloc([*c]const u8, self.cfg.servers.len);
-        defer self.gpa.free(server_ptrs);
-        for (self.cfg.servers, 0..) |srv, i| {
-            const z = try self.zdup(srv);
-            server_ptrs[i] = z.ptr;
-        }
-        if (nats.natsOptions_SetServers(opts, server_ptrs.ptr, @intCast(server_ptrs.len)) != nats.NATS_OK) return error.OptsApplyFailed;
-
-        if (self.cfg.name) |n| {
-            const z = try self.zdup(n);
-            _ = nats.natsOptions_SetName(opts, z.ptr);
-        }
-
-        // Auth: creds file wins over user/pass wins over token.
+    fn buildOptions(self: *const Bridge) nats.Client.Options {
+        var opts: nats.Client.Options = .{};
+        if (self.cfg.name) |n| opts.name = n;
+        // Auth precedence matches the nats.c version: creds > user/pass > token.
         if (self.cfg.creds) |c| {
-            const z = try self.zdup(c);
-            if (nats.natsOptions_SetUserCredentialsFromFiles(opts, z.ptr, null) != nats.NATS_OK) return error.OptsApplyFailed;
+            opts.creds_file = c;
         } else if (self.cfg.user) |u| {
-            const uz = try self.zdup(u);
-            const pz = if (self.cfg.password) |p| (try self.zdup(p)).ptr else null;
-            _ = nats.natsOptions_SetUserInfo(opts, uz.ptr, pz);
+            opts.user = u;
+            if (self.cfg.password) |p| opts.pass = p;
         } else if (self.cfg.token) |t| {
-            const z = try self.zdup(t);
-            _ = nats.natsOptions_SetToken(opts, z.ptr);
+            opts.auth_token = t;
         }
-
         if (self.cfg.tls) {
-            _ = nats.natsOptions_SetSecure(opts, true);
-            if (self.cfg.tls_ca) |ca| {
-                const z = try self.zdup(ca);
-                if (nats.natsOptions_LoadCATrustedCertificates(opts, z.ptr) != nats.NATS_OK) return error.OptsApplyFailed;
-            }
-            if (self.cfg.tls_cert) |cert| {
-                const cz = try self.zdup(cert);
-                const kz = if (self.cfg.tls_key) |k| (try self.zdup(k)).ptr else null;
-                if (nats.natsOptions_LoadCertificatesChain(opts, cz.ptr, kz) != nats.NATS_OK) return error.OptsApplyFailed;
-            }
-            if (self.cfg.tls_skip_verify) _ = nats.natsOptions_SkipServerVerification(opts, true);
+            opts.tls_required = true;
+            if (self.cfg.tls_ca) |ca| opts.tls_ca_file = ca;
+            if (self.cfg.tls_cert) |cert| opts.tls_cert_file = cert;
+            if (self.cfg.tls_key) |key| opts.tls_key_file = key;
+            if (self.cfg.tls_skip_verify) opts.tls_insecure_skip_verify = true;
         }
-
-        if (self.cfg.connect_timeout_ms) |v| _ = nats.natsOptions_SetTimeout(opts, v);
-        if (self.cfg.ping_interval_ms) |v| _ = nats.natsOptions_SetPingInterval(opts, v);
-        if (self.cfg.max_reconnect) |v| _ = nats.natsOptions_SetMaxReconnect(opts, v);
-        if (self.cfg.reconnect_wait_ms) |v| _ = nats.natsOptions_SetReconnectWait(opts, v);
+        if (self.cfg.connect_timeout_ms) |v| {
+            opts.connect_timeout_ns = @intCast(v * std.time.ns_per_ms);
+        }
+        if (self.cfg.ping_interval_ms) |v| {
+            opts.ping_interval_ms = @intCast(v);
+        }
+        if (self.cfg.max_reconnect) |v| {
+            opts.max_reconnect_attempts = @intCast(v);
+        }
+        if (self.cfg.reconnect_wait_ms) |v| {
+            opts.reconnect_wait_ms = @intCast(v);
+        }
+        return opts;
     }
 
     /// Called from router fan-out once per local publish. Matches against
-    /// configured exports; forwards if any match. Never blocks.
+    /// configured exports; forwards if any match. Never blocks (publish
+    /// encodes into a lock-free ring buffer drained by io_task).
     pub fn publish(self: *Bridge, subject: []const u8, payload: []const u8) void {
-        const nc = self.nc orelse return;
+        const c = self.client orelse return;
         if (!self.matchesAnyExport(subject)) return;
 
-        // nats.c expects a NUL-terminated subject. Subjects over 511 bytes
-        // are absurd for this use case; drop rather than heap-alloc.
-        var sb: [512]u8 = undefined;
-        if (subject.len >= sb.len) {
+        c.publish(subject, payload) catch |err| {
             self.stats.dropped += 1;
+            self.stats.last_error = @intFromError(err);
             return;
-        }
-        @memcpy(sb[0..subject.len], subject);
-        sb[subject.len] = 0;
-        const subj_z: [*:0]const u8 = @ptrCast(&sb[0]);
-
-        const s = nats.natsConnection_Publish(nc, subj_z, payload.ptr, @intCast(payload.len));
-        if (s == nats.NATS_OK) {
-            self.stats.published += 1;
-        } else {
-            self.stats.dropped += 1;
-            self.stats.last_error = s;
-        }
+        };
+        self.stats.published += 1;
     }
 
     fn matchesAnyExport(self: *const Bridge, subject: []const u8) bool {
