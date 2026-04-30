@@ -1,8 +1,12 @@
-//! Snapshot file format (v1).
+//! Snapshot file format (v2).
+//!
+//! v2 added time-windowed state: a `time_ring` variant and three extra
+//! fields on `ohlc`. v1 snapshots aren't read; a version bump on a fresh
+//! `--snapshot` path just means starting empty.
 //!
 //! Layout:
 //!   magic     "MBLK"   (4 bytes)
-//!   version   u8       (currently 1)
+//!   version   u8       (currently 2)
 //!   reserved  [3]u8    (zero)
 //!   records   repeated tagged entries:
 //!     kind u8
@@ -12,12 +16,12 @@
 //!       0x02 = rule_state:
 //!         rule_idx   u32
 //!         filter_len u32  filter bytes       (disambiguates if rule order changes)
-//!         key_len    u32  key bytes           ("op:subject")
+//!         key_len    u32  key bytes           ("op:subject" or "op/kind:subject")
 //!         variant    u8   (see StateEntry variants below)
 //!         variant-specific body
 //!   EOF
 //!
-//! StateEntry variants (matches lib/patchbay/src/eval.zig StateEntry union):
+//! StateEntry variants (matches lib/patchbay/src/state.zig StateEntry union):
 //!   0x00 empty:
 //!     (no body)
 //!   0x01 bytes:
@@ -34,11 +38,18 @@
 //!     min_len  u32
 //!     min_len × u64            (min_deque)
 //!   0x04 ohlc:
-//!     open  f64
-//!     high  f64
-//!     low   f64
-//!     count u32
-//!     cap   u32
+//!     open            f64
+//!     high            f64
+//!     low             f64
+//!     count           u32
+//!     cap             u32
+//!     window_ms       u64
+//!     window_start_ms i64
+//!     last_close      f64
+//!   0x05 time_ring:
+//!     window_ms u64
+//!     n         u32           number of samples
+//!     n × { value f64; ts_ms i64 }
 //!
 //! No checksum, no compression. If anything changes, bump `version`.
 
@@ -50,7 +61,7 @@ const patchbay = @import("patchbay");
 const rules_mod = patchbay.eval;
 
 pub const magic = "MBLK";
-pub const version: u8 = 1;
+pub const version: u8 = 2;
 pub const header_len = 8;
 
 pub const max_field_len: u32 = 16 * 1024 * 1024;
@@ -63,6 +74,7 @@ pub const variant_bytes: u8 = 0x01;
 pub const variant_number: u8 = 0x02;
 pub const variant_ring: u8 = 0x03;
 pub const variant_ohlc: u8 = 0x04;
+pub const variant_time_ring: u8 = 0x05;
 
 pub const LvcEntry = struct {
     subject: []const u8,
@@ -148,8 +160,24 @@ fn writeRuleState(gpa: Allocator, out: *std.ArrayList(u8), e: RuleStateEntry) !v
             try writeF64(gpa, out, b.low);
             try writeU32(gpa, out, b.count);
             try writeU32(gpa, out, b.cap);
+            try writeU64(gpa, out, b.window_ms);
+            try writeI64(gpa, out, b.window_start_ms);
+            try writeF64(gpa, out, b.last_close);
+        },
+        .time_ring => |r| {
+            try out.append(gpa, variant_time_ring);
+            try writeU64(gpa, out, r.window_ms);
+            try writeU32(gpa, out, @intCast(r.samples.items.len));
+            for (r.samples.items) |s| {
+                try writeF64(gpa, out, s.value);
+                try writeI64(gpa, out, s.ts_ms);
+            }
         },
     }
+}
+
+fn writeI64(gpa: Allocator, out: *std.ArrayList(u8), n: i64) !void {
+    try writeU64(gpa, out, @bitCast(n));
 }
 
 fn writeLenPrefixed(gpa: Allocator, out: *std.ArrayList(u8), s: []const u8) !void {
@@ -238,8 +266,30 @@ pub fn parse(bytes: []const u8, ctx: anytype) !void {
                         const low = try readF64(bytes, &i);
                         const count = try readU32(bytes, &i);
                         const cap = try readU32(bytes, &i);
+                        const window_ms = try readU64(bytes, &i);
+                        const window_start_ms = try readI64(bytes, &i);
+                        const last_close = try readF64(bytes, &i);
                         try ctx.onRuleState(rule_idx, filter, key, .{
-                            .ohlc = .{ .open = open, .high = high, .low = low, .count = count, .cap = cap },
+                            .ohlc = .{
+                                .open = open, .high = high, .low = low,
+                                .count = count, .cap = cap,
+                                .window_ms = window_ms,
+                                .window_start_ms = window_start_ms,
+                                .last_close = last_close,
+                            },
+                        });
+                    },
+                    variant_time_ring => {
+                        const window_ms = try readU64(bytes, &i);
+                        const n = try readU32(bytes, &i);
+                        // Each sample is 16 bytes (f64 value + i64 ts).
+                        if (i + @as(usize, n) * 16 > bytes.len) return LoadError.Truncated;
+                        const samples_bytes = bytes[i .. i + @as(usize, n) * 16];
+                        i += @as(usize, n) * 16;
+                        try ctx.onRuleStateTimeRing(rule_idx, filter, key, .{
+                            .window_ms = window_ms,
+                            .n = n,
+                            .samples_bytes = samples_bytes,
                         });
                     },
                     else => return LoadError.UnknownVariant,
@@ -257,6 +307,13 @@ pub const RingWireView = struct {
     buf_bytes: []const u8,
     max_bytes: []const u8,
     min_bytes: []const u8,
+};
+
+pub const TimeRingWireView = struct {
+    window_ms: u64,
+    n: u32,
+    /// Tightly packed: each sample is 8 bytes f64 + 8 bytes i64.
+    samples_bytes: []const u8,
 };
 
 fn readU8(bytes: []const u8, i: *usize) !u8 {
@@ -281,6 +338,10 @@ fn readU64(bytes: []const u8, i: *usize) !u64 {
 }
 
 fn readF64(bytes: []const u8, i: *usize) !f64 {
+    return @bitCast(try readU64(bytes, i));
+}
+
+fn readI64(bytes: []const u8, i: *usize) !i64 {
     return @bitCast(try readU64(bytes, i));
 }
 
@@ -353,6 +414,14 @@ fn dupStateEntry(arena: Allocator, src: rules_mod.StateEntry) !rules_mod.StateEn
                 .min_deque = min_copy,
             } };
         },
+        .time_ring => |r| blk: {
+            var samples: std.ArrayList(rules_mod.TimeRing.Sample) = .empty;
+            try samples.appendSlice(arena, r.samples.items);
+            break :blk .{ .time_ring = .{
+                .samples = samples,
+                .window_ms = r.window_ms,
+            } };
+        },
         .ohlc => |b| .{ .ohlc = b },
     };
 }
@@ -407,6 +476,17 @@ pub fn loadInto(
         ) !void {
             const rule = self.resolveRule(rule_idx, filter) orelse return;
             try installRing(self.gpa, rule, key, view);
+        }
+
+        fn onRuleStateTimeRing(
+            self: *@This(),
+            rule_idx: u32,
+            filter: []const u8,
+            key: []const u8,
+            view: TimeRingWireView,
+        ) !void {
+            const rule = self.resolveRule(rule_idx, filter) orelse return;
+            try installTimeRing(self.gpa, rule, key, view);
         }
 
         fn resolveRule(self: *@This(), rule_idx: u32, filter: []const u8) ?*rules_mod.Rule {
@@ -498,6 +578,27 @@ fn installRing(
     } });
 }
 
+fn installTimeRing(
+    gpa: Allocator,
+    rule: *rules_mod.Rule,
+    key: []const u8,
+    view: TimeRingWireView,
+) !void {
+    var samples: std.ArrayList(rules_mod.TimeRing.Sample) = .empty;
+    errdefer samples.deinit(gpa);
+    try samples.ensureTotalCapacity(gpa, view.n);
+    var off: usize = 0;
+    while (off < view.samples_bytes.len) : (off += 16) {
+        const value: f64 = @bitCast(std.mem.readInt(u64, view.samples_bytes[off..][0..8], .little));
+        const ts_ms: i64 = @bitCast(std.mem.readInt(u64, view.samples_bytes[off + 8 ..][0..8], .little));
+        samples.appendAssumeCapacity(.{ .value = value, .ts_ms = ts_ms });
+    }
+    try installSimple(gpa, rule, key, .{ .time_ring = .{
+        .samples = samples,
+        .window_ms = view.window_ms,
+    } });
+}
+
 // --- Atomic file write --------------------------------------------------
 
 pub fn writeFileAtomic(
@@ -547,6 +648,9 @@ test "empty snapshot round-trips" {
         fn onRuleStateRing(self: *@This(), _: u32, _: []const u8, _: []const u8, _: RingWireView) !void {
             self.rs += 1;
         }
+        fn onRuleStateTimeRing(self: *@This(), _: u32, _: []const u8, _: []const u8, _: TimeRingWireView) !void {
+            self.rs += 1;
+        }
     };
     var c: Counter = .{};
     try parse(out.items, &c);
@@ -579,6 +683,7 @@ test "lvc round-trip preserves bytes" {
         fn onRuleState(_: *@This(), _: u32, _: []const u8, _: []const u8, _: rules_mod.StateEntry) !void {}
         fn onRuleStateBytes(_: *@This(), _: u32, _: []const u8, _: []const u8, _: []const u8) !void {}
         fn onRuleStateRing(_: *@This(), _: u32, _: []const u8, _: []const u8, _: RingWireView) !void {}
+        fn onRuleStateTimeRing(_: *@This(), _: u32, _: []const u8, _: []const u8, _: TimeRingWireView) !void {}
     };
     var c: Collector = .{ .gpa = gpa };
     defer {
@@ -684,6 +789,7 @@ test "rule state variants round-trip" {
                 .min = mn,
             };
         }
+        fn onRuleStateTimeRing(_: *@This(), _: u32, _: []const u8, _: []const u8, _: TimeRingWireView) !void {}
     };
     var c: Collector = .{ .gpa = gpa };
     defer {
@@ -715,6 +821,7 @@ test "bad magic is rejected" {
         fn onRuleState(_: *@This(), _: u32, _: []const u8, _: []const u8, _: rules_mod.StateEntry) !void {}
         fn onRuleStateBytes(_: *@This(), _: u32, _: []const u8, _: []const u8, _: []const u8) !void {}
         fn onRuleStateRing(_: *@This(), _: u32, _: []const u8, _: []const u8, _: RingWireView) !void {}
+        fn onRuleStateTimeRing(_: *@This(), _: u32, _: []const u8, _: []const u8, _: TimeRingWireView) !void {}
     };
     var n: Noop = .{};
     try testing.expectError(LoadError.BadMagic, parse(bogus, &n));
@@ -727,6 +834,7 @@ test "unsupported version is rejected" {
         fn onRuleState(_: *@This(), _: u32, _: []const u8, _: []const u8, _: rules_mod.StateEntry) !void {}
         fn onRuleStateBytes(_: *@This(), _: u32, _: []const u8, _: []const u8, _: []const u8) !void {}
         fn onRuleStateRing(_: *@This(), _: u32, _: []const u8, _: []const u8, _: RingWireView) !void {}
+        fn onRuleStateTimeRing(_: *@This(), _: u32, _: []const u8, _: []const u8, _: TimeRingWireView) !void {}
     };
     var n: Noop = .{};
     try testing.expectError(LoadError.UnsupportedVersion, parse(bogus, &n));

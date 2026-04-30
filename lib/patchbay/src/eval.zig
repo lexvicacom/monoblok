@@ -24,6 +24,9 @@ pub const Rule = state.Rule;
 pub const StateEntry = state.StateEntry;
 pub const Ohlc = state.Ohlc;
 pub const Ring = state.Ring;
+pub const TimeRing = state.TimeRing;
+pub const WindowKind = sexpr.WindowKind;
+pub const WindowSpec = sexpr.WindowSpec;
 
 pub const LoadError = load.LoadError;
 pub const ValidateFailure = load.ValidateFailure;
@@ -154,6 +157,82 @@ pub const RuleSet = struct {
     }
 };
 
+/// Walk every rule's state and:
+///   - close any time-windowed `bar` whose aligned window has fully
+///     elapsed (`now_ms >= window_start + window_ms`); emit its
+///     open/high/low/close to `<subject>.bar.{...}` and reset to empty
+///   - evict samples older than the window from every `time_ring` slot
+///
+/// Called by the server on a periodic timer (~500ms is plenty). Safe to
+/// call any time on the loop thread; per-slot state is shared with the
+/// PUB-driven path but we never publish into a window that the next PUB
+/// would have closed itself, since both run serially.
+///
+/// `arena` is scratch (subject + payload formatting); reset / discard
+/// after the call returns. `publisher` is the same fan-out target the
+/// PUB path uses, so emitted bar closes flow through fan-out and the
+/// LVC like any other publish.
+pub fn tickClocks(
+    arena: Allocator,
+    rules: []Rule,
+    now_ms: i64,
+    publisher: Publisher,
+) !void {
+    for (rules) |*rule| {
+        var it = rule.state.iterator();
+        while (it.next()) |slot| {
+            const key = slot.key_ptr.*;
+            switch (slot.value_ptr.*) {
+                .ohlc => |*bar| {
+                    if (bar.window_ms == 0) continue; // tick bar
+                    if (bar.count == 0) continue;     // empty bar, nothing to close
+                    const window_ms_i: i64 = @intCast(bar.window_ms);
+                    if (now_ms - bar.window_start_ms < window_ms_i) continue;
+                    const subject = parseSubjectFromBarKey(key) orelse continue;
+                    try emitBar(arena, publisher, subject, bar.open, bar.high, bar.low, bar.last_close);
+                    rule.publishes_emitted += 4;
+                    // Reset; the next PUB starts a fresh window.
+                    bar.count = 0;
+                    bar.window_start_ms = 0;
+                },
+                .time_ring => |*ring| ring.evict(now_ms),
+                else => {},
+            }
+        }
+    }
+}
+
+/// Bar slot keys are `"bar/m:<subject>"` — see `callBar` in builtins.zig.
+/// Anything else (e.g. tick bars at `"bar/t:..."`, or non-bar slots) is
+/// ignored.
+fn parseSubjectFromBarKey(key: []const u8) ?[]const u8 {
+    const prefix = "bar/m:";
+    if (!std.mem.startsWith(u8, key, prefix)) return null;
+    return key[prefix.len..];
+}
+
+fn emitBar(
+    arena: Allocator,
+    publisher: Publisher,
+    subject: []const u8,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+) !void {
+    const fields = [_]struct { name: []const u8, val: f64 }{
+        .{ .name = "open", .val = open },
+        .{ .name = "high", .val = high },
+        .{ .name = "low", .val = low },
+        .{ .name = "close", .val = close },
+    };
+    for (fields) |f| {
+        const subj = try std.fmt.allocPrint(arena, "{s}.bar.{s}", .{ subject, f.name });
+        const out = try std.fmt.allocPrint(arena, "{d}", .{f.val});
+        try publisher.publish(subj, out);
+    }
+}
+
 /// Build a `RuleSet` from `[]Rule`. Index entries live in `arena`, which
 /// must outlive the RuleSet (same lifetime as `rules`).
 pub fn buildRuleSet(arena: Allocator, rules: []Rule) Allocator.Error!RuleSet {
@@ -239,7 +318,7 @@ pub fn run(rules: []Rule, ctx: *Context) !void {
 
 fn evalNormal(ctx: *Context, v: Value) EvalError!Value {
     return switch (v) {
-        .nil, .boolean, .number, .string => v,
+        .nil, .boolean, .number, .string, .window => v,
         .symbol => |s| evalSymbol(ctx, s),
         .list => |items| builtins.evalCall(ctx, items),
         .keyword => error.UnknownSymbol, // keywords are config-only, not rule body values
@@ -301,6 +380,7 @@ fn suppressionHint(v: Value) ?[]const u8 {
         .{ "squelch", "squelched" },
         .{ "deadband", "within deadband" },
         .{ "hold-off", "rate-limited" },
+        .{ "throttle", "throttled" },
         .{ "rising-edge", "no rising edge" },
         .{ "falling-edge", "no falling edge" },
         .{ "transition", "no transition" },
@@ -371,6 +451,10 @@ fn formatValue(v: Value) void {
                 formatValue(it);
             }
             std.debug.print(")", .{});
+        },
+        .window => |w| switch (w.kind) {
+            .ticks => std.debug.print("(ticks {d})", .{w.n}),
+            .time_ms => std.debug.print("(window-ms {d})", .{w.n}),
         },
     }
 }

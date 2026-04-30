@@ -24,9 +24,17 @@
 ;;    Watch `demo.sensors.*.smoothed`.
 (on "demo.sensors.*"
   (-> payload-float
-      (moving-avg 10)
+      (moving-avg (ticks 10))
       (deadband 1.0)
       (publish-to (subject-append "smoothed"))))
+
+;; 3b. Time-windowed average: 5-second sliding mean. Old samples expire
+;;     by age, so the average self-drains when the publisher goes quiet.
+;;     Watch `demo.sensors.*.avg5s`.
+(on "demo.sensors.*"
+  (-> payload-float
+      (moving-avg (window-ms 5000))
+      (publish-to (subject-append "avg5s"))))
 
 ;; 4. Delta + squelch: emit the per-tick change, but only when it
 ;;    differs from the last delta (so a stream of identical values

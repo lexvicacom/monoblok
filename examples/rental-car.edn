@@ -16,7 +16,7 @@
 ;; Hold off for 5s between alerts so one long stretch of redline doesn't
 ;; spam the downstream log once per incoming sample.
 (on "car.*.rpm"
-  (when (> (moving-avg 20 payload-float) 7500.0)
+  (when (> (moving-avg (ticks 20) payload-float) 7500.0)
     (-> payload
         (hold-off 5000)
         (publish-to (subject-append "alert")))))

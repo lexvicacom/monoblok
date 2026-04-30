@@ -241,7 +241,7 @@ test "moving-avg smooths a stream" {
     // Rule fires when the 3-sample moving avg crosses 10.
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (when (> (moving-avg 3 payload-float) 10.0)
+        \\  (when (> (moving-avg (ticks 3) payload-float) 10.0)
         \\    (publish (subject-append "hot") payload)))
     );
     defer deinitRules(rules, testing.allocator);
@@ -274,7 +274,7 @@ test "moving-max and moving-min track window extremes" {
 
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (when (> (- (moving-max 3 payload-float) (moving-min 3 payload-float)) 5.0)
+        \\  (when (> (- (moving-max (ticks 3) payload-float) (moving-min (ticks 3) payload-float)) 5.0)
         \\    (publish (subject-append "spread") payload)))
     );
     defer deinitRules(rules, testing.allocator);
@@ -306,7 +306,7 @@ test "moving-avg composes with deadband" {
     // Smooth then gate: only emit if the smoothed value drifts by >= 1.0.
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (when (deadband 1.0 (moving-avg 3 payload-float))
+        \\  (when (deadband 1.0 (moving-avg (ticks 3) payload-float))
         \\    (publish (subject-append "drift") payload)))
     );
     defer deinitRules(rules, testing.allocator);
@@ -379,7 +379,7 @@ test "thread -> expands moving-avg pipeline" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (-> payload-float
-        \\      (moving-avg 3)
+        \\      (moving-avg (ticks 3))
         \\      (deadband 1.0)
         \\      (publish-to (subject-append "drift"))))
     );
@@ -916,7 +916,7 @@ test "bar emits open/high/low/close every N ticks" {
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar 4 payload-float))
+        \\  (bar (ticks 4) payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -963,7 +963,7 @@ test "bar state is per-subject" {
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar 2 payload-float))
+        \\  (bar (ticks 2) payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1061,6 +1061,467 @@ test "count with predicate only increments on truthy" {
     try testing.expectEqualStrings("1", tp.buf.items[0].payload);
     try testing.expectEqualStrings("events.svc.count", tp.buf.items[1].subject);
     try testing.expectEqualStrings("2", tp.buf.items[1].payload);
+}
+
+test "moving-avg with window-ms evicts by age" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // 1-second sliding window. Anything older than now-1000ms leaves.
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (-> payload-float
+        \\      (moving-avg (window-ms 1000))
+        \\      (publish-to (subject-append "avg"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+
+    const Frame = struct { now_ms: i64, payload: []const u8 };
+    // t=0    push 10 → avg=10
+    // t=500  push 20 → avg=15 (both in window)
+    // t=900  push 30 → avg=20 (all three)
+    // t=1100 push 40 → t=0 evicted; avg over 20,30,40 = 30
+    // t=2200 push 50 → only 50 left in 1.2..2.2; avg=50
+    const feed = [_]Frame{
+        .{ .now_ms = 0, .payload = "10" },
+        .{ .now_ms = 500, .payload = "20" },
+        .{ .now_ms = 900, .payload = "30" },
+        .{ .now_ms = 1100, .payload = "40" },
+        .{ .now_ms = 2200, .payload = "50" },
+    };
+    for (feed) |f| {
+        var ctx: Context = .{
+            .subject = "sensors.t",
+            .payload = f.payload,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+            .now_ms = f.now_ms,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 5), tp.buf.items.len);
+    try testing.expectEqualStrings("10", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("15", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("20", tp.buf.items[2].payload);
+    try testing.expectEqualStrings("30", tp.buf.items[3].payload);
+    try testing.expectEqualStrings("50", tp.buf.items[4].payload);
+}
+
+test "ticks and window-ms keep distinct slots on the same rule" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Two moving-avgs over the same input: a tick window and a time
+    // window. They mustn't share state.
+    const rules = try loadRules(arena,
+        \\(on "x.*"
+        \\  (do
+        \\    (-> payload-float (moving-avg (ticks 2))     (publish-to "tick.avg"))
+        \\    (-> payload-float (moving-avg (window-ms 1000)) (publish-to "time.avg"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const Frame = struct { now_ms: i64, payload: []const u8 };
+    const feed = [_]Frame{
+        .{ .now_ms = 0,    .payload = "10" }, // ticks: 10  | time: 10
+        .{ .now_ms = 500,  .payload = "20" }, // ticks: 15  | time: 15
+        .{ .now_ms = 1500, .payload = "30" }, // ticks: 25 (drop 10) | time: 25 (drop 10)
+    };
+    for (feed) |f| {
+        var ctx: Context = .{
+            .subject = "x.a",
+            .payload = f.payload,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+            .now_ms = f.now_ms,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 6), tp.buf.items.len);
+    // Order alternates tick.avg, time.avg per input.
+    try testing.expectEqualStrings("10", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("10", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("15", tp.buf.items[2].payload);
+    try testing.expectEqualStrings("15", tp.buf.items[3].payload);
+    try testing.expectEqualStrings("25", tp.buf.items[4].payload);
+    try testing.expectEqualStrings("25", tp.buf.items[5].payload);
+}
+
+test "bar with window-ms closes on the next tick after the boundary" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // 1s aligned bars. Boundary at floor(now/1000)*1000.
+    const rules = try loadRules(arena,
+        \\(on "MARKET.*"
+        \\  (bar (window-ms 1000) payload-float))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const Frame = struct { now_ms: i64, payload: []const u8 };
+    // Window [1000,2000) gets {10,12,9,11}; window [2000,3000) starts
+    // with the next tick (15) which crosses the boundary and emits the
+    // [1000,2000) close.
+    const feed = [_]Frame{
+        .{ .now_ms = 1100, .payload = "10" }, // open bar at 1000
+        .{ .now_ms = 1300, .payload = "12" },
+        .{ .now_ms = 1700, .payload = "9" },
+        .{ .now_ms = 1900, .payload = "11" }, // last in [1000,2000)
+        .{ .now_ms = 2100, .payload = "15" }, // crosses → close prior bar
+    };
+    for (feed) |f| {
+        var ctx: Context = .{
+            .subject = "MARKET.AAPL",
+            .payload = f.payload,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+            .now_ms = f.now_ms,
+        };
+        try run(rules, &ctx);
+    }
+    // o=10 h=12 l=9 c=11 — close = last sample seen in the window (11),
+    // not the boundary-crossing sample (15).
+    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.open", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("10", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("12", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("9", tp.buf.items[2].payload);
+    try testing.expectEqualStrings("11", tp.buf.items[3].payload);
+}
+
+test "tickClocks closes a stalled time bar" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const loaded = try loadRules(arena,
+        \\(on "MARKET.*"
+        \\  (bar (window-ms 1000) payload-float))
+    );
+    defer deinitRules(loaded, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    // Open a bar in window [1000,2000) and never push another tick.
+    var ctx: Context = .{
+        .subject = "MARKET.AAPL",
+        .payload = "10",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .now_ms = 1500,
+    };
+    try run(loaded, &ctx);
+    try testing.expectEqual(@as(usize, 0), tp.buf.items.len);
+
+    // Walker fires at t=2500: window [1000,2000) is fully past, close it.
+    try eval.tickClocks(arena, loaded, 2500, tp.publisher());
+    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.open", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("10", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("MARKET.AAPL.bar.close", tp.buf.items[3].subject);
+    try testing.expectEqualStrings("10", tp.buf.items[3].payload);
+
+    // A second walker tick on an empty bar must not re-emit.
+    try eval.tickClocks(arena, loaded, 9000, tp.publisher());
+    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+}
+
+test "rate over a 1s window reports events per second" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "x"
+        \\  (-> payload-float
+        \\      (rate (window-ms 1000))
+        \\      (publish-to "hz")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const Frame = struct { now_ms: i64 };
+    // Five events spread across 800ms → all live → 5 events / 1s = 5 Hz
+    // on the last call.
+    const feed = [_]Frame{
+        .{ .now_ms = 100 },
+        .{ .now_ms = 300 },
+        .{ .now_ms = 500 },
+        .{ .now_ms = 700 },
+        .{ .now_ms = 900 },
+    };
+    for (feed) |f| {
+        var ctx: Context = .{
+            .subject = "x",
+            .payload = "0",
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+            .now_ms = f.now_ms,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 5), tp.buf.items.len);
+    try testing.expectEqualStrings("1", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("2", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("3", tp.buf.items[2].payload);
+    try testing.expectEqualStrings("4", tp.buf.items[3].payload);
+    try testing.expectEqualStrings("5", tp.buf.items[4].payload);
+
+    // Skip ahead: at t=2500 only one call lands; the prior five are
+    // all > 1s old → 1 Hz.
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "0",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .now_ms = 2500,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqualStrings("1", tp.buf.items[5].payload);
+}
+
+test "rate rejects (ticks N) — needs a time window" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "x" (-> payload-float (rate (ticks 10)) (publish-to "hz")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "0",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .now_ms = 0,
+    };
+    try testing.expectError(error.TypeMismatch, run(rules, &ctx));
+}
+
+test "percentile interpolates between window samples" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // p99 latency over the last 5 samples.
+    const rules = try loadRules(arena,
+        \\(on "lat"
+        \\  (-> payload-float
+        \\      (percentile (ticks 5) 0.5)
+        \\      (publish-to "p50")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const feed = [_][]const u8{ "10", "20", "30", "40", "50" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "lat",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    // After all 5 samples, sorted = [10,20,30,40,50], p50 = 30.
+    try testing.expectEqual(@as(usize, 5), tp.buf.items.len);
+    try testing.expectEqualStrings("30", tp.buf.items[4].payload);
+}
+
+test "median is sugar for percentile 0.5" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "x" (-> payload-float (median (ticks 4)) (publish-to "med")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    // [3, 7, 1, 9] sorted [1,3,7,9] → median between idx 1.5 → (3+7)/2 = 5.
+    const feed = [_][]const u8{ "3", "7", "1", "9" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "x",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqualStrings("5", tp.buf.items[3].payload);
+}
+
+test "stddev and variance over a tick window" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // population variance for [2, 4, 4, 4, 5, 5, 7, 9] is 4, stddev = 2.
+    const rules = try loadRules(arena,
+        \\(on "x"
+        \\  (do
+        \\    (-> payload-float (stddev (ticks 8))   (publish-to "sd"))
+        \\    (-> payload-float (variance (ticks 8)) (publish-to "var"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const feed = [_][]const u8{ "2", "4", "4", "4", "5", "5", "7", "9" };
+    for (feed) |p| {
+        var ctx: Context = .{
+            .subject = "x",
+            .payload = p,
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    // Last pair of emits is the final 8-sample window.
+    const last_sd = tp.buf.items[tp.buf.items.len - 2].payload;
+    const last_var = tp.buf.items[tp.buf.items.len - 1].payload;
+    try testing.expectEqualStrings("2", last_sd);
+    try testing.expectEqualStrings("4", last_var);
+}
+
+test "throttle passes at most MAX per ticks window" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Up to 2 passes per 5-tick window.
+    const rules = try loadRules(arena,
+        \\(on "x"
+        \\  (-> payload
+        \\      (throttle (ticks 5) 2)
+        \\      (publish-to "out")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    // Calls 1,2 pass; 3,4,5 suppressed (window has 2 passes already);
+    // call 6 evicts call 1 (still 1 pass in window) → pass; call 7
+    // window now holds {pass@2, supp@3, supp@4, supp@5, pass@6} → 2
+    // passes → suppress; call 8 evicts pass@2 → 1 in window → pass.
+    var i: u8 = 0;
+    while (i < 8) : (i += 1) {
+        var ctx: Context = .{
+            .subject = "x",
+            .payload = "p",
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+        };
+        try run(rules, &ctx);
+    }
+    // 4 passes total: calls 1, 2, 6, 8.
+    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+}
+
+test "throttle passes at most MAX per window-ms" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Up to 3 passes per 1s window.
+    const rules = try loadRules(arena,
+        \\(on "x"
+        \\  (-> payload
+        \\      (throttle (window-ms 1000) 3)
+        \\      (publish-to "out")))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    const Frame = struct { now_ms: i64 };
+    // 5 calls inside the same 1s → first 3 pass, 4th and 5th drop.
+    const feed = [_]Frame{
+        .{ .now_ms = 100 },
+        .{ .now_ms = 200 },
+        .{ .now_ms = 300 },
+        .{ .now_ms = 400 },
+        .{ .now_ms = 500 },
+    };
+    for (feed) |f| {
+        var ctx: Context = .{
+            .subject = "x",
+            .payload = "p",
+            .publisher = tp.publisher(),
+            .arena = arena,
+            .gpa = testing.allocator,
+            .now_ms = f.now_ms,
+        };
+        try run(rules, &ctx);
+    }
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+
+    // Skip ahead past the window — bucket clears, next call passes.
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "p",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .now_ms = 1600,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+}
+
+test "tickClocks evicts old samples from time-ring moving-avg" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const loaded = try loadRules(arena,
+        \\(on "x"
+        \\  (-> payload-float
+        \\      (moving-avg (window-ms 1000))
+        \\      (publish-to "avg")))
+    );
+    defer deinitRules(loaded, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "10",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .now_ms = 0,
+    };
+    try run(loaded, &ctx);
+    // Walker at t=5000 should evict the t=0 sample. We can't observe the
+    // ring directly through the public API, so push a fresh sample after
+    // the walker and verify the new average doesn't include the old one.
+    try eval.tickClocks(arena, loaded, 5000, tp.publisher());
+
+    ctx.payload = "30";
+    ctx.now_ms = 5100;
+    try run(loaded, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("avg", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("30", tp.buf.items[1].payload);
 }
 
 // --- Re-entry: patchbay-emitted publishes match downstream rules ---------
