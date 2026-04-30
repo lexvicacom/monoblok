@@ -18,7 +18,7 @@ It's happy [sitting at the edge in front of a NATS leaf](#what-it-can-be-used-fo
 
 ## Try it out with no install
 
-A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://monoblok.rtd.pub:4222` (no auth, no TLS). Point any `nats` CLI at it and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay, subjects worth subscribing to, and the usual caveats.
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://monoblok.rtd.pub:4222` and a bridged _actual_ NATS server runs on `nats://monoblok.rtd.pub:4223`.  Point any `nats` CLI at the first and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay, subjects worth subscribing to. More on the bridge later.
 
 ## Install on your hardware
 
