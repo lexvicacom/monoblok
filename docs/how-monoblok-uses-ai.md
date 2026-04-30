@@ -6,7 +6,7 @@ There's no shame in using Claude or any of the other assistants, but there's som
 
 [This is an interesting area](https://github.com/melissawm/open-source-ai-contribution-policies) for sure.
 
->Did I write every line of code? **No,** it's 2026. Do I understand the architecture? **Yes,** I thought of it - whether it's good or bad.
+>Did I write every line of code? **No,** it's 2026. Do I understand the architecture? **Yes,** I thought of it - that's whether it's good or bad, I'll let you draw conclusions.
 
 The valuable/interesting parts of monoblok are the **ideas** - the the bits bolted onto the
 NATS-inspired core (the patchbay DSL, `$LVC.*` last-value streams,
@@ -15,7 +15,7 @@ performance-wise against the real thing on a single thread.
 
 Claude is just a tool to help make the ideas happen quickly (fail fast), write boring code and catch bugs. 
 
-That said, if you see any AI BS or suspected overly-verbose slop, let me know. _You're absolutely right.__
+That said, if you see any AI BS or suspected overly-verbose slop, let me know. _You're absolutely right._
 
 ## Where it works best
 
@@ -43,9 +43,11 @@ rubber duck that pushes back is priceless, keeping me on the straight and narrow
 
 **First stab at docs** AI is well-placed to give the skeleton/framework of documentation, which again, might get neglected in favour of writing code. Both are important. AI can get dry, verbose and repetitive so this is something I aim to avoid.
 
-Sycophancy: nothing Mr. Claude, Esq says is taken as gospel. He (they?) gets sworn at frequently,
+**Sycophancy:** nothing Mr. Claude, Esq says is taken as gospel. He (they?) gets sworn at frequently,
 told he's wrong, and asked to try again. If a suggestion survives
 that, it's probably worth something.
+
+**Old age:** I had a stroke aged 45, my left hand doesn't type so well - but intensively working on projects like this one (and getting shadow banned on popular sites for posting about them, but I digress) has helped my recovery immeasurably. Having Claude do a lot of typing when I'm tired or having an off day is a huge motivator.
 
 The other half of not-taking-it-as-gospel is actually reading the
 docs and the prior art. The Zig stdlib source, release
