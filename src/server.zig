@@ -34,15 +34,19 @@ const stats_interval: u64 = 10_000;
 /// emits on a wall-clock tick. Excluded from the LVC (see router.publish).
 const stats_prefix = "$STATS.";
 
-/// Wall-clock tick for `$STATS.*` publishes.
-const stats_tick_ms: u64 = 60_000;
+/// Default wall-clock tick for `$STATS.*` publishes. Override via
+/// `Server.stats_tick_ms` (CLI flag `--stats-tick-ms`).
+pub const default_stats_tick_ms: u64 = 60_000;
 
-/// Wall-clock tick for the patchbay clock walker. Runs `eval.tickClocks`
-/// over every rule's state to close any time-windowed `bar` whose window
-/// elapsed without a closing PUB, and to evict stale samples from
-/// `(window-ms ...)` `moving-*` rings. 500ms is fine-grained enough that
-/// a 1s window's close lands within ~half-window of the boundary.
-const clock_tick_ms: u64 = 500;
+/// Default wall-clock tick for the patchbay clock walker. The walker runs
+/// `eval.tickClocks` over every rule's state to close any time-windowed
+/// `bar` whose window elapsed without a closing PUB, and to evict stale
+/// samples from `(window-ms ...)` `moving-*` rings. 2s is a reasonable
+/// idle-CPU vs latency tradeoff: time-bar closes land within ~half-tick
+/// of their boundary, and the walker only does real work for `time_ring`
+/// / time-bar slots. Override via `Server.clock_tick_ms` (CLI flag
+/// `--clock-tick-ms`).
+pub const default_clock_tick_ms: u64 = 2_000;
 
 /// Shared-layout view of `bridge.Stats`. Server reads via `*const BridgeStats`
 /// so it doesn't need to import bridge.zig directly.
@@ -95,10 +99,12 @@ pub const Server = struct {
     /// Periodic `$STATS.*` publisher; timer re-arms from its callback.
     stats_timer: xev.Timer = undefined,
     stats_completion: xev.Completion = undefined,
+    stats_tick_ms: u64 = default_stats_tick_ms,
 
     /// Periodic patchbay clock walker; timer re-arms from its callback.
     clock_timer: xev.Timer = undefined,
     clock_completion: xev.Completion = undefined,
+    clock_tick_ms: u64 = default_clock_tick_ms,
     /// Reset on each clock tick. Walker emits + ring eviction allocate
     /// here.
     clock_arena: std.heap.ArenaAllocator = undefined,
@@ -145,11 +151,11 @@ pub const Server = struct {
         }
 
         self.stats_timer = try xev.Timer.init();
-        self.stats_timer.run(self.loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
+        self.stats_timer.run(self.loop, &self.stats_completion, self.stats_tick_ms, Server, self, onStatsTick);
 
         self.clock_arena = .init(self.gpa);
         self.clock_timer = try xev.Timer.init();
-        self.clock_timer.run(self.loop, &self.clock_completion, clock_tick_ms, Server, self, onClockTick);
+        self.clock_timer.run(self.loop, &self.clock_completion, self.clock_tick_ms, Server, self, onClockTick);
 
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
             self.snapshot_timer = try xev.Timer.init();
@@ -181,7 +187,8 @@ pub const Server = struct {
     /// `path` must outlive `Server` (we keep a slice, not a copy, to match
     /// `listen_host`). `io` is used only for the startup stat check.
     pub fn listenUnix(self: *Server, io: Io, path: []const u8) !void {
-        var addr: std.posix.sockaddr.un = .{ .path = std.mem.zeroes([104]u8) };
+        var addr: std.posix.sockaddr.un = std.mem.zeroes(std.posix.sockaddr.un);
+        addr.family = std.posix.AF.UNIX;
         if (path.len >= addr.path.len) return error.PathTooLong;
         @memcpy(addr.path[0..path.len], path);
 
@@ -315,7 +322,7 @@ pub const Server = struct {
             std.log.warn("stats emit failed: {s}", .{@errorName(err)});
         };
 
-        self.stats_timer.run(loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
+        self.stats_timer.run(loop, &self.stats_completion, self.stats_tick_ms, Server, self, onStatsTick);
         return .disarm;
     }
 
@@ -335,7 +342,7 @@ pub const Server = struct {
             std.log.warn("patchbay clock tick failed: {s}", .{@errorName(err)});
         };
 
-        self.clock_timer.run(loop, &self.clock_completion, clock_tick_ms, Server, self, onClockTick);
+        self.clock_timer.run(loop, &self.clock_completion, self.clock_tick_ms, Server, self, onClockTick);
         return .disarm;
     }
 

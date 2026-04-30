@@ -1,8 +1,6 @@
 # patchbay cheatsheet
 
-One-line summaries of every patchbay form. For prose, worked pipelines,
-costs, and gotchas, see [`patchbay.md`](./patchbay.md). For a model-
-oriented summary, see [`claude-patchbay.md`](./claude-patchbay.md).
+For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistant, see [`claude-patchbay.md`](./claude-patchbay.md).
 
 ## Top-level forms
 
