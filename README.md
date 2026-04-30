@@ -79,14 +79,28 @@ The shipped [patchbay.edn](./patchbay.edn) wires up a handful of forms on `senso
 | `sensors.temp.delta`         | deadband 0.5                                             |
 | `sensors.temp.smoothed`      | 10-sample moving average, deadband 1.0                   |
 
-The runnable example scripts in [`examples/`](./examples/) drive each rule and capture both the publishes and the resulting subject traffic into per-subject files, so you can see exactly what fired:
+Start monoblok, then drive it with the `nats` CLI in two terminals:
+
+```
+# terminal 1: subscribe to everything derived
+nats sub "sensors.>"
+
+# terminal 2: publish a few raw samples
+nats pub sensors.temp 22.031
+nats pub sensors.temp 22.034
+nats pub sensors.temp 31.5
+```
+
+The subscriber sees `sensors.temp.stable` fire once (22.0, then the duplicate is squelched) and `sensors.temp.high` fire on the 31.5.
+
+For the full picture (every rule exercised, publishes and per-subject deliveries captured side-by-side), the runnable scripts in [`examples/`](./examples/) do the legwork:
 
 ```
 bash examples/sensors.sh
 bash examples/demo.sh
 ```
 
-Each script starts its own monoblok on port 14222, runs a sequence of `nats pub`s with parallel `nats sub`s, then dumps the captured publishes (one `>>>` line each) and per-subject delivery tables (with `T+seconds` delivery-time deltas) at the end. A short `--- ... ---` note above each block explains what the run was meant to show, so cause and effect are obvious. See [`examples/`](./examples/) for the full set.
+Each one starts its own monoblok on port 14222, runs a scripted sequence of `nats pub`s with parallel `nats sub`s, and prints the captured publishes (one `>>>` line each) plus per-subject delivery tables (with `T+seconds` deltas) at the end. See [`examples/`](./examples/) for the full set.
 
 Stateful ops (`squelch`, `deadband`, `moving-*`) keep their state **per rule, per subject** for the server's lifetime; restart the server to reset. The first sample a rule sees on a subject always passes the gate (no prior value to compare against).
 
