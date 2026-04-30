@@ -238,7 +238,7 @@ Rules are indexed by position in the patchbay file, 0-based. Client publishes to
   <img src="bridge.png" alt="bridge" width="720">
 </p>
 
-monoblok can forward a subset of local publishes to a real NATS cluster, so it can sit in front of (or alongside) a NATS deployment and hand off selected traffic. **Export-only**: nothing flows in from the remote. TLS and `.creds` files are supported; the upstream connection uses vendored [nats.zig](https://github.com/nats-io/nats.zig) (pure Zig, std.crypto.tls), so there is no system OpenSSL dependency.
+monoblok can forward a subset of local publishes to a real NATS cluster, so it can sit in front of (or alongside) a NATS deployment and hand off selected traffic. **Export-only**: nothing flows in from the remote. TLS and `.creds` files are supported; the upstream connection uses vendored [nats.zig](https://github.com/nats-io/nats.zig) (pure Zig, std.crypto.tls).
 
 Typical shape:
 
@@ -278,18 +278,11 @@ Full keyword reference:
 | `:max-reconnect`            | number          | `-1` for unlimited                                |
 | `:reconnect-wait-ms`        | number          | base delay between reconnect attempts             |
 
-Auth precedence: `:creds` > `:user`/`:password` > `:token`. If TLS is on but `:tls-ca` isn't set, nats.zig falls back to the system trust store.
-
 ### Semantics
 
 A local publish (from a NATS client or from a patchbay rule) whose subject matches **any** `:export` filter is forwarded to the remote as-is. Subjects that don't match any filter never leave the server. Fan-out order is: local subscribers served first, bridge second — so a slow or reconnecting remote can't starve local delivery.
 
-Reconnects are handled by nats.zig internally. During the reconnect window, publishes are buffered up to the library default; once the buffer is full, further publishes count as dropped. Counters are published on the `$STATS.*` tick as `$STATS.bridge.published` and `$STATS.bridge.dropped`.
-
-### Disabling the bridge
-
-If you don't need the bridge, leave the `(bridge ...)` form out of the patchbay file. The runtime cost is zero when no config is present, and there is no separate "no-bridge" build to manage.
-
+Reconnects are handled by nats.zig internally. Counters are published on the `$STATS.*` tick as `$STATS.bridge.published` and `$STATS.bridge.dropped`.
 
 ## Observability
 
