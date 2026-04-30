@@ -15,10 +15,11 @@ pub const bridge = @import("bridge.zig");
 
 const manifest = @import("manifest");
 
-const Flag = enum { port, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, validate, help, version };
+const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, validate, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
+    .{ "--unix-socket", .unix_socket },
     .{ "--patchbay", .patchbay },
     // `--rules` is kept as a silent alias so existing scripts don't break.
     .{ "--rules", .patchbay },
@@ -40,6 +41,7 @@ pub fn main(init: std.process.Init) !void {
     const fsio = init.io; // Only used for loading the patchbay file at startup.
 
     var port: u16 = 4222;
+    var unix_socket_path: ?[]const u8 = null;
     var patchbay_path: ?[]const u8 = null;
     var lvc_enabled = true;
     var stats_enabled = false;
@@ -63,6 +65,9 @@ pub fn main(init: std.process.Init) !void {
             .port => {
                 const v = it.next() orelse fatal("--port requires a value");
                 port = std.fmt.parseInt(u16, v, 10) catch fatal("invalid port");
+            },
+            .unix_socket => {
+                unix_socket_path = it.next() orelse fatal("--unix-socket requires a path");
             },
             .patchbay => {
                 if (patchbay_path != null) fatal("patchbay path specified twice");
@@ -192,15 +197,19 @@ pub fn main(init: std.process.Init) !void {
     }
     const server_id = try arena.dupe(u8, &id_buf);
 
+    if (port == 0 and unix_socket_path == null) {
+        fatal("nothing to listen on (--port 0 disables TCP and --unix-socket was not given)");
+    }
+
     var srv: server.Server = .{
         .gpa = gpa,
         .loop = &loop,
         .router = &r,
         .rules = ruleset,
-        .listener = undefined,
         .server_id = server_id,
         .listen_host = "0.0.0.0",
         .listen_port = port,
+        .tcp_enabled = port != 0,
         .stats_enabled = stats_enabled,
         .trace_enabled = trace_enabled,
         .bridge_stats = if (bridge_runtime != null)
@@ -219,7 +228,17 @@ pub fn main(init: std.process.Init) !void {
     const address: std.Io.net.IpAddress = .{ .ip4 = .unspecified(port) };
     try srv.listen(address);
     defer srv.deinit();
-    std.log.info("monoblok listening on {f} id={s}", .{ address, server_id });
+    if (port != 0) {
+        std.log.info("monoblok listening on {f} id={s}", .{ address, server_id });
+    }
+    if (unix_socket_path) |usp| {
+        srv.listenUnix(fsio, usp) catch |err| switch (err) {
+            error.PathExistsAndIsNotASocket => fatal("--unix-socket path exists but is not a socket; refusing to overwrite"),
+            error.PathTooLong => fatal("--unix-socket path is too long (max 103 bytes)"),
+            else => return err,
+        };
+        std.log.info("monoblok listening on unix:{s} id={s}", .{ usp, server_id });
+    }
 
     // SIGINT/SIGTERM: signal handler notifies an xev.Async; real work runs
     // on the loop thread in onShutdown.
@@ -298,7 +317,7 @@ fn fatalParseError(path: []const u8, src: []const u8, offset: usize, err: anyerr
 
 fn printUsage() void {
     std.debug.print(
-        \\Usage: monoblok [PATCHBAY] [--port PORT] [--no-lvc] [--snapshot FILE]
+        \\Usage: monoblok [PATCHBAY] [--port PORT] [--unix-socket PATH] [--no-lvc] [--snapshot FILE]
         \\
         \\A NATS-compatible server with an S-expression routing and signal conditioning DSL ("patchbay").
         \\
@@ -307,7 +326,15 @@ fn printUsage() void {
         \\                   argument is treated as the patchbay path, so
         \\                   `monoblok patchbay.edn` and `monoblok
         \\                   --validate patchbay.edn` both work.
-        \\  --port PORT      TCP port to listen on (default 4222)
+        \\  --port PORT      TCP port to listen on (default 4222). Pass 0 to
+        \\                   disable TCP (in which case --unix-socket must
+        \\                   be given).
+        \\  --unix-socket PATH
+        \\                   Also listen on an AF_UNIX stream socket at
+        \\                   PATH, speaking the same NATS protocol. Stale
+        \\                   socket files from a prior run are removed
+        \\                   automatically; the file is created with mode
+        \\                   0600 and unlinked on graceful shutdown.
         \\  --patchbay FILE  Explicit form of the positional argument.
         \\                   --rules is a backwards-compatible alias.
         \\  --no-lvc         Disable the last-value cache and $LVC.* live
