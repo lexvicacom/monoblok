@@ -15,7 +15,7 @@ performance-wise against the real thing on a single thread.
 
 Claude is just a tool to help make the ideas happen quickly (fail fast), write boring code and catch bugs. 
 
-That said, if you see any AI BS or suspected overly-verbose slop, let me know. 
+That said, if you see any AI BS or suspected overly-verbose slop, let me know. _You're absolutely right.__
 
 ## Where it works best
 
