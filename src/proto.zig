@@ -275,6 +275,42 @@ test "case insensitive verbs" {
     try testing.expectEqualStrings("foo", r2.op.sub.subject);
 }
 
+test "parse rejects oversized control line" {
+    // No LF before the cap, so the parser must give up rather than wait
+    // forever for a line that legally cannot exist.
+    var buf: [max_control_line + 16]u8 = undefined;
+    @memset(&buf, 'A');
+    try testing.expectError(error.ControlLineTooLong, parseClientOp(&buf));
+}
+
+test "parse rejects empty control line" {
+    try testing.expectError(error.MalformedOp, parseClientOp("\r\n"));
+}
+
+test "parse PUB rejects oversized payload length" {
+    var line_buf: [64]u8 = undefined;
+    const line = try std.fmt.bufPrint(&line_buf, "PUB foo {d}\r\n", .{max_payload + 1});
+    try testing.expectError(error.PayloadTooLarge, parseClientOp(line));
+}
+
+test "parse PUB rejects garbage trailer after payload" {
+    // Length header says 5 bytes, payload is "hello", but the trailer is
+    // "XX" instead of the expected CRLF / LF.
+    try testing.expectError(error.MalformedOp, parseClientOp("PUB foo 5\r\nhelloXX"));
+}
+
+test "parse PUB rejects non-numeric length" {
+    try testing.expectError(error.InvalidArgs, parseClientOp("PUB foo abc\r\n"));
+}
+
+test "parse SUB rejects extra trailing args" {
+    try testing.expectError(error.InvalidArgs, parseClientOp("SUB foo Q1 42 extra\r\n"));
+}
+
+test "parse UNSUB rejects non-numeric max" {
+    try testing.expectError(error.InvalidArgs, parseClientOp("UNSUB 1 lots\r\n"));
+}
+
 test "writeMsg basic" {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(testing.allocator);

@@ -4,9 +4,9 @@
 
 # monoblok
 
-monoblok is a one-file declarative stream-processor with a NATS-shaped front and back. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream cluster, via the bridge) get the cleaned stream. The cleanup is declared once instead of being re-implemented in every consumer.
+monoblok is a one-file declarative stream-processor-broker that speaks NATS. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
 
-It's a single small binary written in Zig, statically self-contained beyond libc. Last-value streams on `$LVC.*` give late subscribers the current value per subject. Useful for jittery sensors (the £2.99 Temu kind), high-frequency market data, anything where most of the data movement isn't worth a downstream message. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
+It's a single small binary written in Zig. Last-value streams on `$LVC.*` give late subscribers the current value per subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where most of the data movement has no value. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
 ## Try it out with no install
 
@@ -17,7 +17,7 @@ A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats
 Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Pick the latest tag and substitute it for `VERSION`:
 
 ```
-VERSION=v0.0.26
+VERSION=v0.0.36 # or replace with a later tag
 PLATFORM=macos-aarch64   # or linux-x86_64, linux-aarch64
 curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-${PLATFORM}.tar.gz"
 tar -xzf "monoblok-${VERSION}-${PLATFORM}.tar.gz"
@@ -46,9 +46,9 @@ Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/pa
 
 ### Deploying
 
-A 2-vCPU VM with 256 MB+ of RAM is the right shape. monoblok runs on one core; the kernel net stack and io_uring workers will use the other. A 1-vCPU box makes them share the same core, costing throughput. More than two cores is wasted spend (the extras sit idle). Hetzner CAX11 (about €5/mo) is the sweet spot; AWS `t4g.small` or `c7g.large` works for Graviton; Oracle Ampere A1 free tier for kicking the tyres.
+monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good shape. monoblok runs on one core; the kernel net stack and io_uring workers will use the other. A 1-vCPU box makes them share the same core, costing throughput. More than two cores is wasted spend (the extras sit idle). A Hetzner CAX11 (about €6/mo) or similar is the sweet spot for moderate traffic; AWS `t4g.small` or `c7g.large` works for Graviton; Oracle Ampere A1 free tier runs just fine. 
 
-The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster is the system of record — anything already exported is durable there.
+The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
 
 ## Patchbay
 
@@ -67,11 +67,11 @@ patchbay is a small S-expression DSL describing how every incoming publish gets 
       (publish-to (subject-append "stable"))))
 ```
 
-The vocabulary is borrowed from electronics — `squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold — because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
+The vocabulary is borrowed from electronics (`squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
 
 JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux`) and conditioned the same way; top-level keys only.
 
-Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). One-line summary of every form in the [cheatsheet](./docs/patchbay-cheatsheet.md). Runnable end-to-end demos in [`examples/`](./examples/) — each `.edn` has a matching `.sh` that starts monoblok, publishes a sequence, subscribes in parallel, and prints publishes vs deliveries.
+Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). One-line summary of every form in the [cheatsheet](./docs/patchbay-cheatsheet.md). Runnable end-to-end demos in [`examples/`](./examples/); each `.edn` has a matching `.sh` that starts monoblok, publishes a sequence, subscribes in parallel, and prints publishes vs deliveries.
 
 | file                                              | what it shows                                                   |
 |---------------------------------------------------|-----------------------------------------------------------------|
@@ -79,6 +79,7 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 | [`office-temp.edn`](./examples/office-temp.edn)   | moving-average alert + all-clear via `transition` and `count`   |
 | [`ticker.edn`](./examples/ticker.edn)             | market data: round, squelch, big-jump alerts, bridge            |
 | [`bars.edn`](./examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
+| [`latency-stats.edn`](./examples/latency-stats.edn) | live p50/p95/p99/stddev over a sliding window                 |
 | [`json-frames.edn`](./examples/json-frames.edn)   | `json-demux` a JSON-emitting device into scalar sub-subjects    |
 | [`rental-car.edn`](./examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
 | [`bridge.edn`](./examples/bridge.edn)             | forward selected subjects to a real NATS server                 |
@@ -89,7 +90,7 @@ Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without s
 
 ### What it isn't
 
-[NEX](https://github.com/synadia-io/nex) runs arbitrary code (JS, Wasm, binaries) on agents next to the cluster, with HTTP, DB, anything. patchbay is an in-broker DSL with no processes and no sandbox where the only side effect is `publish`; reach for NEX when you need external I/O. nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/subject_mapping) rewrite subjects with wildcards but can't see the payload or keep state — use those if all you want is "rename `bar.a.b` to `baz.b.a`".
+[NEX](https://github.com/synadia-io/nex) runs arbitrary code (JS, Wasm, binaries) on agents next to the cluster, with HTTP, DB, anything. patchbay is an in-broker DSL with no processes and no sandbox where the only side effect is `publish`; reach for NEX when you need external I/O. nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/subject_mapping) rewrite subjects with wildcards but can't see the payload or keep state; use those if all you want is "rename `bar.a.b` to `baz.b.a`".
 
 ### Patchbay overhead
 
@@ -209,15 +210,15 @@ trace: sensors.temp 42.5
 total [3ms]
 ```
 
-Loud by design (every PUB prints) — pipe stderr to a file when investigating. Adds per-form overhead, so the timings under `--trace` are inflated relative to a normal run; bench with `--release=fast` and the flag off.
+Loud by design (every PUB prints), so pipe stderr to a file when investigating. Adds per-form overhead, so the timings under `--trace` are inflated relative to a normal run; bench with `--release=fast` and the flag off.
 
 ## Architecture
 
 One `xev.Loop` owns accept, per-connection read/write completions, router state, and the LVC. No mutexes, no atomics on the hot path. Fan-out appends bytes directly to each subscriber's outbound buffer and kicks a single `write` per connection per publish, with partial-write handling.
 
-Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's single-file through monoblok. Adding a second thread would mean atomics or locks on every shared structure (router, LVC, per-rule state) and would be slower in the common case. The cap is one core's worth of throughput per instance — the benchmarks below show that's a lot of headroom for signal conditioning workloads.
+Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's single-file through monoblok. Adding a second thread would mean atomics or locks on every shared structure (router, LVC, per-rule state) and would be slower in the common case. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads.
 
-Zig 0.16's `std.Io` networking didn't fit a single-loop model on 0.16 (the macOS Dispatch backend is thread-per-connection), so the loop is libxev — proper kqueue / io_uring / epoll / IOCP picked at comptime. The server logs which backend it's using at startup.
+Zig 0.16's `std.Io` networking didn't fit a single-loop model on 0.16 (the macOS Dispatch backend is thread-per-connection), so the loop is libxev: proper kqueue / io_uring / epoll / IOCP picked at comptime. The server logs which backend it's using at startup.
 
 ## Tests
 

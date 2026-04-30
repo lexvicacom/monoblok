@@ -1,0 +1,30 @@
+;; Live latency distribution from a stream of per-request samples.
+;; Each rule reads the same 50-sample window and emits a different
+;; statistic on a sub-subject, so dashboards can subscribe to whichever
+;; shape they care about without each consumer re-implementing the math.
+;;
+;; Tick windows (50 samples) here for a deterministic demo; swap any
+;; `50` for `:ms 30000` to get a 30-second sliding window instead.
+
+(on "rpc.latency"
+  (-> payload-float
+      (median 50)
+      (publish-to "rpc.latency.p50")))
+
+(on "rpc.latency"
+  (-> payload-float
+      (percentile 50 0.95)
+      (publish-to "rpc.latency.p95")))
+
+(on "rpc.latency"
+  (-> payload-float
+      (percentile 50 0.99)
+      (publish-to "rpc.latency.p99")))
+
+;; Spread of the same window. Pairs nicely with p99: stddev climbing
+;; while p99 stays flat means the body is widening even if the tail is
+;; the same shape.
+(on "rpc.latency"
+  (-> payload-float
+      (stddev 50)
+      (publish-to "rpc.latency.stddev")))
