@@ -1,0 +1,3 @@
+;; LVC example: no rules of consequence, just a placeholder so the daemon
+;; has a patchbay. The LVC ($LVC.<subject>) is built into the server itself.
+(on "never.matches" (publish-to "never" payload))
