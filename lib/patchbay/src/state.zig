@@ -40,26 +40,40 @@ pub const StateEntry = union(enum) {
     bytes: std.ArrayList(u8),
     number: f64,
     ring: Ring,
+    time_ring: TimeRing,
     ohlc: Ohlc,
 
     pub fn deinit(self: *StateEntry, gpa: Allocator) void {
         switch (self.*) {
             .bytes => |*b| b.deinit(gpa),
             .ring => |*r| r.deinit(gpa),
+            .time_ring => |*r| r.deinit(gpa),
             else => {},
         }
     }
 };
 
-/// In-progress OHLC bar. `close` is the latest sample, so the bar fires
-/// when the Nth sample arrives. `cap` is captured at first call so reload
-/// keeps the saved bar even if the patchbay's literal `N` changed.
+/// In-progress OHLC bar. For tick bars, `cap` is sample count and
+/// `window_start_ms` is unused (0). For time bars, `window_ms` is the
+/// duration and `window_start_ms` is the aligned boundary
+/// (`floor(first_now / window_ms) * window_ms`); `cap` is unused (0).
+/// At least one of `cap` / `window_ms` is non-zero; the non-zero one
+/// picks the close condition.
 pub const Ohlc = struct {
     open: f64,
     high: f64,
     low: f64,
     count: u32,
+    /// Tick mode: tick count to close on. 0 in time mode.
     cap: u32,
+    /// Time mode: window duration in ms. 0 in tick mode.
+    window_ms: u64 = 0,
+    /// Time mode: aligned start of the in-progress window. 0 in tick mode.
+    window_start_ms: i64 = 0,
+    /// Time mode: most recent sample seen, used as `close` when the
+    /// window elapses. Tick mode uses the closing sample directly. 0 in
+    /// tick mode (unused).
+    last_close: f64 = 0,
 };
 
 /// Fixed-capacity ring of f64 samples with running sum and monotonic
@@ -143,6 +157,82 @@ pub const Ring = struct {
     }
 };
 
+/// Time-windowed sample buffer. Holds (value, ts_ms) pairs and evicts
+/// entries older than `window_ms` from the front. Storage grows
+/// unbounded with event rate; aggregate readers do an O(n) scan over
+/// the live window. Trade-off vs. monotonic deques: simpler, snapshot-
+/// friendly, and fine for the rates we expect (sensors / tickers).
+pub const TimeRing = struct {
+    pub const Sample = struct { value: f64, ts_ms: i64 };
+
+    samples: std.ArrayList(Sample) = .empty,
+    /// Window duration in ms. Captured at first push; reload keeps it.
+    window_ms: u64,
+
+    pub fn init(window_ms: u64) TimeRing {
+        return .{ .window_ms = window_ms };
+    }
+
+    pub fn deinit(self: *TimeRing, gpa: Allocator) void {
+        self.samples.deinit(gpa);
+    }
+
+    pub fn len(self: TimeRing) usize {
+        return self.samples.items.len;
+    }
+
+    /// Drop samples whose `ts_ms` is older than `now - window_ms`.
+    pub fn evict(self: *TimeRing, now_ms: i64) void {
+        const cutoff = now_ms - @as(i64, @intCast(self.window_ms));
+        var keep_from: usize = 0;
+        for (self.samples.items) |s| {
+            if (s.ts_ms < cutoff) keep_from += 1 else break;
+        }
+        if (keep_from > 0) {
+            const rest = self.samples.items.len - keep_from;
+            std.mem.copyForwards(
+                Sample,
+                self.samples.items[0..rest],
+                self.samples.items[keep_from..],
+            );
+            self.samples.items.len = rest;
+        }
+    }
+
+    pub fn push(self: *TimeRing, gpa: Allocator, value: f64, ts_ms: i64) !void {
+        self.evict(ts_ms);
+        try self.samples.append(gpa, .{ .value = value, .ts_ms = ts_ms });
+    }
+
+    pub fn sum(self: TimeRing) f64 {
+        var s: f64 = 0;
+        for (self.samples.items) |x| s += x.value;
+        return s;
+    }
+
+    pub fn mean(self: TimeRing) f64 {
+        const n = self.samples.items.len;
+        if (n == 0) return 0;
+        return self.sum() / @as(f64, @floatFromInt(n));
+    }
+
+    pub fn max(self: TimeRing) f64 {
+        var m: f64 = self.samples.items[0].value;
+        for (self.samples.items[1..]) |x| {
+            if (x.value > m) m = x.value;
+        }
+        return m;
+    }
+
+    pub fn min(self: TimeRing) f64 {
+        var m: f64 = self.samples.items[0].value;
+        for (self.samples.items[1..]) |x| {
+            if (x.value < m) m = x.value;
+        }
+        return m;
+    }
+};
+
 // --- State-slot helpers, shared by stateful built-ins -------------------
 
 pub const StateError = error{TypeMismatch} || Allocator.Error;
@@ -156,7 +246,7 @@ pub fn encodeForState(arena: Allocator, v: Value) StateError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list, .keyword => error.TypeMismatch,
+        .list, .keyword, .window => error.TypeMismatch,
     };
 }
 
@@ -233,5 +323,6 @@ pub fn valueEql(a: Value, b: Value) bool {
         .keyword => |s| std.mem.eql(u8, s, b.keyword),
         .string => |s| std.mem.eql(u8, s, b.string),
         .list => false, // lists aren't comparable in our dialect
+        .window => |w| w.kind == b.window.kind and w.n == b.window.n,
     };
 }

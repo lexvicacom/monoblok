@@ -156,7 +156,7 @@ nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/sub
 
 ### Patchbay in depth
 
-The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [docs/patchbay.md](./docs/patchbay.md).
+The full DSL reference (syntax, bound symbols, every operator, all the tables and worked pipelines) lives in [docs/patchbay.md](./docs/patchbay.md). For one-line summaries of every form, see the [cheatsheet](./docs/patchbay-cheatsheet.md).
 
 ### Overhead
 

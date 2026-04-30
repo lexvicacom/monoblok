@@ -37,6 +37,13 @@ const stats_prefix = "$STATS.";
 /// Wall-clock tick for `$STATS.*` publishes.
 const stats_tick_ms: u64 = 60_000;
 
+/// Wall-clock tick for the patchbay clock walker. Runs `eval.tickClocks`
+/// over every rule's state to close any time-windowed `bar` whose window
+/// elapsed without a closing PUB, and to evict stale samples from
+/// `(window-ms ...)` `moving-*` rings. 500ms is fine-grained enough that
+/// a 1s window's close lands within ~half-window of the boundary.
+const clock_tick_ms: u64 = 500;
+
 /// Shared-layout view of `bridge.Stats`. Server reads via `*const BridgeStats`
 /// so it doesn't need to import bridge.zig directly.
 pub const BridgeStats = extern struct {
@@ -89,6 +96,13 @@ pub const Server = struct {
     stats_timer: xev.Timer = undefined,
     stats_completion: xev.Completion = undefined,
 
+    /// Periodic patchbay clock walker; timer re-arms from its callback.
+    clock_timer: xev.Timer = undefined,
+    clock_completion: xev.Completion = undefined,
+    /// Reset on each clock tick. Walker emits + ring eviction allocate
+    /// here.
+    clock_arena: std.heap.ArenaAllocator = undefined,
+
     /// LVC snapshot config. `snapshot_every_ms > 0` enables periodic dumps;
     /// `snapshot_io` is required when dumping.
     snapshot_path: ?[]const u8 = null,
@@ -132,6 +146,10 @@ pub const Server = struct {
 
         self.stats_timer = try xev.Timer.init();
         self.stats_timer.run(self.loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
+
+        self.clock_arena = .init(self.gpa);
+        self.clock_timer = try xev.Timer.init();
+        self.clock_timer.run(self.loop, &self.clock_completion, clock_tick_ms, Server, self, onClockTick);
 
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
             self.snapshot_timer = try xev.Timer.init();
@@ -229,6 +247,8 @@ pub const Server = struct {
 
     pub fn deinit(self: *Server) void {
         self.stats_timer.deinit();
+        self.clock_timer.deinit();
+        self.clock_arena.deinit();
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
             self.snapshot_timer.deinit();
         }
@@ -296,6 +316,26 @@ pub const Server = struct {
         };
 
         self.stats_timer.run(loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
+        return .disarm;
+    }
+
+    fn onClockTick(
+        self_opt: ?*Server,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        r: xev.Timer.RunError!void,
+    ) xev.CallbackAction {
+        _ = r catch {};
+        const self = self_opt.?;
+
+        _ = self.clock_arena.reset(.retain_capacity);
+        const arena = self.clock_arena.allocator();
+        const publisher = router_mod.rulesPublisher(self.router);
+        rules_mod.tickClocks(arena, self.rules.rules, self.loop.now(), publisher) catch |err| {
+            std.log.warn("patchbay clock tick failed: {s}", .{@errorName(err)});
+        };
+
+        self.clock_timer.run(loop, &self.clock_completion, clock_tick_ms, Server, self, onClockTick);
         return .disarm;
     }
 
