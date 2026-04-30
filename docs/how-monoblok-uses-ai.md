@@ -4,7 +4,7 @@ Short version: I use Claude Code. I can't imagine not using it. I give them cred
 
 There's no shame in using Claude or any of the other assistants, but there's some backlash around its tasteful use - no doubt due to the volume of slop out there. **This is not a vibe-coded project.**
 
-[This is an interesting area](https://github.com/melissawm/open-source-ai-contribution-policies) for sure.
+[This is an interesting area](https://github.com/melissawm/open-source-ai-contribution-policies) [for sure](https://simonwillison.net/2026/Apr/30/zig-anti-ai/).
 
 >Did I write every line of code? **No,** it's 2026. Do I understand the architecture? **Yes,** I thought of it - that's whether it's good or bad, I'll let you draw conclusions.
 
