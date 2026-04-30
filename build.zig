@@ -4,14 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Bridge (outbound NATS connection via nats.c). Default on; disable with
-    // -Dbridge=false if you don't have OpenSSL installed.
-    const bridge = b.option(bool, "bridge", "Build the outbound NATS bridge (requires system OpenSSL)") orelse true;
+    // Bridge (outbound NATS connection via nats.zig — pure Zig, no system deps).
+    const bridge = b.option(bool, "bridge", "Build the outbound NATS bridge") orelse true;
 
     const libxev_dep = b.dependency("libxev", .{
         .target = target,
         .optimize = optimize,
     });
+
+    const nats_dep = if (bridge) b.dependency("nats", .{
+        .target = target,
+        .optimize = optimize,
+    }) else null;
 
     const manifest_mod = b.createModule(.{ .root_source_file = b.path("build.zig.zon") });
 
@@ -45,7 +49,9 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    if (bridge) addNatsC(b, exe_mod);
+    if (bridge) {
+        exe_mod.addImport("nats", nats_dep.?.module("nats"));
+    }
 
     const exe = b.addExecutable(.{
         .name = "monoblok",
@@ -71,64 +77,4 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_patchbay_tests.step);
 }
 
-fn addNatsC(b: *std.Build, mod: *std.Build.Module) void {
-    const nats_src = b.path("vendor/nats.c/src");
-
-    // Core sources. We drop stan (#if NATS_HAS_STREAMING is never defined, so
-    // it's inert) and the win/ subdir. js/jsm/kv/object/micro are compiled
-    // because conn.c / sub.c / dispatch.c reference their symbols; we just
-    // don't expose those APIs from Zig.
-    const core_sources = [_][]const u8{
-        "asynccb.c",        "buf.c",         "comsock.c",          "conn.c",
-        "crypto.c",         "dispatch.c",    "hash.c",             "js.c",
-        "jsm.c",            "kv.c",          "micro.c",            "micro_client.c",
-        "micro_endpoint.c", "micro_error.c", "micro_monitoring.c", "micro_request.c",
-        "msg.c",            "nats.c",        "natstime.c",         "nkeys.c",
-        "nuid.c",           "object.c",      "opts.c",             "parser.c",
-        "pub.c",            "srvpool.c",     "stats.c",            "status.c",
-        "sub.c",            "timer.c",       "url.c",              "util.c",
-    };
-    const glib_sources = [_][]const u8{
-        "glib/glib.c",               "glib/glib_async_cb.c",
-        "glib/glib_dispatch_pool.c", "glib/glib_gc.c",
-        "glib/glib_last_error.c",    "glib/glib_ssl.c",
-        "glib/glib_timer.c",
-    };
-    const unix_sources = [_][]const u8{
-        "unix/cond.c", "unix/mutex.c", "unix/sock.c", "unix/thread.c",
-    };
-
-    const c_flags = [_][]const u8{
-        "-D_REENTRANT",
-        // _GNU_SOURCE must be set on the command line, not via n-unix.h.
-        // Several nats.c sources (js.c, jsm.c, ...) include <ctype.h> /
-        // <limits.h> before n-unix.h, so glibc has already latched its
-        // feature set by the time the header's #define runs, and
-        // asprintf stays hidden. macOS libc exposes asprintf unconditionally,
-        // which is why this only breaks the Linux build.
-        "-D_GNU_SOURCE",
-        // glib_dispatch_pool.c:_growPool does memcpy(dst, NULL, 0) on its
-        // first growth (pool->dispatchers is NULL, pool->cap is 0). C
-        // formally calls this UB, and on linux-arm64 with FORTIFY enabled
-        // glibc's __memcpy_chk traps on the NULL src even though size is 0.
-        // x86_64 happens not to trap. Disable FORTIFY for the nats.c TU.
-        "-U_FORTIFY_SOURCE",
-        "-D_FORTIFY_SOURCE=0",
-        "-DNATS_STATIC",
-        "-DNATS_HAS_TLS",
-        "-Wno-deprecated-declarations",
-    };
-
-    mod.addCSourceFiles(.{ .root = nats_src, .files = &core_sources, .flags = &c_flags });
-    mod.addCSourceFiles(.{ .root = nats_src, .files = &glib_sources, .flags = &c_flags });
-    mod.addCSourceFiles(.{ .root = nats_src, .files = &unix_sources, .flags = &c_flags });
-
-    mod.addIncludePath(nats_src);
-    mod.addIncludePath(b.path("vendor/nats.c/src/include"));
-    mod.addIncludePath(b.path("vendor/nats.c/src/unix"));
-    mod.addIncludePath(b.path("vendor/nats.c/src/glib"));
-
-    // Dyn-link OpenSSL via pkg-config (Homebrew on macOS, pkgconf on Linux).
-    mod.linkSystemLibrary("openssl", .{ .use_pkg_config = .force });
-}
 
