@@ -181,7 +181,8 @@ pub const Server = struct {
     /// `path` must outlive `Server` (we keep a slice, not a copy, to match
     /// `listen_host`). `io` is used only for the startup stat check.
     pub fn listenUnix(self: *Server, io: Io, path: []const u8) !void {
-        var addr: std.posix.sockaddr.un = .{ .path = std.mem.zeroes([104]u8) };
+        var addr: std.posix.sockaddr.un = std.mem.zeroes(std.posix.sockaddr.un);
+        addr.family = std.posix.AF.UNIX;
         if (path.len >= addr.path.len) return error.PathTooLong;
         @memcpy(addr.path[0..path.len], path);
 
