@@ -49,8 +49,20 @@ pub const Server = struct {
     loop: *xev.Loop,
     router: *router_mod.Router,
     rules: rules_mod.RuleSet,
-    listener: xev.TCP,
+    /// TCP listener (when `tcp_enabled`). xev.TCP is just a fd wrapper, so
+    /// the unix listener below also reuses it.
+    listener: xev.TCP = undefined,
     accept_completion: xev.Completion = undefined,
+    tcp_enabled: bool = true,
+
+    /// Optional AF_UNIX listener. Same accept/read/write flow as TCP
+    /// (xev.TCP wraps any stream fd).
+    unix_enabled: bool = false,
+    unix_listener: xev.TCP = undefined,
+    unix_accept_completion: xev.Completion = undefined,
+    /// Path we bound to; unlinked at deinit so a restart won't trip EADDRINUSE.
+    unix_path: ?[]const u8 = null,
+
     next_conn_id: u64 = 1,
     /// Process-wide unique id, generated once at startup. Sent in every
     /// INFO line's `server_id` / `server_name` fields.
@@ -110,11 +122,13 @@ pub const Server = struct {
     }
 
     pub fn listen(self: *Server, address: std.Io.net.IpAddress) !void {
-        self.listener = try xev.TCP.init(address);
-        try self.listener.bind(address);
-        try self.listener.listen(128);
-        self.listen_port = address.getPort();
-        self.listener.accept(self.loop, &self.accept_completion, Server, self, onAccept);
+        if (self.tcp_enabled) {
+            self.listener = try xev.TCP.init(address);
+            try self.listener.bind(address);
+            try self.listener.listen(128);
+            self.listen_port = address.getPort();
+            self.listener.accept(self.loop, &self.accept_completion, Server, self, onAccept);
+        }
 
         self.stats_timer = try xev.Timer.init();
         self.stats_timer.run(self.loop, &self.stats_completion, stats_tick_ms, Server, self, onStatsTick);
@@ -143,12 +157,87 @@ pub const Server = struct {
         }
     }
 
+    /// Bind a listening AF_UNIX stream socket at `path` and feed accepted
+    /// fds through the same `onAccept` path the TCP listener uses. Must be
+    /// called before `loop.run` (during `Server` setup, after `listen`).
+    /// `path` must outlive `Server` (we keep a slice, not a copy, to match
+    /// `listen_host`). `io` is used only for the startup stat check.
+    pub fn listenUnix(self: *Server, io: Io, path: []const u8) !void {
+        var addr: std.posix.sockaddr.un = .{ .path = std.mem.zeroes([104]u8) };
+        if (path.len >= addr.path.len) return error.PathTooLong;
+        @memcpy(addr.path[0..path.len], path);
+
+        const path_z = try self.gpa.dupeZ(u8, path);
+        defer self.gpa.free(path_z);
+
+        // Best-effort cleanup of a stale socket file from a prior run. We
+        // only unlink AF_UNIX socket files; a regular file at this path
+        // probably means the user typo'd, so we refuse rather than nuke it.
+        if (Io.Dir.cwd().statFile(io, path, .{})) |st| {
+            if (st.kind == .unix_domain_socket) {
+                _ = std.c.unlink(path_z.ptr);
+            } else {
+                return error.PathExistsAndIsNotASocket;
+            }
+        } else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+
+        // SOCK.CLOEXEC is a Zig shim on Darwin (not a real socket(2) flag),
+        // so create the socket plain and apply CLOEXEC + NONBLOCK via fcntl
+        // afterwards. The listener fd must be non-blocking; libxev's accept
+        // path expects the kernel to return EAGAIN rather than block.
+        const fd_rc = std.c.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
+        if (fd_rc < 0) return error.SocketCreateFailed;
+        const fd: std.posix.fd_t = @intCast(fd_rc);
+        errdefer _ = std.c.close(fd);
+
+        if (std.c.fcntl(fd, std.posix.F.SETFD, @as(c_int, std.posix.FD_CLOEXEC)) < 0) {
+            return error.FcntlFailed;
+        }
+        const flags = std.c.fcntl(fd, std.posix.F.GETFL, @as(c_int, 0));
+        if (flags < 0) return error.FcntlFailed;
+        const nonblock_bit: c_int = @bitCast(std.posix.O{ .NONBLOCK = true });
+        if (std.c.fcntl(fd, std.posix.F.SETFL, @as(c_int, flags | nonblock_bit)) < 0) {
+            return error.FcntlFailed;
+        }
+
+        const sa: *const std.posix.sockaddr = @ptrCast(&addr);
+        if (std.c.bind(fd, sa, @sizeOf(std.posix.sockaddr.un)) != 0) {
+            return error.UnixBindFailed;
+        }
+        // Mode 0600 by default. Users who need group access can chmod from
+        // a wrapper script; we don't want to surprise anyone with a
+        // world-writable socket.
+        if (std.c.chmod(path_z.ptr, 0o600) != 0) {
+            std.log.warn("unix-socket: chmod 0600 {s} failed", .{path});
+        }
+        if (std.c.listen(fd, 128) != 0) return error.UnixListenFailed;
+
+        self.unix_listener = xev.TCP.initFd(fd);
+        self.unix_enabled = true;
+        self.unix_path = path;
+        self.unix_listener.accept(
+            self.loop,
+            &self.unix_accept_completion,
+            Server,
+            self,
+            onAccept,
+        );
+    }
+
     pub fn deinit(self: *Server) void {
         self.stats_timer.deinit();
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
             self.snapshot_timer.deinit();
         }
         if (self.shutdown_enabled) self.shutdown_async.deinit();
+        if (self.unix_path) |p| {
+            const path_z = self.gpa.dupeZ(u8, p) catch return;
+            defer self.gpa.free(path_z);
+            _ = std.c.unlink(path_z.ptr);
+        }
     }
 
     /// Async-signal-safe: `notify()` is a non-blocking write to an
@@ -326,11 +415,17 @@ pub const Server = struct {
     fn onAccept(
         self_opt: ?*Server,
         loop: *xev.Loop,
-        _: *xev.Completion,
+        c: *xev.Completion,
         r: xev.AcceptError!xev.TCP,
     ) xev.CallbackAction {
         const self = self_opt.?;
-        defer self.listener.accept(loop, &self.accept_completion, Server, self, onAccept);
+        // Re-arm the listener that fired. The completion pointer
+        // disambiguates TCP vs unix.
+        defer if (c == &self.unix_accept_completion) {
+            self.unix_listener.accept(loop, &self.unix_accept_completion, Server, self, onAccept);
+        } else {
+            self.listener.accept(loop, &self.accept_completion, Server, self, onAccept);
+        };
 
         const tcp = r catch |err| {
             std.log.warn("accept failed: {s}", .{@errorName(err)});

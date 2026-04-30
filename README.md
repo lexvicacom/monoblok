@@ -284,6 +284,20 @@ A local publish (from a NATS client or from a patchbay rule) whose subject match
 
 Reconnects are handled by nats.zig internally. Counters are published on the `$STATS.*` tick as `$STATS.bridge.published` and `$STATS.bridge.dropped`.
 
+## Listeners
+
+By default monoblok listens on TCP (`--port`, default 4222). It can additionally, or instead, listen on an AF_UNIX stream socket:
+
+```
+monoblok --port 4222 --unix-socket /tmp/monoblok.sock --patchbay patchbay.edn   # both
+monoblok --port 0    --unix-socket /tmp/monoblok.sock --patchbay patchbay.edn   # unix only
+```
+
+Both listeners speak the same NATS protocol and share the same router, so a publish that arrives over the unix socket fans out to TCP subscribers (and vice versa). The socket file is created with mode 0600, removed on graceful shutdown, and a stale socket file from a prior run is unlinked on startup. If `--unix-socket PATH` points at a regular file, monoblok refuses to start rather than overwrite it. `--port 0` disables TCP, in which case `--unix-socket` is required.
+
+A unix listener is useful when you want a process on the same machine (a sidecar publisher, a same-host subscriber) to skip the TCP stack, or when you want to gate access via filesystem permissions instead of binding a port.
+
+
 ## Observability
 
 Every accepted and closed connection logs a line at info level (`conn 42 accepted` / `conn 42 closed`), keyed by the same connection id used in the warn lines below. Most NATS clients hold one long-lived TCP connection, so this is normally O(clients) not O(messages).
