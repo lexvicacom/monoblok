@@ -52,7 +52,7 @@ input subject plus a suffix.
 |--------------------------------------|---------------------------------------------|-----------------------------------------------------------|
 | `demo.sensors.<name>` (a number)     | `demo.sensors.<name>.stable`                | `round 1` then `squelch` (emit when rounded value moves)  |
 |                                      | `demo.sensors.<name>.delta`                 | `deadband 0.5` (suppress moves smaller than 0.5)          |
-|                                      | `demo.sensors.<name>.smoothed`              | `moving-avg 10` then `deadband 1.0`                       |
+|                                      | `demo.sensors.<name>.smoothed`              | `moving-avg (ticks 10)` then `deadband 1.0`               |
 |                                      | `demo.sensors.<name>.delta-abs`             | per-tick numeric `delta` (0 on first sight)               |
 |                                      | `demo.sensors.<name>.alert` / `.ok`         | `transition` across 28.0: "hot" rising, "cool" falling    |
 |                                      | `demo.sensors.<name>.overload`              | `hold-off 2000` while `> 40` (one emit per 2s)            |
