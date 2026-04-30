@@ -102,6 +102,10 @@ pub const Server = struct {
     stats_tick_ms: u64 = default_stats_tick_ms,
 
     /// Periodic patchbay clock walker; timer re-arms from its callback.
+    /// Only armed if at least one rule body uses `(window-ms ...)`. Without
+    /// time-windowed ops the walker has nothing to do, so we skip it
+    /// entirely (decided at `listen` time via `rulesUseTimeWindows`).
+    clock_enabled: bool = false,
     clock_timer: xev.Timer = undefined,
     clock_completion: xev.Completion = undefined,
     clock_tick_ms: u64 = default_clock_tick_ms,
@@ -153,9 +157,16 @@ pub const Server = struct {
         self.stats_timer = try xev.Timer.init();
         self.stats_timer.run(self.loop, &self.stats_completion, self.stats_tick_ms, Server, self, onStatsTick);
 
-        self.clock_arena = .init(self.gpa);
-        self.clock_timer = try xev.Timer.init();
-        self.clock_timer.run(self.loop, &self.clock_completion, self.clock_tick_ms, Server, self, onClockTick);
+        self.clock_enabled = rules_mod.rulesUseTimeWindows(self.rules.rules);
+        if (self.clock_enabled) {
+            self.clock_arena = .init(self.gpa);
+            self.clock_timer = try xev.Timer.init();
+            self.clock_timer.run(self.loop, &self.clock_completion, self.clock_tick_ms, Server, self, onClockTick);
+            std.log.info(
+                "patchbay clock walker enabled, tick={d}ms (tune with --clock-tick-ms)",
+                .{self.clock_tick_ms},
+            );
+        }
 
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
             self.snapshot_timer = try xev.Timer.init();
@@ -254,8 +265,10 @@ pub const Server = struct {
 
     pub fn deinit(self: *Server) void {
         self.stats_timer.deinit();
-        self.clock_timer.deinit();
-        self.clock_arena.deinit();
+        if (self.clock_enabled) {
+            self.clock_timer.deinit();
+            self.clock_arena.deinit();
+        }
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
             self.snapshot_timer.deinit();
         }
