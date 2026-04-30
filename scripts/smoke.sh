@@ -6,6 +6,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${PORT:-14222}"
+SOCK="${SOCK:-/tmp/monoblok-smoke.sock}"
 BIN="$ROOT/zig-out/bin/monoblok"
 PATCHBAY="$ROOT/patchbay.edn"
 
@@ -19,12 +20,13 @@ cleanup() {
         kill "$DAEMON_PID" 2>/dev/null || true
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
-    rm -f /tmp/monoblok-smoke-*.txt
+    rm -f /tmp/monoblok-smoke-*.txt "$SOCK"
 }
 trap cleanup EXIT
 
-echo "starting daemon on port $PORT..."
-"$BIN" --port "$PORT" --patchbay "$PATCHBAY" >/tmp/monoblok-smoke-daemon.log 2>&1 &
+rm -f "$SOCK"
+echo "starting daemon on port $PORT (and unix:$SOCK)..."
+"$BIN" --port "$PORT" --unix-socket "$SOCK" --patchbay "$PATCHBAY" >/tmp/monoblok-smoke-daemon.log 2>&1 &
 DAEMON_PID=$!
 sleep 0.5
 
@@ -240,6 +242,30 @@ if [ "$PAYLOADS" != "$EXPECTED" ]; then
     exit 1
 fi
 echo "ok: threaded pipeline emitted rounded+squelched values"
+
+# --- Test 5: unix-socket listener (cross-listener fan-out) ------------
+# TCP subscriber should receive a publish that arrives over the unix socket.
+(
+    printf 'CONNECT {}\r\nSUB unix.demo 21\r\n'
+    sleep 1.5
+) | nc -w 3 127.0.0.1 "$PORT" > "$SUB_OUT" &
+SUB_JOB=$!
+sleep 0.4
+
+(
+    printf 'CONNECT {}\r\nPUB unix.demo 5\r\nhello\r\n'
+    sleep 0.3
+) | nc -U -w 2 "$SOCK" > "$PUB_OUT"
+
+wait $SUB_JOB 2>/dev/null || true
+
+if ! grep -q 'MSG unix.demo 21 5' "$SUB_OUT" || ! grep -q '^hello' "$SUB_OUT"; then
+    echo "FAIL: PUB on unix socket should reach TCP subscriber"
+    echo "---- got ----"
+    cat "$SUB_OUT"
+    exit 1
+fi
+echo "ok: unix-socket PUB reaches TCP subscriber"
 
 echo
 echo "all smoke tests passed."
