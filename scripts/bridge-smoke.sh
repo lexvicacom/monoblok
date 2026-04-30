@@ -2,8 +2,7 @@
 # End-to-end bridge test: start a real nats-server, monoblok pointed at it
 # with a bridge config, publish locally, assert messages land on the remote.
 #
-# Requires: nats-server + the nats CLI on PATH. Also requires monoblok to be
-# built with -Dbridge=true (the default).
+# Requires: nats-server + the nats CLI on PATH.
 
 set -u
 
@@ -83,7 +82,7 @@ echo "starting monoblok on :$MONO_PORT with bridge -> :$REMOTE_PORT..."
 "$BIN" --port "$MONO_PORT" --patchbay "$PATCHBAY" > /tmp/bridge-smoke-mono.log 2>&1 &
 MONO_PID=$!
 
-# Poll up to 5s for the "bridge: connected" line. nats.c can take a second
+# Poll up to 5s for the "bridge: connected" line. The client can take a second
 # or two to resolve + connect + exchange INFO even to localhost.
 for _ in $(seq 1 50); do
     kill -0 "$MONO_PID" 2>/dev/null || break
