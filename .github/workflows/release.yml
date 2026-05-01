@@ -17,13 +17,21 @@ jobs:
       - name: Run tests
         run: zig build test --summary all
 
-  build-linux-x86_64:
+  build:
     needs: test
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runs-on: ubuntu-22.04
+          - platform: linux-aarch64
+            runs-on: ubuntu-22.04-arm
+          - platform: macos-aarch64
+            runs-on: macos-latest
+    runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: write
-    env:
-      PLATFORM: linux-x86_64
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -42,83 +50,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Build + package
-        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM"
-
-      - name: Create release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.tar.gz
-          draft: false
-          prerelease: true
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-linux-aarch64:
-    needs: test
-    runs-on: ubuntu-22.04-arm
-    permissions:
-      contents: write
-    env:
-      PLATFORM: linux-aarch64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      - name: Resolve version
-        id: ver
-        run: |
-          set -eu
-          ref="${GITHUB_REF##*/}"
-          case "$ref" in
-            v*) v="$ref" ;;
-            *)  v="$(git rev-parse --short HEAD)" ;;
-          esac
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      - name: Build + package
-        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM"
-
-      - name: Create release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.tar.gz
-          draft: false
-          prerelease: true
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-macos:
-    needs: test
-    runs-on: macos-latest
-    permissions:
-      contents: write
-    env:
-      PLATFORM: macos-aarch64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      - name: Resolve version
-        id: ver
-        run: |
-          set -eu
-          ref="${GITHUB_REF##*/}"
-          case "$ref" in
-            v*) v="$ref" ;;
-            *)  v="$(git rev-parse --short HEAD)" ;;
-          esac
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      - name: Build + package
-        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "$PLATFORM"
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
 
       - name: Create release
         if: startsWith(github.ref, 'refs/tags/v')

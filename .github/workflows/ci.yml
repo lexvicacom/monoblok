@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runs-on: ubuntu-22.04
+          - platform: linux-aarch64
+            runs-on: ubuntu-22.04-arm
+          - platform: macos-aarch64
+            runs-on: macos-latest
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build (release-safe)
+        run: zig build --release=safe
+      - name: Test
+        run: zig build test --summary all
