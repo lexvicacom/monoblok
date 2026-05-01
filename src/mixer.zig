@@ -686,8 +686,11 @@ fn parseListen(spec: []const u8) !std.Io.net.IpAddress {
 
 fn selfExe(buf: []u8) ![]const u8 {
     if (builtin.os.tag == .linux) {
-        const path = try std.posix.readlink("/proc/self/exe", buf);
-        return path;
+        const rc = std.os.linux.readlink("/proc/self/exe", buf.ptr, buf.len);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => return buf[0..@as(usize, @bitCast(rc))],
+            else => return error.ReadLinkFailed,
+        }
     }
     if (builtin.os.tag == .macos) {
         const NS = struct {
