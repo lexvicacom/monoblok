@@ -340,25 +340,21 @@ pub const Server = struct {
     }
 
     fn onShutdown(
-        self_opt: ?*Server,
+        _: ?*Server,
         loop: *xev.Loop,
         _: *xev.Completion,
         r: xev.Async.WaitError!void,
     ) xev.CallbackAction {
         _ = r catch {};
-        const self = self_opt.?;
-        // Loop is paused while we run; in-flight PUB bytes drop on exit,
-        // same as any ungraceful NATS shutdown.
-        std.log.info("shutdown: writing final snapshot...", .{});
-        self.snapshotSync() catch |err| {
-            std.log.warn("shutdown: snapshot failed: {s}", .{@errorName(err)});
-        };
+        // Snapshot runs after `loop.run` returns (in main.zig), not here.
+        // Keeps this callback to a single non-blocking action.
         loop.stop();
         return .disarm;
     }
 
-    /// Synchronous snapshot. Shutdown-only; blocks the loop.
-    fn snapshotSync(self: *Server) !void {
+    /// Synchronous snapshot. Called after the loop stops, on the same
+    /// (loop) thread, while router + rule state are still alive.
+    pub fn snapshotSync(self: *Server) !void {
         const path = self.snapshot_path orelse return;
         const io = self.snapshot_io orelse return;
 
@@ -369,8 +365,8 @@ pub const Server = struct {
         const snap = try snapshot_mod.collect(arena, self.router, self.rules.rules);
         try snapshot_mod.writeFileAtomic(self.gpa, io, path, snap);
         std.log.info(
-            "shutdown: wrote {d} lvc / {d} rule-state entries",
-            .{ snap.lvc.len, snap.rule_state.len },
+            "shutdown: snapshot written ({d} lvc / {d} rule-state entries) to {s}",
+            .{ snap.lvc.len, snap.rule_state.len, path },
         );
     }
 
