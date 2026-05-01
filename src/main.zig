@@ -177,6 +177,10 @@ pub fn main(init: std.process.Init) !void {
     if (trace_enabled) {
         std.log.warn("--trace enabled: every patchbay evaluation will be printed to stderr (noisy and slow, do not run in production)", .{});
     }
+    const print_bangs = rules.countPrintBangs(loaded_rules);
+    if (print_bangs.total > 0) {
+        std.log.warn("patchbay contains {d} print! call(s) across {d} rule(s); will log payload data to stderr and add per-call overhead (debug aid, do not leave in production)", .{ print_bangs.total, print_bangs.rules });
+    }
 
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();

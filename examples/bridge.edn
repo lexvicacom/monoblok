@@ -14,9 +14,9 @@
 ;; Publish into monoblok to drive the bridge:
 ;;   nats --no-context -s nats://127.0.0.1:4222 pub telemetry.troubledwater 1
 (bridge
-  :servers ("nats://127.0.0.1:14888")
+  :servers ["nats://127.0.0.1:14888"]
   :name    "monoblok-bridge-example"
-  :export  ("telemetry.>"))
+  :export  ["telemetry.>"])
 
 (on "telemetry.*"
   (publish! (subject-append "echoed") payload))

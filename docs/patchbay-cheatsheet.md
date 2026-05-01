@@ -39,16 +39,19 @@ Trailing `!` marks forms that emit (terminal effect, return nil). Scan a rule an
 | `(json-demux! KEY... PAYLOAD)` | break a top-level JSON object out onto `<subject>.<key>` for each KEY |
 | `(count!)` / `(count! COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
 | `(bar! WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
+| `(print! X)` / `(print! LABEL X)` | debug aid: writes one line to stderr, returns X unchanged so it threads. Not a publish; loader counts these and the server warns at startup. |
 
 ## Strings and subjects
 
 | form | returns |
 |------|---------|
 | `(subject-append SUFFIX)` | `"<subject>.<suffix>"` |
+| `(subject-with TOK ...)` / `(subject-with [TOK ...])` | tokens joined with `.`, publish-validated. Numbers/bools coerce; empty tokens error. |
+| `(now :date)` / `(now :hour)` / `(now :minute)` | wall-clock UTC: `"YYYY-MM-DD"`, `"YYYY-MM-DDTHH"`, `"YYYY-MM-DDTHHMM"`. Subject-token-safe. Cached. `:minute` is high cardinality. |
 | `(subject-token N)` / `(subject-token N S)` | Nth dot-token (0-indexed); nil if out of range |
 | `(str-concat A B C ...)` | concatenated string |
-| `(contains? HAY NEEDLE)` | bool |
-| `(starts-with? HAY NEEDLE)` / `(ends-with? HAY NEEDLE)` | bool |
+| `(contains? COLL ITEM)` | bool. substring on strings, membership on vectors: `(contains? [1 2 3] payload-int)` |
+| `(starts-with? TEXT PREFIX)` / `(ends-with? TEXT SUFFIX)` | bool (strings only) |
 
 ## Comparisons / arithmetic
 
@@ -105,7 +108,7 @@ window kinds keeps distinct state.
 | `(moving-avg N X)` / `(moving-avg :ms N X)` | running mean over the window |
 | `(moving-sum N X)` / `(moving-sum :ms N X)` | running sum over the window |
 | `(moving-max N X)` / `(moving-min N X)` (and `:ms` forms) | window extremes |
-| `(rate :ms N X)` | events per second; **`:ms` only**. X is evaluated but ignored — counts pushes. |
+| `(rate :ms N X)` | events per second; **`:ms` only**. X is evaluated but ignored (counts pushes). |
 | `(percentile N P X)` / `(percentile :ms N P X)` | Pth percentile (P in [0, 1]) |
 | `(median N X)` / `(median :ms N X)` | sugar for `(percentile WINDOW 0.5 X)` |
 | `(stddev N X)` / `(variance N X)` (and `:ms` forms) | population stats |
@@ -137,7 +140,7 @@ outbound NATS forwarder. Counters land on `$STATS.bridge.published` /
 
 | keyword | type | meaning |
 |---------|------|---------|
-| `:servers` | list of strings | server URLs (nats:// or tls://) |
+| `:servers` | vector of strings | server URLs (nats:// or tls://). e.g. `["nats://a:4222" "nats://b:4222"]` |
 | `:name` | string | client name shown in remote monitoring |
 | `:creds` | string | path to a .creds file (JWT+NKey) |
 | `:user` / `:password` | strings | basic auth |
@@ -149,4 +152,4 @@ outbound NATS forwarder. Counters land on `$STATS.bridge.published` /
 | `:connect-timeout-ms` / `:ping-interval-ms` | numbers | tuning |
 | `:max-reconnect` | number | -1 for unlimited |
 | `:reconnect-wait-ms` | number | tuning |
-| `:export` | list of strings | subject filters to forward (standard NATS wildcards) |
+| `:export` | vector of strings | subject filters to forward (standard NATS wildcards). e.g. `["telemetry.>" "alerts.>"]` |

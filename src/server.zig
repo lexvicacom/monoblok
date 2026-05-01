@@ -835,6 +835,7 @@ const Conn = struct {
                     .arena = arena,
                     .gpa = gpa,
                     .now_ms = self.server.loop.now(),
+                    .wall_ms = wallClockMs(),
                     .trace = self.server.trace_enabled,
                     .reentry_ctx = self.server,
                     .reentry_fn = ruleReentry,
@@ -986,6 +987,15 @@ const Conn = struct {
     }
 };
 
+/// Wall-clock ms since 1970-01-01 UTC. Stamped per-PUB onto
+/// `Context.wall_ms` for `date-now` / `hour-now`. Direct syscall:
+/// `std.time.milliTimestamp` was removed in Zig 0.16.
+fn wallClockMs() i64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(std.posix.CLOCK.REALTIME, &ts);
+    return @as(i64, @intCast(ts.sec)) *| std.time.ms_per_s +| @divFloor(ts.nsec, std.time.ns_per_ms);
+}
+
 /// Dispatch a patchbay-emitted publish back through the ruleset on a child
 /// Context with `depth + 1`. The depth cap lives in `Context.emit`.
 fn ruleReentry(
@@ -1002,6 +1012,7 @@ fn ruleReentry(
         .arena = parent.arena,
         .gpa = parent.gpa,
         .now_ms = parent.now_ms,
+        .wall_ms = parent.wall_ms,
         .trace = parent.trace,
         .depth = parent.depth + 1,
         .max_depth = parent.max_depth,

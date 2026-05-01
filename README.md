@@ -157,11 +157,11 @@ Zero or one `(bridge ...)` form in the patchbay file configures it:
 
 ```edn
 (bridge
-  :servers  ("tls://connect.ngs.global:4222")
+  :servers  ["tls://connect.ngs.global:4222"]
   :creds    "/etc/monoblok/ngs.creds"
   :tls      true
   :name     "monoblok-prod-1"
-  :export   ("telemetry.>" "alerts.>"))
+  :export   ["telemetry.>" "alerts.>"])
 ```
 
 A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.zig.
@@ -170,24 +170,18 @@ Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-chea
 
 ## Mixer mode (experimental)
 
-`monoblok --mixer cfg.edn` runs a stateless front-end that spawns N worker processes (each a normal monoblok) and forwards each publish to the worker owning its first subject token. Clients connect to just one NATS endpoint. Sharding is operator-picked by first token; wildcard-first-token SUBs are rejected.
+`monoblok --mixer cfg.edn` runs a stateless front-end that spawns N worker processes (each a normal monoblok) and forwards each publish to the worker owning its first subject token. Clients connect to just one NATS endpoint. Subscriptions coalesce across clients (one upstream SUB per unique filter), so a hundred dashboards on the same filter look like one to the worker.
 
 ```edn
 (mixer
   :listen "tcp://0.0.0.0:4222"
   :workers
-    ((:shard "SENSORS" :patchbay "examples/mixer-sensors.edn")
-     (:shard "ORDERS"  :patchbay "examples/mixer-orders.edn")
-     (:shard "*"       :patchbay "examples/mixer-default.edn")))
+    [[:shard "SENSORS" :patchbay "examples/mixer-sensors.edn"]
+     [:shard "ORDERS"  :patchbay "examples/mixer-orders.edn"]
+     [:shard "*"       :patchbay "examples/mixer-default.edn"]])
 ```
 
-Subscriptions are coalesced across clients: the mixer keeps one upstream SUB per unique filter no matter how many clients want it, so worker fan-out cost scales with subjects, not subscribers. A hundred dashboards on the same filter look like one to the worker.
-
-The point is to partition a noisy inbound stream across cores when one core could in theory saturate: each worker handles its own shard's ingest, parsing, and rule evaluation on its own core, while the mixer just routes bytes. I think build-out before build-across is the right call: see how much one machine can do first, and worry about multiple pods or hosts later, if ever.
-
-If your NATS account has an organised subject space (hopefully it does), the same first-token discipline scales beyond one box: run independent monobloks on different machines, each handling a subtree of the hierarchy with hardware provisioned to suit. It is not a cluster or HA story though: if any process in the tree dies systemd restarts the lot.
-
-Runnable example: [`examples/mixer.py`](./examples/mixer.py).
+Build-out before build-across: start with one monoblok and reach for the mixer when one core actually isn't enough. See [docs/mixer.md](./docs/mixer.md) for the sharding rule, SUB constraints, supervisor policy, and what's out of scope in v1. Runnable example: [`examples/mixer.py`](./examples/mixer.py).
 
 ## Listeners
 

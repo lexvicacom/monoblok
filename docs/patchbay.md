@@ -32,21 +32,27 @@ on where it appears:
 
 - Inside an `(on FILTER BODY)` body, every list dispatches on its head
   symbol (`hold-off`, `publish`, `+`, etc.). Unknown heads error.
-- Inside the top-level `(bridge ...)` form, after a keyword like
-  `:servers` or `:export`, a list is read as a literal sequence of
-  values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
-  two-element list of strings, not a call to `nats://a:4222`. Same
-  underlying parser, different consumer.
+- Inside the top-level `(bridge ...)` and `(mixer ...)` forms, after a
+  keyword like `:servers`, `:export`, or `:workers`, a list is read as
+  a literal sequence of values. `(:servers ("nats://a:4222"
+  "nats://b:4222") ...)` is a two-element list of strings, not a call
+  to `nats://a:4222`. Same underlying parser, different consumer. See
+  [`mixer.md`](./mixer.md) for the mixer config form.
 
-In other words: the sexpr layer just gives you nested lists. The rule
-evaluator interprets lists as calls; the bridge config reader
-interprets them as vectors. You never need to quote anything.
+For unambiguous data-as-data inside a rule body, write a vector with
+square brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors
+self-evaluate (each element is evaluated, the result is returned as a
+vector), they never dispatch on a head, and they're what `contains?`
+checks for membership against. Config readers (`bridge`, `mixer`)
+accept either `(...)` or `[...]` for keyword-tagged collections;
+vectors read more naturally and are the recommended form.
 
 ## Values
 
 `nil`, booleans (`true` / `false`), numbers (parsed as `f64`),
-strings (`"..."`), symbols, and lists. Truthiness: `nil` and `false`
-are falsy, everything else (including `0` and `""`) is truthy.
+strings (`"..."`), symbols, lists `(...)`, and vectors `[...]`.
+Truthiness: `nil` and `false` are falsy, everything else (including
+`0`, `""`, and an empty vector) is truthy.
 
 ## Bound symbols
 
@@ -105,9 +111,11 @@ so it threads).
 |----------------------------------|-----------------------------------------------------|
 | `(str-concat a b ...)`           | concatenates string/symbol args                     |
 | `(subject-append "suffix")`      | `"<current-subject>.suffix"`                        |
-| `(contains? haystack needle)`    | boolean substring check                             |
-| `(starts-with? haystack needle)` | boolean prefix check                                |
-| `(ends-with? haystack needle)`   | boolean suffix check                                |
+| `(subject-with TOK ...)` / `(subject-with [TOK ...])` | join tokens with `.` to build a publishable subject (e.g. `(subject-with "sensors" room "temp")`). Numbers and bools coerce to strings; empty tokens error. Result is publish-validated. |
+| `(now :date)` / `(now :hour)` / `(now :minute)` | wall-clock UTC string at the chosen granularity: `"YYYY-MM-DD"`, `"YYYY-MM-DDTHH"`, `"YYYY-MM-DDTHHMM"` (RFC 3339 basic form, no `:` so it's subject-token-safe). Cached in a single threadlocal buffer keyed by the minute; cost on a hit is one integer compare. `:minute` is high cardinality (525,600 unique values per year per topic) when used as a subject token, prefer `:hour` or `:date` unless you really mean it. |
+| `(contains? coll item)`          | substring check on strings (`(contains? payload "ERROR")`), membership check on vectors (`(contains? [1 2 3] payload-int)`, `(contains? ["red" "green"] payload)`). Strict equality, so `"1"` does not match `1`. |
+| `(starts-with? text prefix)`     | boolean prefix check (strings only)                 |
+| `(ends-with? text suffix)`       | boolean suffix check (strings only)                 |
 | `(subject-token N [S])`          | Nth dot-separated token (0-indexed) of `S` (default: current subject); nil if out of range |
 
 ## Subject filters
@@ -122,8 +130,8 @@ NATS convention:
 
 `*` can appear in any position; `>` must be the **last** token and
 consumes everything after it. `foo.>` matches `foo.a` and
-`foo.a.b.c.d`. `foo.*` matches `foo.a` only — a filter with N tokens
-and no `>` requires exactly N tokens in the subject. If you need
+`foo.a.b.c.d`. `foo.*` matches `foo.a` only (a filter with N tokens
+and no `>` requires exactly N tokens in the subject). If you need
 "anything starting with `bip` with at least three tokens after it,"
 that's `bip.*.*.*` or `bip.*.*.*.>`, not `bip.>` (which matches
 `bip.a` too). Putting `>` anywhere except the tail is a validation
@@ -394,13 +402,13 @@ share state with `moving-*` even on the same subject.
 | `(stddev WINDOW X)`           | number  | population stddev of X over WINDOW            |
 | `(variance WINDOW X)`         | number  | population variance of X over WINDOW          |
 
-`rate` requires the `:ms N` form — "rate over the last N samples" has
+`rate` requires the `:ms N` form: "rate over the last N samples" has
 no time unit, so passing a bare tick count is a type error. `X` is
 evaluated but its value ignored: the op counts pushes, not magnitudes.
 Useful for "events/sec on this subject," "alerts/sec," etc.
 
 `percentile`, `median`, `stddev`, and `variance` all read the window
-and return immediately — no warm-up. On the first sample they return
+and return immediately (no warm-up). On the first sample they return
 that sample (or 0 for variance/stddev). Cost is O(n log n) for
 percentile/median (sort copy) and O(n) for stddev/variance.
 
@@ -588,3 +596,40 @@ already has (`contains?`, comparisons, `changed?`, `rising-edge`, ...).
 State is a single number, snapshot-persisted, so a restart resumes from
 the last seen total instead of zero. Subscribe to `<subject>.count` (or
 `$LVC.<subject>.count` for the latest value) to watch a counter live.
+
+## Debug printing
+
+`(print! X)` and `(print! LABEL X)` are debug aids: they write a single
+line to stderr and return `X` unchanged, so they sit cleanly inside a
+threading chain without changing semantics.
+
+```edn
+; See the value at each stage of a pipeline.
+(on "sensors.*"
+  (-> payload-float
+      (print! "raw")
+      (round 1)
+      (print! "rounded")
+      (squelch)
+      (publish! (subject-append "stable"))))
+```
+
+Output:
+
+```
+print! [sensors.kitchen] raw = 21.4378
+print! [sensors.kitchen] rounded = 21.4
+```
+
+`print!` is not a publish (it doesn't bump `$STATS.rules.<i>.emitted`)
+and is not gated by `--trace`. The loader counts every `print!` it
+sees and the server logs a single warning at startup, so a left-in
+`print!` is visible in the boot log:
+
+```
+warning: patchbay contains 2 print! call(s) across 1 rule(s); will log
+payload data to stderr and add per-call overhead (debug aid, do not
+leave in production)
+```
+
+Use it while you're debugging, take it out when you ship.

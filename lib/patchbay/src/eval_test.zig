@@ -498,6 +498,60 @@ test "contains? and str-concat" {
     try testing.expectEqualStrings("log.app: something alert here", tp.buf.items[0].payload);
 }
 
+test "contains? on vector literal — membership" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // payload-int falls into the watchlist; threaded form (last-arg).
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (when (-> payload-int (contains? [1 2 3]))
+        \\    (publish! "hit" payload)))
+    );
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "2",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = arena,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("hit", tp.buf.items[0].subject);
+
+    ctx.payload = "5";
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len); // no new emit
+}
+
+test "contains? on vector of strings" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (when (contains? ["red" "green" "blue"] payload)
+        \\    (publish! "ok" payload)))
+    );
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "color",
+        .payload = "green",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = arena,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+
+    ctx.payload = "purple";
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+}
+
 test "starts-with? and ends-with?" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
@@ -553,6 +607,229 @@ test "subject-token extracts Nth dot-separated token" {
     try run(rules, &ctx);
     try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
     try testing.expectEqualStrings("room.kitchen", tp.buf.items[0].subject);
+}
+
+test "subject-with joins tokens variadic and from a vector" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "in"
+        \\  (do
+        \\    (publish! (subject-with "sensors" (subject-token 1 "a.kitchen") "temp") payload)
+        \\    (publish! (subject-with ["alerts" "high"]) payload)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "in",
+        .payload = "72",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("sensors.kitchen.temp", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("alerts.high", tp.buf.items[1].subject);
+}
+
+test "subject-with coerces numbers and rejects empty tokens" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Numbers stringify canonically so building from payload-int works.
+    const ok_rules = try loadRules(arena,
+        \\(on ">" (publish! (subject-with "rooms" payload-int "temp") payload))
+    );
+    defer deinitRules(ok_rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "in",
+        .payload = "3",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(ok_rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("rooms.3.temp", tp.buf.items[0].subject);
+
+    // Empty token errors out (publish would fail downstream anyway).
+    const bad_rules = try loadRules(arena,
+        \\(on ">" (publish! (subject-with "a" "" "b") payload))
+    );
+    defer deinitRules(bad_rules, testing.allocator);
+    var tp2: TestPublisher = .{ .alloc = arena };
+    var ctx2: Context = .{
+        .subject = "in",
+        .payload = "x",
+        .publisher = tp2.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try testing.expectError(error.InvalidSubject, run(bad_rules, &ctx2));
+}
+
+test "(now :date), :hour, :minute format wall_ms (UTC)" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (do
+        \\    (publish! "d" (now :date))
+        \\    (publish! "h" (now :hour))
+        \\    (publish! "m" (now :minute))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "1",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        // 1777903425000 ms since epoch = 2026-05-04 14:03:45 UTC.
+        .wall_ms = 1777903425000,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+    try testing.expectEqualStrings("2026-05-04", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("2026-05-04T14", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("2026-05-04T1403", tp.buf.items[2].payload);
+}
+
+test "(now :date) at epoch and across a day boundary" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">" (publish! "d" (now :date)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "1",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .wall_ms = 0, // 1970-01-01T00:00:00 UTC
+    };
+    try run(rules, &ctx);
+    try testing.expectEqualStrings("1970-01-01", tp.buf.items[0].payload);
+
+    // One ms before midnight UTC on 1970-01-01 -> still that day.
+    ctx.wall_ms = 86_399_999;
+    try run(rules, &ctx);
+    try testing.expectEqualStrings("1970-01-01", tp.buf.items[1].payload);
+
+    // Exactly midnight UTC on 1970-01-02.
+    ctx.wall_ms = 86_400_000;
+    try run(rules, &ctx);
+    try testing.expectEqualStrings("1970-01-02", tp.buf.items[2].payload);
+}
+
+test "(now :date) composes with subject-with for bucketing" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "events.>"
+        \\  (publish! (subject-with "logs" (now :date) "errors") payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "events.api",
+        .payload = "boom",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .wall_ms = 1777903425000, // 2026-05-04
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("logs.2026-05-04.errors", tp.buf.items[0].subject);
+}
+
+test "print! returns its argument and threads cleanly" {
+    // Two-arg `(print! LABEL X)` returns X; the rule publishes that value
+    // unchanged so we know nothing was clobbered. Stderr output is not
+    // asserted (it's a debug aid); we just verify the value path.
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (publish! "out" (-> payload-float (print! "raw") (round 1) (print! "rounded"))))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "3.14159",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("3.1", tp.buf.items[0].payload);
+}
+
+test "print! does not bump publish counters" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">" (print! "v" payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "1",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 0), tp.buf.items.len);
+    try testing.expectEqual(@as(u64, 0), rules[0].publishes_emitted);
+    try testing.expectEqual(@as(u64, 0), rules[0].publishes_suppressed);
+}
+
+test "countPrintBangs counts across rules and forms" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "a" (do (print! "x" payload) (publish! "out" payload)))
+        \\(on "b" (publish! "out" (-> payload-float (print!) (round 1) (print! "r"))))
+        \\(on "c" (publish! "out" payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    const c = eval.countPrintBangs(rules);
+    try testing.expectEqual(@as(usize, 3), c.total);
+    try testing.expectEqual(@as(usize, 2), c.rules);
 }
 
 test "payload-int parses integer payloads" {
