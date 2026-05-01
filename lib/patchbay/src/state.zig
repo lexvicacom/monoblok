@@ -21,7 +21,7 @@ pub const Rule = struct {
 
     /// Opt-in: when true, publishes this rule emits re-enter the patchbay
     /// and may match other rules. Default false avoids surprise rule-graph
-    /// cascades — most rules don't need to feed each other. Set via
+    /// cascades (most rules don't need to feed each other). Set via
     /// `(on FILTER :reentrant true BODY)`.
     reentrant: bool = false,
 
@@ -252,7 +252,7 @@ pub fn encodeForState(arena: Allocator, v: Value) StateError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list, .keyword => error.TypeMismatch,
+        .list, .vector, .keyword => error.TypeMismatch,
     };
 }
 
@@ -264,7 +264,7 @@ pub fn encodeForState(arena: Allocator, v: Value) StateError![]const u8 {
 /// On-the-wire shape: `"<op_name>/<kind>:<subject>"` (e.g. `"squelch/n:foo"`,
 /// `"moving-avg/t:foo.bar"`, `"bar/m:MARKET.AAPL"`). Construct via
 /// `keyForOp` / `keyForWindow`; introspect via `parseBarSubject`. Don't
-/// build keys ad-hoc with `allocPrint` — the format lives here.
+/// build keys ad-hoc with `allocPrint`; the format lives here.
 pub const KeyKind = enum { none, ticks, time_ms };
 
 fn kindByte(k: KeyKind) u8 {
@@ -369,6 +369,6 @@ pub fn valueEql(a: Value, b: Value) bool {
         .symbol => |s| std.mem.eql(u8, s, b.symbol),
         .keyword => |s| std.mem.eql(u8, s, b.keyword),
         .string => |s| std.mem.eql(u8, s, b.string),
-        .list => false, // lists aren't comparable in our dialect
+        .list, .vector => false, // collections aren't comparable as whole values
     };
 }
