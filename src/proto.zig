@@ -229,6 +229,55 @@ fn parseMsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Serve
     };
 }
 
+/// Parsed subset of the CONNECT JSON body. Fields default to false / null when
+/// absent. Unknown fields are ignored.
+pub const ConnectOptions = struct {
+    verbose: bool = false,
+    pedantic: bool = false,
+};
+
+/// Parse a CONNECT JSON body. Returns defaults on parse error or non-object
+/// bodies. Allocator is for the scanner's depth stack; an arena is fine.
+pub fn parseConnect(gpa: Allocator, body: []const u8) ConnectOptions {
+    var scanner = std.json.Scanner.initCompleteInput(gpa, body);
+    defer scanner.deinit();
+
+    var opts: ConnectOptions = .{};
+    if ((scanner.next() catch return opts) != .object_begin) return opts;
+    while (true) {
+        const tok = scanner.next() catch return opts;
+        switch (tok) {
+            .object_end => break,
+            .string => |key| {
+                const val = scanner.next() catch return opts;
+                if (std.mem.eql(u8, key, "verbose")) {
+                    opts.verbose = (val == .true);
+                } else if (std.mem.eql(u8, key, "pedantic")) {
+                    opts.pedantic = (val == .true);
+                } else {
+                    // Unknown key: skip its value. Scanner already consumed
+                    // a primitive; for nested objects/arrays, keep skipping
+                    // until depth returns to zero.
+                    var depth: i32 = switch (val) {
+                        .object_begin, .array_begin => 1,
+                        else => 0,
+                    };
+                    while (depth > 0) {
+                        const inner = scanner.next() catch return opts;
+                        switch (inner) {
+                            .object_begin, .array_begin => depth += 1,
+                            .object_end, .array_end => depth -= 1,
+                            else => {},
+                        }
+                    }
+                }
+            },
+            else => return opts,
+        }
+    }
+    return opts;
+}
+
 fn eqIgnoreCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| if (std.ascii.toUpper(x) != std.ascii.toUpper(y)) return false;
@@ -278,6 +327,14 @@ pub fn writeErr(gpa: Allocator, out: *std.ArrayList(u8), msg: []const u8) !void 
 
 pub fn writePong(gpa: Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(gpa, "PONG\r\n");
+}
+
+pub fn writePing(gpa: Allocator, out: *std.ArrayList(u8)) !void {
+    try out.appendSlice(gpa, "PING\r\n");
+}
+
+pub fn writeOk(gpa: Allocator, out: *std.ArrayList(u8)) !void {
+    try out.appendSlice(gpa, "+OK\r\n");
 }
 
 pub fn writeMsg(
@@ -405,6 +462,22 @@ test "parse SUB rejects extra trailing args" {
 
 test "parse UNSUB rejects non-numeric max" {
     try testing.expectError(error.InvalidArgs, parseClientOp("UNSUB 1 lots\r\n"));
+}
+
+test "parseConnect picks up verbose + pedantic" {
+    const o = parseConnect(testing.allocator, "{\"verbose\":true,\"pedantic\":false,\"name\":\"nats-cli\"}");
+    try testing.expect(o.verbose);
+    try testing.expect(!o.pedantic);
+}
+
+test "parseConnect tolerates empty body" {
+    const o = parseConnect(testing.allocator, "");
+    try testing.expect(!o.verbose);
+}
+
+test "parseConnect skips unknown nested objects" {
+    const o = parseConnect(testing.allocator, "{\"jwt\":{\"x\":1},\"verbose\":true}");
+    try testing.expect(o.verbose);
 }
 
 test "writeMsg basic" {
