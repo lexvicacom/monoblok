@@ -17,7 +17,7 @@ pub const mixer_config = @import("mixer_config.zig");
 
 const manifest = @import("manifest");
 
-const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, clock_tick_ms, stats_tick_ms, validate, mixer, inherit_fd, help, version };
+const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, clock_tick_ms, stats_tick_ms, ping_interval_ms, max_pending_bytes, validate, mixer, inherit_fd, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -32,6 +32,8 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--snapshot-every", .snapshot_every },
     .{ "--clock-tick-ms", .clock_tick_ms },
     .{ "--stats-tick-ms", .stats_tick_ms },
+    .{ "--ping-interval-ms", .ping_interval_ms },
+    .{ "--max-pending-bytes", .max_pending_bytes },
     .{ "--validate", .validate },
     .{ "--mixer", .mixer },
     .{ "--inherit-fd", .inherit_fd },
@@ -56,6 +58,8 @@ pub fn main(init: std.process.Init) !void {
     var snapshot_every_s: u32 = 0;
     var clock_tick_ms: u64 = server.default_clock_tick_ms;
     var stats_tick_ms: u64 = server.default_stats_tick_ms;
+    var ping_interval_ms: u64 = server.default_ping_interval_ms;
+    var max_pending_bytes: usize = server.default_max_pending_bytes;
     var validate_only = false;
     var mixer_path: ?[]const u8 = null;
     var inherit_fd: ?std.posix.fd_t = null;
@@ -100,6 +104,15 @@ pub fn main(init: std.process.Init) !void {
                 const v = it.next() orelse fatal("--stats-tick-ms requires a value in milliseconds");
                 stats_tick_ms = std.fmt.parseInt(u64, v, 10) catch fatal("invalid --stats-tick-ms value");
                 if (stats_tick_ms == 0) fatal("--stats-tick-ms must be > 0");
+            },
+            .ping_interval_ms => {
+                const v = it.next() orelse fatal("--ping-interval-ms requires a value in milliseconds");
+                ping_interval_ms = std.fmt.parseInt(u64, v, 10) catch fatal("invalid --ping-interval-ms value");
+            },
+            .max_pending_bytes => {
+                const v = it.next() orelse fatal("--max-pending-bytes requires a value in bytes");
+                max_pending_bytes = std.fmt.parseInt(usize, v, 10) catch fatal("invalid --max-pending-bytes value");
+                if (max_pending_bytes == 0) fatal("--max-pending-bytes must be > 0");
             },
             .validate => validate_only = true,
             .mixer => mixer_path = it.next() orelse fatal("--mixer requires a path"),
@@ -258,6 +271,8 @@ pub fn main(init: std.process.Init) !void {
         .snapshot_io = fsio,
         .clock_tick_ms = clock_tick_ms,
         .stats_tick_ms = stats_tick_ms,
+        .ping_interval_ms = ping_interval_ms,
+        .max_pending_bytes = max_pending_bytes,
         .shutdown_enabled = true,
     };
 
@@ -448,6 +463,15 @@ fn printUsage() void {
         \\                   care; if you have neither, crank it up.
         \\  --stats-tick-ms MS
         \\                   `$STATS.*` publish cadence (default 60000).
+        \\  --ping-interval-ms MS
+        \\                   Server-side PING cadence (default 120000). A
+        \\                   conn idle for this long gets a PING; idle for
+        \\                   2x without any reply is closed as stale.
+        \\                   0 disables both PING and the reaper.
+        \\  --max-pending-bytes N
+        \\                   Per-conn outbound cap (default 67108864 = 64MB,
+        \\                   matches nats-server). Conns past this are
+        \\                   logged as slow consumers and disconnected.
         \\  --validate       Form-lint the patchbay file and exit. Same
         \\                   check that runs at startup; useful for
         \\                   editor / pre-commit / CI flows. Requires

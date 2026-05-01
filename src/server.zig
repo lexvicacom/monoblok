@@ -27,6 +27,14 @@ const rule_publish_warn_threshold: u32 = 64;
 /// bytes during the dispatch. Catches slow-consumer / fan-out blow-ups.
 const out_queued_warn_threshold: usize = 4 * 1024 * 1024;
 
+/// Hard cap on a conn's pending outbound bytes (router buf + in_flight).
+/// Past this, send `-ERR 'Slow Consumer'` and close. Matches nats-server's
+/// MAX_PENDING_SIZE.
+pub const default_max_pending_bytes: usize = 64 * 1024 * 1024;
+
+/// Server-side PING cadence. 0 disables PING + stale-conn reaper.
+pub const default_ping_interval_ms: u64 = 120_000;
+
 /// `--stats` flushes a summary line every this many inbound PUBs.
 const stats_interval: u64 = 10_000;
 
@@ -104,6 +112,16 @@ pub const Server = struct {
     stats_completion: xev.Completion = undefined,
     stats_tick_ms: u64 = default_stats_tick_ms,
 
+    /// Slow-consumer cap (per conn, total of out + in_flight).
+    max_pending_bytes: usize = default_max_pending_bytes,
+
+    /// Server-PING / stale-conn reaper cadence. 0 disables.
+    ping_interval_ms: u64 = default_ping_interval_ms,
+    ping_timer: xev.Timer = undefined,
+    ping_completion: xev.Completion = undefined,
+    /// Doubly-linked list of live conns, walked on each ping tick.
+    conns_head: ?*Conn = null,
+
     /// Periodic patchbay clock walker; timer re-arms from its callback.
     /// Only armed if at least one rule body uses a `:ms` window. Without
     /// time-windowed ops the walker has nothing to do, so we skip it
@@ -159,6 +177,15 @@ pub const Server = struct {
 
         self.stats_timer = try xev.Timer.init();
         self.stats_timer.run(self.loop, &self.stats_completion, self.stats_tick_ms, Server, self, onStatsTick);
+
+        // Worker mode (mixer-spawned) skips PING: the mixer doesn't speak it
+        // and the inherited socketpair can't go stale.
+        if (self.ping_interval_ms > 0 and self.mode != .worker) {
+            self.ping_timer = try xev.Timer.init();
+            // Tick at half the interval so we catch stale conns within ~1.5x.
+            const tick = @max(self.ping_interval_ms / 2, 1);
+            self.ping_timer.run(self.loop, &self.ping_completion, tick, Server, self, onPingTick);
+        }
 
         self.clock_enabled = rules_mod.rulesUseTimeWindows(self.rules.rules);
         if (self.clock_enabled) {
@@ -289,6 +316,7 @@ pub const Server = struct {
 
     pub fn deinit(self: *Server) void {
         self.stats_timer.deinit();
+        if (self.ping_interval_ms > 0 and self.mode != .worker) self.ping_timer.deinit();
         if (self.clock_enabled) {
             self.clock_timer.deinit();
             self.clock_arena.deinit();
@@ -360,6 +388,43 @@ pub const Server = struct {
         };
 
         self.stats_timer.run(loop, &self.stats_completion, self.stats_tick_ms, Server, self, onStatsTick);
+        return .disarm;
+    }
+
+    fn onPingTick(
+        self_opt: ?*Server,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        r: xev.Timer.RunError!void,
+    ) xev.CallbackAction {
+        _ = r catch {};
+        const self = self_opt.?;
+
+        const now = loop.now();
+        const idle_thresh: i64 = @intCast(self.ping_interval_ms);
+        const stale_thresh: i64 = idle_thresh * 2;
+
+        // Walk conn list. Closing a conn unlinks via deinit→onClose, but that
+        // happens asynchronously, so iterating self.next is safe here.
+        var c_opt = self.conns_head;
+        while (c_opt) |c| {
+            const next = c.next;
+            if (!c.closing) {
+                const idle = now - c.last_recv_ms;
+                if (c.ping_outstanding and idle >= stale_thresh) {
+                    std.log.info("conn {d} stale ({d}ms idle), closing", .{ c.router_conn.id, idle });
+                    c.requestClose();
+                } else if (!c.ping_outstanding and idle >= idle_thresh) {
+                    proto.writePing(self.gpa, &c.router_conn.out) catch {};
+                    c.ping_outstanding = true;
+                    c.maybeKickWrite(loop);
+                }
+            }
+            c_opt = next;
+        }
+
+        const tick = @max(self.ping_interval_ms / 2, 1);
+        self.ping_timer.run(loop, &self.ping_completion, tick, Server, self, onPingTick);
         return .disarm;
     }
 
@@ -545,9 +610,22 @@ const Conn = struct {
 
     close_completion: xev.Completion = undefined,
     closing: bool = false,
+    shutdown_requested: bool = false,
 
     // Reset between messages to bound per-rule allocation lifetime.
     msg_arena: std.heap.ArenaAllocator,
+
+    /// CONNECT options.
+    verbose: bool = false,
+
+    /// Reaper bookkeeping. last_recv_ms uses loop.now() (monotonic ms).
+    last_recv_ms: i64 = 0,
+    connect_ms: i64 = 0,
+    ping_outstanding: bool = false,
+
+    /// Intrusive list links for Server.conns_head.
+    prev: ?*Conn = null,
+    next: ?*Conn = null,
 
     fn init(server: *Server, tcp: xev.TCP) !*Conn {
         const gpa = server.gpa;
@@ -568,10 +646,17 @@ const Conn = struct {
             .tcp = tcp,
             .router_conn = rconn,
             .msg_arena = .init(gpa),
+            .last_recv_ms = server.loop.now(),
+            .connect_ms = server.loop.now(),
         };
 
         rconn.kick_ctx = self;
         rconn.kick_fn = onKick;
+
+        // Link into the server's conn list (head insert).
+        self.next = server.conns_head;
+        if (server.conns_head) |h| h.prev = self;
+        server.conns_head = self;
 
         // Seed INFO.
         try proto.writeInfo(
@@ -589,6 +674,9 @@ const Conn = struct {
 
     fn deinit(self: *Conn) void {
         const gpa = self.server.gpa;
+        // Unlink from the server's conn list.
+        if (self.prev) |p| p.next = self.next else self.server.conns_head = self.next;
+        if (self.next) |n| n.prev = self.prev;
         self.rx.deinit(gpa);
         self.in_flight_buf.deinit(gpa);
         self.msg_arena.deinit();
@@ -637,6 +725,10 @@ const Conn = struct {
             self.beginClose(loop);
             return .disarm;
         }
+
+        // Any inbound byte resets the reaper.
+        self.last_recv_ms = loop.now();
+        self.ping_outstanding = false;
 
         const gpa = self.server.gpa;
         self.rx.appendSlice(gpa, buf.slice[0..n]) catch {
@@ -697,7 +789,11 @@ const Conn = struct {
         const rconn = self.router_conn;
 
         switch (op) {
-            .connect => {},
+            .connect => |body| {
+                const opts = proto.parseConnect(gpa, body);
+                self.verbose = opts.verbose;
+                if (self.verbose) try proto.writeOk(gpa, &rconn.out);
+            },
             .ping => try proto.writePong(gpa, &rconn.out),
             .pong => {},
             .sub => |s| {
@@ -709,9 +805,11 @@ const Conn = struct {
                     error.LvcDisabled => try proto.writeErr(gpa, &rconn.out, "$LVC is disabled"),
                     else => try proto.writeErr(gpa, &rconn.out, "Subscribe Failed"),
                 };
+                if (self.verbose) try proto.writeOk(gpa, &rconn.out);
             },
             .unsub => |u| {
                 router.unsubscribe(rconn, u.sid, u.max_msgs) catch {};
+                if (self.verbose) try proto.writeOk(gpa, &rconn.out);
             },
             .pub_msg => |p| {
                 subject_mod.validatePublish(p.subject) catch {
@@ -761,6 +859,7 @@ const Conn = struct {
                 };
 
                 if (self.server.stats_enabled) self.server.recordPub(ctx.rule_publishes);
+                if (self.verbose) try proto.writeOk(gpa, &rconn.out);
             },
         }
     }
@@ -773,6 +872,25 @@ const Conn = struct {
     fn maybeKickWrite(self: *Conn, loop: *xev.Loop) void {
         if (self.closing or self.write_in_flight) return;
         if (self.router_conn.out.items.len == 0) return;
+
+        // Slow-consumer cap: total pending = router buf + (already-flying) in_flight.
+        const pending = self.router_conn.out.items.len + self.in_flight_buf.items.len;
+        if (pending > self.server.max_pending_bytes) {
+            const now = loop.now();
+            std.log.warn(
+                "conn {d} slow consumer, closing: pending={d}B cap={d}B age={d}ms idle={d}ms hwm={d}B",
+                .{
+                    self.router_conn.id,
+                    pending,
+                    self.server.max_pending_bytes,
+                    now - self.connect_ms,
+                    now - self.last_recv_ms,
+                    self.router_conn.out_hwm,
+                },
+            );
+            self.requestClose();
+            return;
+        }
 
         if (self.router_conn.out_hwm >= out_queued_warn_threshold) {
             std.log.warn(
@@ -846,6 +964,17 @@ const Conn = struct {
         self.router_conn.markClosed();
         self.server.router.removeAllFor(self.router_conn);
         self.tcp.close(loop, &self.close_completion, Conn, self, onClose);
+    }
+
+    /// Idempotent close request safe to call from outside an i/o callback
+    /// (timer ticks etc.) when a read completion is still armed. Shuts the
+    /// fd down so the in-flight read returns EOF; onRead then drives the
+    /// real close via beginClose.
+    fn requestClose(self: *Conn) void {
+        if (self.closing or self.shutdown_requested) return;
+        self.shutdown_requested = true;
+        self.router_conn.markClosed();
+        _ = std.c.shutdown(self.tcp.fd, std.c.SHUT.RDWR);
     }
 
     fn onClose(
