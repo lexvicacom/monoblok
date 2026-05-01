@@ -9,17 +9,17 @@
 (on "rpc.latency"
   (-> payload-float
       (median 50)
-      (publish-to "rpc.latency.p50")))
+      (publish! "rpc.latency.p50")))
 
 (on "rpc.latency"
   (-> payload-float
       (percentile 50 0.95)
-      (publish-to "rpc.latency.p95")))
+      (publish! "rpc.latency.p95")))
 
 (on "rpc.latency"
   (-> payload-float
       (percentile 50 0.99)
-      (publish-to "rpc.latency.p99")))
+      (publish! "rpc.latency.p99")))
 
 ;; Spread of the same window. Pairs nicely with p99: stddev climbing
 ;; while p99 stays flat means the body is widening even if the tail is
@@ -27,4 +27,4 @@
 (on "rpc.latency"
   (-> payload-float
       (stddev 50)
-      (publish-to "rpc.latency.stddev")))
+      (publish! "rpc.latency.stddev")))

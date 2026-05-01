@@ -58,30 +58,30 @@ patchbay is a small S-expression DSL describing how every incoming publish gets 
 ```edn
 (on "sensors.*"
   (when (> payload-float 30.0)
-    (publish (subject-append "high") payload)))
+    (publish! (subject-append "high") payload)))
 
 ; Round to 1dp, drop duplicates, emit on the .stable sub-subject.
 (on "sensors.*"
   (-> payload-float
       (round 1)
       (squelch)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 ```
 
 The vocabulary is borrowed from electronics (`squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
 
-JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux`) and conditioned the same way; top-level keys only.
+JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; top-level keys only.
 
 Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). One-line summary of every form in the [cheatsheet](./docs/patchbay-cheatsheet.md). Runnable end-to-end demos in [`examples/`](./examples/); each `.edn` has a matching `.sh` that starts monoblok, publishes a sequence, subscribes in parallel, and prints publishes vs deliveries.
 
 | file                                              | what it shows                                                   |
 |---------------------------------------------------|-----------------------------------------------------------------|
 | [`sensors.edn`](./examples/sensors.edn)           | round + squelch on a noisy sensor                               |
-| [`office-temp.edn`](./examples/office-temp.edn)   | moving-average alert + all-clear via `transition` and `count`   |
+| [`office-temp.edn`](./examples/office-temp.edn)   | moving-average alert + all-clear via `transition` and `count!`  |
 | [`ticker.edn`](./examples/ticker.edn)             | market data: round, squelch, big-jump alerts, bridge            |
 | [`bars.edn`](./examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
 | [`latency-stats.edn`](./examples/latency-stats.edn) | live p50/p95/p99/stddev over a sliding window                 |
-| [`json-frames.edn`](./examples/json-frames.edn)   | `json-demux` a JSON-emitting device into scalar sub-subjects    |
+| [`json-frames.edn`](./examples/json-frames.edn)   | `json-demux!` a JSON-emitting device into scalar sub-subjects   |
 | [`rental-car.edn`](./examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
 | [`bridge.edn`](./examples/bridge.edn)             | forward selected subjects to a real NATS server                 |
 | [`demo.edn`](./examples/demo.edn)                 | tour of every primitive on `demo.sensors.*`                     |
@@ -142,7 +142,7 @@ The server publishes cumulative counters to `$STATS.*` on a 1-minute wall-clock 
 | subject                          | value                                             |
 |----------------------------------|---------------------------------------------------|
 | `$STATS.global.pubs`             | total inbound client PUBs since start             |
-| `$STATS.rules.<i>.emitted`       | successful `publish` / `publish-to` calls by rule |
+| `$STATS.rules.<i>.emitted`       | successful `publish!` calls by rule               |
 | `$STATS.rules.<i>.suppressed`    | gate suppressions by rule                         |
 | `$STATS.bridge.published`        | publishes forwarded to the remote NATS cluster    |
 | `$STATS.bridge.dropped`          | publishes the bridge failed to forward            |
@@ -225,10 +225,10 @@ Prints every patchbay form the evaluator visits to stderr, with result and elaps
 $ monoblok --port 4222 --patchbay patchbay.edn --trace
 trace: sensors.temp 42.5
   rule 0 (on "sensors.*") matched
-  (when (> payload-float 30) (publish (subject-append "high") payload))
+  (when (> payload-float 30) (publish! (subject-append "high") payload))
     (> payload-float 30)
       => true [124µs]
-    (publish (subject-append "high") payload)
+    (publish! (subject-append "high") payload)
       => published "sensors.temp.high" 42.5 [549µs]
 total [3ms]
 ```

@@ -1,4 +1,4 @@
 ; ORDERS shard: route any payload that mentions "alert" onto an audit topic.
 (on "ORDERS.>"
   (when (contains? payload "alert")
-    (publish "ORDERS.audit" (str-concat subject ": " payload))))
+    (publish! "ORDERS.audit" (str-concat subject ": " payload))))

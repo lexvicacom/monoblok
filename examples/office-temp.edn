@@ -3,15 +3,15 @@
   (-> payload-float
       (round 1)
       (deadband 0.3)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 ;; Sustained heat alert + all-clear in one rule: fire "alert" once when
 ;; the 60-sample moving average crosses above 28°C, "ok" once when it
 ;; drops back below. One predicate, one ring buffer, one prev slot.
 (on "temp.*.*"
   (transition (> (moving-avg 60 payload-float) 28.0)
-    (publish-to (subject-append "alert") "hot")
-    (publish-to (subject-append "ok")    "cool")))
+    (publish! (subject-append "alert") "hot")
+    (publish! (subject-append "ok")    "cool")))
 
 ;; Daily heat-event tally: increment a per-sensor counter once on each
 ;; false->true crossing of the same threshold, ignoring all the
@@ -19,4 +19,4 @@
 ;; running total. (rising-edge fires once per transition, so this is a
 ;; counter of *crossings*, not samples.)
 (on "temp.*.*"
-  (count (rising-edge (> (moving-avg 60 payload-float) 28.0))))
+  (count! (rising-edge (> (moving-avg 60 payload-float) 28.0))))
