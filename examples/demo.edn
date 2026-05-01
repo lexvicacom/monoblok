@@ -85,6 +85,6 @@
   (count! (rising-edge (> payload-float 50.0))))
 
 (bridge
-   :servers  ("nats://127.0.0.1:4223")
+   :servers  ["nats://127.0.0.1:4223"]
    :name     "monoblok-prod-1"
-   :export   ("demo.sensors.*.spike" "demo.alerts.>"))
+   :export   ["demo.sensors.*.spike" "demo.alerts.>"])

@@ -107,17 +107,24 @@ fn parseMixerForm(arena: Allocator, kvs: []const sexpr.Value) ConfigError!Config
 }
 
 fn parseWorkers(arena: Allocator, v: sexpr.Value) ConfigError![]const Worker {
-    if (v != .list) return error.InvalidMixerForm;
-    const out = try arena.alloc(Worker, v.list.len);
-    for (v.list, 0..) |entry, idx| {
+    const items: []const sexpr.Value = switch (v) {
+        .list => |xs| xs,
+        .vector => |xs| xs,
+        else => return error.InvalidMixerForm,
+    };
+    const out = try arena.alloc(Worker, items.len);
+    for (items, 0..) |entry, idx| {
         out[idx] = try parseWorker(entry);
     }
     return out;
 }
 
 fn parseWorker(entry: sexpr.Value) ConfigError!Worker {
-    if (entry != .list) return error.InvalidMixerForm;
-    const kvs = entry.list;
+    const kvs: []const sexpr.Value = switch (entry) {
+        .list => |xs| xs,
+        .vector => |xs| xs,
+        else => return error.InvalidMixerForm,
+    };
     if (kvs.len % 2 != 0) return error.InvalidMixerForm;
 
     var shard: ?[]const u8 = null;
@@ -180,6 +187,25 @@ test "load minimal mixer" {
     try testing.expectEqualStrings("*", cfg.workers[1].shard);
     try testing.expectEqualStrings("d.log", cfg.workers[1].log.?);
     try testing.expectEqual(true, cfg.workers[1].trace);
+    try testing.expectEqual(@as(usize, 1), cfg.catch_all);
+}
+
+test "load mixer with vector syntax" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const src =
+        \\(mixer
+        \\  :listen "tcp://0.0.0.0:4222"
+        \\  :workers
+        \\    [[:shard "T" :patchbay "t.edn"]
+        \\     [:shard "*" :patchbay "default.edn"]])
+    ;
+    const cfg = try loadConfig(arena, src);
+    try testing.expectEqual(@as(usize, 2), cfg.workers.len);
+    try testing.expectEqualStrings("T", cfg.workers[0].shard);
+    try testing.expectEqualStrings("*", cfg.workers[1].shard);
     try testing.expectEqual(@as(usize, 1), cfg.catch_all);
 }
 

@@ -59,8 +59,8 @@
 ; list.
 ;
 ; (bridge
-;   :servers  ("tls://a.example:4222" "tls://b.example:4222")
+;   :servers  ["tls://a.example:4222" "tls://b.example:4222"]
 ;   :creds    "/etc/monoblok/ngs.creds"
 ;   :tls      true
 ;   :name     "monoblok-prod-1"
-;   :export   ("telemetry.>" "alerts.>"))
+;   :export   ["telemetry.>" "alerts.>"])

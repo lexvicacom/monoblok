@@ -181,9 +181,13 @@ fn asI64(v: sexpr.Value) ConfigError!i64 {
 }
 
 fn stringList(arena: Allocator, v: sexpr.Value) ConfigError![]const []const u8 {
-    if (v != .list) return error.InvalidBridgeForm;
-    const out = try arena.alloc([]const u8, v.list.len);
-    for (v.list, 0..) |x, ix| {
+    const items: []const sexpr.Value = switch (v) {
+        .list => |xs| xs,
+        .vector => |xs| xs,
+        else => return error.InvalidBridgeForm,
+    };
+    const out = try arena.alloc([]const u8, items.len);
+    for (items, 0..) |x, ix| {
         if (x != .string) return error.InvalidBridgeForm;
         out[ix] = x.string;
     }

@@ -33,6 +33,8 @@ pub const loadRulesReporting = load.loadRulesReporting;
 pub const deinitRules = load.deinitRules;
 pub const validate = load.validate;
 pub const isLiteralFilter = load.isLiteralFilter;
+pub const countPrintBangs = load.countPrintBangs;
+pub const PrintBangCount = load.PrintBangCount;
 
 pub const EvalError = error{
     UnknownSymbol,
@@ -66,8 +68,15 @@ pub const Context = struct {
     /// Publishes generated for this inbound PUB. Read by the server to
     /// detect rule-amplification blow-ups.
     rule_publishes: u32 = 0,
-    /// Ingress wall-clock (ms), stamped once per PUB. Used by `hold-off`.
+    /// Ingress monotonic time (ms), stamped once per PUB. Used by
+    /// `hold-off`, time-window aggregates, the `bar!` time form, and the
+    /// clock walker. Monotonic so deltas are stable across wall-clock
+    /// adjustments; not suitable for date math.
     now_ms: i64 = 0,
+    /// Ingress wall-clock time (ms since 1970-01-01 UTC), stamped once
+    /// per PUB. Used by `date-now` / `hour-now` to format human dates.
+    /// Distinct from `now_ms` because that one is monotonic.
+    wall_ms: i64 = 0,
     /// `--trace`: switches `run` to the traced eval path.
     trace: bool = false,
     /// Indirect-dispatch slot picked by `run`; all recursive eval goes
@@ -166,7 +175,7 @@ pub fn rulesUseTimeWindows(rules: []const Rule) bool {
 fn valueHasMsKeyword(v: Value) bool {
     return switch (v) {
         .keyword => |k| std.mem.eql(u8, k, "ms"),
-        .list => |items| blk: {
+        .list, .vector => |items| blk: {
             for (items) |item| if (valueHasMsKeyword(item)) break :blk true;
             break :blk false;
         },
@@ -330,6 +339,14 @@ fn evalNormal(ctx: *Context, v: Value) EvalError!Value {
         .nil, .boolean, .number, .string, .keyword => v,
         .symbol => |s| evalSymbol(ctx, s),
         .list => |items| builtins.evalCall(ctx, items),
+        // `[a b c]` is a literal collection: evaluate each element in place
+        // and return as a new vector. This is what makes
+        // `(contains? [1 2 3] x)` work without a quote form.
+        .vector => |items| blk: {
+            const out = try ctx.arena.alloc(Value, items.len);
+            for (items, 0..) |item, i| out[i] = try ctx.eval_fn(ctx, item);
+            break :blk .{ .vector = out };
+        },
     };
 }
 
@@ -464,6 +481,14 @@ fn formatValue(v: Value) void {
                 formatValue(it);
             }
             std.debug.print(")", .{});
+        },
+        .vector => |items| {
+            std.debug.print("[", .{});
+            for (items, 0..) |it, i| {
+                if (i > 0) std.debug.print(" ", .{});
+                formatValue(it);
+            }
+            std.debug.print("]", .{});
         },
     }
 }

@@ -151,3 +151,43 @@ pub fn isLiteralFilter(filter: []const u8) bool {
     }
     return true;
 }
+
+/// Result of `countPrintBangs`. `rules` is the number of rules that
+/// contain at least one `print!` call; `total` is the total number of
+/// `print!` calls across all rules. The server logs a single warning at
+/// startup when `total > 0` so a left-in `print!` is not silent.
+pub const PrintBangCount = struct {
+    total: usize = 0,
+    rules: usize = 0,
+};
+
+pub fn countPrintBangs(rules: []const Rule) PrintBangCount {
+    var out: PrintBangCount = .{};
+    for (rules) |r| {
+        const n = countPrintBangsIn(r.body);
+        if (n > 0) {
+            out.total += n;
+            out.rules += 1;
+        }
+    }
+    return out;
+}
+
+fn countPrintBangsIn(v: sexpr.Value) usize {
+    return switch (v) {
+        .list => |items| blk: {
+            var n: usize = 0;
+            if (items.len > 0 and items[0] == .symbol and std.mem.eql(u8, items[0].symbol, "print!")) {
+                n += 1;
+            }
+            for (items) |item| n += countPrintBangsIn(item);
+            break :blk n;
+        },
+        .vector => |items| blk: {
+            var n: usize = 0;
+            for (items) |item| n += countPrintBangsIn(item);
+            break :blk n;
+        },
+        else => 0,
+    };
+}

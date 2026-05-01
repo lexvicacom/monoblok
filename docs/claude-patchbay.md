@@ -59,10 +59,19 @@ bare, `nil` / `true` / `false` are literals. Truthiness: only `nil` and
 Unlike Clojure, there is no quote form. Whether a `(...)` is a call
 depends on context, not on a leading `'`. Inside an `(on ...)` body,
 every list dispatches on its head symbol (`hold-off`, `publish`, `+`,
-etc.) - unknown heads error. Inside the `(bridge ...)` form, after a
-keyword like `:servers` or `:export`, a list is a literal vector of
-elements (e.g. servers to try when connecting). Same parser, different
-consumer; you never need to quote.
+etc.) - unknown heads error. Inside the `(bridge ...)` and `(mixer
+...)` forms, after a keyword like `:servers`, `:export`, or
+`:workers`, a list is a literal sequence of elements (e.g. servers to
+try when connecting). Same parser, different consumer. The mixer is
+documented in [`docs/mixer.md`](./mixer.md).
+
+For unambiguous data inside a body, write a vector with square
+brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors self-evaluate
+(elements eval'd in place, returned as a vector) and never dispatch on
+a head, so they're how you spell a literal collection (it's what
+`contains?` checks for membership against). Config readers (`bridge`,
+`mixer`) accept either `(...)` or `[...]` for keyword-tagged
+collections; vectors are the recommended form.
 
 ## Bound symbols (the current message)
 
@@ -88,7 +97,14 @@ Strings / subjects:
 
 - `(str-concat a b ...)`
 - `(subject-append "suffix")` produces `"<subject>.suffix"`
-- `(contains? h n)`, `(starts-with? h n)`, `(ends-with? h n)`
+- `(subject-with TOK ...)` / `(subject-with [TOK ...])` joins tokens with `.` to build a publishable subject. Numbers and bools coerce to strings; empty tokens raise `InvalidSubject`. Result is publish-validated, so `(publish! (subject-with "rooms" room-id "temp") payload)` either fires a valid subject or errors at construction. Use this when `subject-append` doesn't fit (you're not extending the current subject).
+- `(now :date)` / `(now :hour)` / `(now :minute)` returns a UTC wall-clock string at the chosen granularity:
+  - `:date` -> `"YYYY-MM-DD"` (10 chars)
+  - `:hour` -> `"YYYY-MM-DDTHH"` (13 chars, RFC 3339 `T` separator)
+  - `:minute` -> `"YYYY-MM-DDTHHMM"` (15 chars, RFC 3339 basic form, no `:` so it's subject-token-safe)
+  All three share one threadlocal buffer keyed by the minute, so any combination of granularities in a hot loop costs one integer compare and a slice (recompute only on a minute boundary). Wall-clock comes from `Context.wall_ms` (stamped per-PUB by the server, distinct from the monotonic `now_ms` used by `hold-off` and time windows). Pair with `subject-with` or `subject-append` for bucketing: `(publish! (subject-with "logs" (now :date) "errors") payload)` lands on `logs.2026-05-04.errors`. `:minute` is high cardinality (525,600 unique subject tokens per year per topic); prefer `:hour` or `:date` unless you really mean it.
+- `(contains? coll item)` substring on strings (`(contains? payload "ERROR")`), membership on vectors (`(contains? [1 2 3] payload-int)`). Strict equality, so `"1"` does not match `1`.
+- `(starts-with? text prefix)`, `(ends-with? text suffix)` strings only
 - `(subject-token N [S])` Nth dot token, 0-indexed, of `S` (default: `subject`)
 
 Side effects:
@@ -108,10 +124,10 @@ Idempotent filters (per-rule, per-subject state; first sight always passes / is 
 
 Windows (used as the first arg(s) of windowed ops):
 
-- bare integer `N` — last N samples; ring is fixed-cap, allocated once
-- `:ms N` — last N ms of wall-clock time (ingress timestamp); samples evict by age, the server walker also evicts on its ~500ms tick so quiet streams don't keep stale data
+- bare integer `N`: last N samples; ring is fixed-cap, allocated once
+- `:ms N`: last N ms of wall-clock time (ingress timestamp); samples evict by age, the server walker also evicts on its ~500ms tick so quiet streams don't keep stale data
 
-Windowed aggregates (per `(rule, subject, op, window-kind)` slot — tick and time variants on the same rule + subject keep distinct state):
+Windowed aggregates (per `(rule, subject, op, window-kind)` slot; tick and time variants on the same rule + subject keep distinct state):
 
 - `(moving-avg WINDOW X)`, `(moving-sum WINDOW X)`, `(moving-max WINDOW X)`, `(moving-min WINDOW X)`. WINDOW is `N` (ticks) or `:ms N` (time). Tick form is O(1) per update; time form is O(n) over the live window.
 - `(rate :ms N X)` events per second. Tick form is rejected because rate needs a time unit. X is evaluated but ignored; the op counts pushes.
@@ -134,7 +150,9 @@ Bars (side-effecting, per (rule, subject, window-kind)):
 
 Running counters (side-effecting, per (rule, subject)):
 
-- `(count!)` and `(count! COND)` increment a running total and publish it to `<subject>.count`. With no args, fires every call; with one arg, only when COND is truthy (same rules as `if` / `when`, so any predicate composes — `(count! (contains? payload "ERROR"))`, `(count! (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
+- `(count!)` and `(count! COND)` increment a running total and publish it to `<subject>.count`. With no args, fires every call; with one arg, only when COND is truthy (same rules as `if` / `when`, so any predicate composes: `(count! (contains? payload "ERROR"))`, `(count! (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
+
+- `(print! X)` and `(print! LABEL X)` are debug aids: write one line to stderr (`print! [SUBJECT] LABEL = VALUE`) and return `X` unchanged, so they sit cleanly inside `(-> ... (print! "raw") (round 1) (print! "rounded") ...)` without changing the value path. `print!` is not a publish (no `$STATS` bump, not gated by `--trace`). The loader walks every rule body and counts `print!` calls; if any are present the server logs a single warning at startup so a left-in `print!` is visible in the boot log. Use it during debugging, take it out when you ship.
 
 ## The `->` pipeline idiom
 
@@ -159,7 +177,7 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 - For one-sided alerts that still need to thread, use `rising-edge` / `falling-edge`.
 - When you need multiple windows on the same stream (e.g. max - min spread), drop out of `->` and write the explicit nested form. `->` only threads one value.
 - Keep subjects hierarchical: emit into `<input-subject>.<suffix>` via `subject-append` so downstream subscribers can pick the granularity they want.
-- Don't publish back into a subject your own rule matches unless you have explicitly thought about it. Rules without `:reentrant true` don't loop, but adding it on a rule whose emission can match its own filter (or another `:reentrant` rule's filter) is how you build cascades — keep the depth cap (8) in mind and prefer non-reentrant unless you genuinely need staging.
+- Don't publish back into a subject your own rule matches unless you have explicitly thought about it. Rules without `:reentrant true` don't loop, but adding it on a rule whose emission can match its own filter (or another `:reentrant` rule's filter) is how you build cascades. Keep the depth cap (8) in mind and prefer non-reentrant unless you genuinely need staging.
 - For sensors that emit JSON frames, prefer `json-demux!` at the head of the rule chain to fan fields out to scalar sub-subjects, then write the rest of your patchbay against those scalars. Reach for `json-get` inline only when you genuinely want one field on the existing subject.
 
 ## Anti-patterns
@@ -173,18 +191,20 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 
 ```edn
 (bridge
-  :servers ("tls://a.example:4222" "tls://b.example:4222")
+  :servers ["tls://a.example:4222" "tls://b.example:4222"]
   :creds   "/etc/monoblok/ngs.creds"
   :tls     true
   :name    "monoblok-prod-1"
-  :export  ("telemetry.>" "alerts.>"))
+  :export  ["telemetry.>" "alerts.>"])
 ```
 
 Other keywords: `:user` / `:password`, `:token`, `:tls-ca`, `:tls-cert`
 / `:tls-key`, `:tls-skip-verify` (dev only), `:connect-timeout-ms`,
 `:ping-interval-ms`, `:max-reconnect` (-1 unlimited), `:reconnect-wait-ms`.
-`:export` is a list of subject filters; matched publishes are forwarded
-as-is. Nothing flows back.
+`:export` is a vector of subject filters; matched publishes are
+forwarded as-is. Nothing flows back. Both `:servers` and `:export`
+also accept the legacy `(...)` list syntax, but `[...]` is the
+recommended form.
 
 ## Worked examples
 

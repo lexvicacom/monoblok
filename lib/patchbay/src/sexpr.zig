@@ -9,6 +9,10 @@ pub const Value = union(enum) {
     keyword: []const u8, // EDN-style :foo (used in config forms like (bridge :servers [...]))
     string: []const u8,
     list: []const Value,
+    /// Square-bracket literal `[a b c]`. Reader-distinct from `.list` so the
+    /// evaluator can self-evaluate vectors as data without conflicting with
+    /// the "list-as-call" rule for `(...)`.
+    vector: []const Value,
 
     pub fn isTruthy(v: Value) bool {
         return switch (v) {
@@ -32,6 +36,8 @@ pub const WindowSpec = struct {
 pub const ParseError = error{
     UnexpectedEof,
     UnexpectedRParen,
+    UnexpectedRBracket,
+    MismatchedBracket,
     UnterminatedString,
     InvalidEscape,
     InvalidNumber,
@@ -84,27 +90,45 @@ const Parser = struct {
         if (p.pos >= p.src.len) return error.UnexpectedEof;
         const c = p.src[p.pos];
         return switch (c) {
-            '(' => p.parseList(),
+            '(' => p.parseSeq(.list),
+            '[' => p.parseSeq(.vector),
             ')' => error.UnexpectedRParen,
+            ']' => error.UnexpectedRBracket,
             '"' => p.parseString(),
             else => p.parseAtom(),
         };
     }
 
-    fn parseList(p: *Parser) ParseError!Value {
-        p.pos += 1; // consume '('
+    const SeqKind = enum { list, vector };
+
+    fn parseSeq(p: *Parser, kind: SeqKind) ParseError!Value {
+        const close: u8 = switch (kind) {
+            .list => ')',
+            .vector => ']',
+        };
+        const wrong_close: u8 = switch (kind) {
+            .list => ']',
+            .vector => ')',
+        };
+        p.pos += 1; // consume opener
         var items: std.ArrayList(Value) = .empty;
         while (true) {
             p.skipWhitespaceAndComments();
             if (p.pos >= p.src.len) {
-                // Diagnostic points at EOF, not the unclosed '('; the latter
+                // Diagnostic points at EOF, not the unclosed opener; the latter
                 // reads as "this token is wrong" for multi-line forms.
                 return error.UnexpectedEof;
             }
-            if (p.src[p.pos] == ')') {
+            const c = p.src[p.pos];
+            if (c == close) {
                 p.pos += 1;
-                return .{ .list = try items.toOwnedSlice(p.arena) };
+                const slice = try items.toOwnedSlice(p.arena);
+                return switch (kind) {
+                    .list => .{ .list = slice },
+                    .vector => .{ .vector = slice },
+                };
             }
+            if (c == wrong_close) return error.MismatchedBracket;
             const v = try p.parseOne();
             try items.append(p.arena, v);
         }
@@ -150,7 +174,7 @@ const Parser = struct {
         const start = p.pos;
         while (p.pos < p.src.len) {
             const c = p.src[p.pos];
-            if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == '(' or c == ')' or c == ';') break;
+            if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == '(' or c == ')' or c == '[' or c == ']' or c == ';') break;
             p.pos += 1;
         }
         const tok = p.src[start..p.pos];
@@ -258,6 +282,44 @@ test "unbalanced paren errors" {
 
     try testing.expectError(error.UnexpectedEof, parseAll(arena, "(a b"));
     try testing.expectError(error.UnexpectedRParen, parseAll(arena, ")"));
+}
+
+test "parse vector literal" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const vs = try parseAll(arena, "[1 2 \"x\"]");
+    try testing.expectEqual(@as(usize, 1), vs.len);
+    try testing.expect(vs[0] == .vector);
+    const vec = vs[0].vector;
+    try testing.expectEqual(@as(usize, 3), vec.len);
+    try testing.expectEqual(@as(f64, 1), vec[0].number);
+    try testing.expectEqual(@as(f64, 2), vec[1].number);
+    try testing.expectEqualStrings("x", vec[2].string);
+}
+
+test "vector inside list" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const vs = try parseAll(arena, "(contains? [1 2 3] x)");
+    const top = vs[0].list;
+    try testing.expectEqualStrings("contains?", top[0].symbol);
+    try testing.expect(top[1] == .vector);
+    try testing.expectEqual(@as(usize, 3), top[1].vector.len);
+    try testing.expectEqualStrings("x", top[2].symbol);
+}
+
+test "mismatched bracket errors" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try testing.expectError(error.MismatchedBracket, parseAll(arena, "(a b]"));
+    try testing.expectError(error.MismatchedBracket, parseAll(arena, "[a b)"));
+    try testing.expectError(error.UnexpectedRBracket, parseAll(arena, "]"));
 }
 
 test "missing rparen reports offset at end-of-input, not at unclosed paren" {

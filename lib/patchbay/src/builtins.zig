@@ -30,7 +30,8 @@ const Op = enum {
     publish, publish_to, subject_append, str_concat,
     not, eq, gt, lt, ge, le,
     add, sub, mul, div,
-    contains, starts_with, ends_with, subject_token,
+    contains, starts_with, ends_with, subject_token, subject_with,
+    now,
     round, quantize, clamp, min, max, abs, sign,
     squelch, deadband, changed, delta, hold_off,
     moving_avg, moving_sum, moving_max, moving_min,
@@ -39,6 +40,7 @@ const Op = enum {
     json_get, json_demux,
     bar,
     count,
+    print,
 };
 
 const op_map = std.StaticStringMap(Op).initComptime(.{
@@ -69,6 +71,8 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "starts-with?", .starts_with },
     .{ "ends-with?", .ends_with },
     .{ "subject-token", .subject_token },
+    .{ "subject-with", .subject_with },
+    .{ "now", .now },
     .{ "round", .round },
     .{ "quantize", .quantize },
     .{ "clamp", .clamp },
@@ -103,6 +107,9 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "count!", .count },
     // TODO: remove `count` alias once existing patchbays migrate to `count!`.
     .{ "count", .count },
+    // `print!` is a debug aid; the loader counts these and warns at
+    // startup so a left-in `print!` is visible in the boot log.
+    .{ "print!", .print },
 });
 
 pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
@@ -150,6 +157,8 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .starts_with => callStartsEnds(evaled, .starts),
         .ends_with => callStartsEnds(evaled, .ends),
         .subject_token => callSubjectToken(ctx, evaled),
+        .subject_with => callSubjectWith(ctx, evaled),
+        .now => callNow(ctx, evaled),
         .round => callRound(evaled),
         .quantize => callQuantize(evaled),
         .clamp => callClamp(evaled),
@@ -178,6 +187,7 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .json_demux => callJsonDemux(ctx, evaled),
         .bar => callBar(ctx, evaled),
         .count => callCount(ctx, evaled),
+        .print => callPrint(ctx, evaled),
     };
 }
 
@@ -269,8 +279,8 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
 
 // --- Side-effecting publish ops -----------------------------------------
 
-// TODO: dead since the publish/publish-to merge — every spelling now routes
-// to callPublishTo. Delete once we're sure no out-of-tree caller imports it.
+// TODO: dead since the publish/publish-to merge (every spelling now routes
+// to callPublishTo). Delete once we're sure no out-of-tree caller imports it.
 fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const subj = try state.asString(args[0]);
@@ -300,7 +310,7 @@ fn coercePayload(arena: Allocator, v: Value) EvalError![]const u8 {
         .number => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
         .boolean => |b| if (b) "true" else "false",
         .nil => "",
-        .list, .keyword => error.TypeMismatch,
+        .list, .vector, .keyword => error.TypeMismatch,
     };
 }
 
@@ -328,6 +338,15 @@ fn callStrConcat(ctx: *Context, args: []const Value) EvalError!Value {
 
 fn callContains(args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
+    // `(contains? COLL ITEM)`: substring on strings, membership on vectors.
+    // Order matches `->` last-arg threading: the threaded value lands as
+    // ITEM in `(-> x (contains? coll))`.
+    if (args[0] == .vector) {
+        for (args[0].vector) |item| {
+            if (state.valueEql(item, args[1])) return .{ .boolean = true };
+        }
+        return .{ .boolean = false };
+    }
     const hay = try state.asString(args[0]);
     const needle = try state.asString(args[1]);
     return .{ .boolean = std.mem.indexOf(u8, hay, needle) != null };
@@ -343,6 +362,136 @@ fn callStartsEnds(args: []const Value, kind: AffixKind) EvalError!Value {
         .starts => std.mem.startsWith(u8, hay, needle),
         .ends => std.mem.endsWith(u8, hay, needle),
     } };
+}
+
+/// `(subject-with TOK ...)` / `(subject-with [TOK ...])`. Joins tokens
+/// with `.` to form a publishable subject. Tokens are coerced
+/// (numbers stringified canonically, booleans to `"true"`/`"false"`);
+/// empty tokens and the result are validated against publish rules.
+fn callSubjectWith(ctx: *Context, args: []const Value) EvalError!Value {
+    // Vector form: `(subject-with [a b c])` is sugar for `(subject-with a b c)`.
+    const toks: []const Value = if (args.len == 1 and args[0] == .vector)
+        args[0].vector
+    else
+        args;
+    if (toks.len == 0) return error.ArityMismatch;
+
+    var total: usize = toks.len - 1; // dots between tokens
+    var encoded = try ctx.arena.alloc([]const u8, toks.len);
+    for (toks, 0..) |t, i| {
+        const s = try coercePayload(ctx.arena, t);
+        if (s.len == 0) return error.InvalidSubject;
+        encoded[i] = s;
+        total += s.len;
+    }
+
+    const buf = try ctx.arena.alloc(u8, total);
+    var off: usize = 0;
+    for (encoded, 0..) |s, i| {
+        if (i > 0) {
+            buf[off] = '.';
+            off += 1;
+        }
+        @memcpy(buf[off..][0..s.len], s);
+        off += s.len;
+    }
+    subject_mod.validatePublish(buf) catch return error.InvalidSubject;
+    return .{ .string = buf };
+}
+
+/// `(now :date)` / `(now :hour)` / `(now :minute)` returns a UTC
+/// wall-clock string built from `ctx.wall_ms`:
+///
+///   :date    -> "YYYY-MM-DD"        (10 chars)
+///   :hour    -> "YYYY-MM-DDTHH"     (13 chars, RFC 3339 T separator)
+///   :minute  -> "YYYY-MM-DDTHHMM"   (15 chars, RFC 3339 basic form)
+///
+/// Subject-token-safe: no `:` (the RFC extended form would include one),
+/// just letters / digits / dashes. Useful for date/hour bucketing:
+/// `(publish! (subject-with "logs" (now :hour) "errors") payload)`.
+///
+/// The three granularities share one threadlocal buffer keyed by minute;
+/// recompute on a minute boundary, slice on every call. Cost on a hit
+/// is one integer compare and a slice. Single-threaded server, no
+/// locking. The returned slice is valid until the next call that
+/// crosses a minute boundary; rules consume it immediately so this
+/// isn't a real-world hazard.
+///
+/// `:minute` granularity is high cardinality (525,600 unique values per
+/// year per topic) when used as a subject token. Prefer `:hour` or
+/// `:date` unless you really mean it.
+fn callNow(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len != 1) return error.ArityMismatch;
+    if (args[0] != .keyword) return error.TypeMismatch;
+    const flag = args[0].keyword;
+
+    const len: usize = if (std.mem.eql(u8, flag, "date"))
+        10
+    else if (std.mem.eql(u8, flag, "hour"))
+        13
+    else if (std.mem.eql(u8, flag, "minute"))
+        15
+    else
+        return error.UnknownSymbol;
+
+    const buf = formatCachedMinute(ctx.wall_ms);
+    return .{ .string = buf[0..len] };
+}
+
+const ms_per_day: i64 = 86_400_000;
+const ms_per_minute: i64 = 60_000;
+
+const minute_sentinel: i64 = std.math.minInt(i64);
+
+// Single shared buffer for all three granularities. Minute strictly
+// contains hour strictly contains date, so :date is buf[0..10], :hour
+// is buf[0..13], :minute is buf[0..15]. Recompute only on minute
+// boundary. Buffer carries a couple of bytes of slack: bufPrint under
+// Zig 0.16 reports NoSpaceLeft on an exact-fit write.
+threadlocal var minute_cache: struct {
+    minute: i64 = minute_sentinel,
+    buf: [20]u8 = undefined,
+} = .{};
+
+fn formatCachedMinute(wall_ms: i64) []const u8 {
+    const minute_idx = @divFloor(wall_ms, ms_per_minute);
+    if (minute_cache.minute != minute_idx) {
+        const day = @divFloor(wall_ms, ms_per_day);
+        const ymd = civilFromDays(day);
+        // Cast year to u32 to avoid Zig 0.16's signed-print leading `+`.
+        // Years before 1 AD wrap, but we don't support those (subjects
+        // are for live data, not historical dating).
+        const year: u32 = @intCast(ymd.y);
+        const minute_of_day: u32 = @intCast(@mod(minute_idx, 24 * 60));
+        const hour: u8 = @intCast(minute_of_day / 60);
+        const minute: u8 = @intCast(minute_of_day % 60);
+        _ = std.fmt.bufPrint(
+            &minute_cache.buf,
+            "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}{d:0>2}",
+            .{ year, ymd.m, ymd.d, hour, minute },
+        ) catch unreachable;
+        minute_cache.minute = minute_idx;
+    }
+    return minute_cache.buf[0..];
+}
+
+/// Howard Hinnant's `civil_from_days`: integer-only conversion from
+/// "days since 1970-01-01 (UTC)" to (year, month, day). Proleptic
+/// Gregorian, no DST or timezone awareness.
+const Ymd = struct { y: i32, m: u8, d: u8 };
+
+fn civilFromDays(z_in: i64) Ymd {
+    const z = z_in + 719468;
+    const era: i64 = if (z >= 0) @divFloor(z, 146097) else @divFloor(z - 146096, 146097);
+    const doe: u32 = @intCast(z - era * 146097); // [0, 146096]
+    const yoe: u32 = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    const y: i64 = @as(i64, yoe) + era * 400;
+    const doy: u32 = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    const mp: u32 = (5 * doy + 2) / 153; // [0, 11]
+    const d: u32 = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    const m: u32 = if (mp < 10) mp + 3 else mp - 9; // [1, 12]
+    const year: i64 = if (m <= 2) y + 1 else y;
+    return .{ .y = @intCast(year), .m = @intCast(m), .d = @intCast(d) };
 }
 
 /// `(subject-token N)` / `(subject-token N S)`. 0-indexed; nil if out of range.
@@ -628,8 +777,8 @@ fn takeWindow(args: []const Value, idx: usize) EvalError!struct {
 
 const MovingKind = enum { avg, sum, max, min };
 
-/// `(moving-{avg,sum,max,min} N X)` — fixed-cap ring over the last N
-/// samples. `(moving-{avg,sum,max,min} :ms N X)` — time-evicted ring over
+/// `(moving-{avg,sum,max,min} N X)`: fixed-cap ring over the last N
+/// samples. `(moving-{avg,sum,max,min} :ms N X)`: time-evicted ring over
 /// the last N ms. The ring allocates on first sight and is keyed per
 /// (rule, op, subject, window-kind), so a rule that uses both forms gets
 /// distinct slots. First call's aggregate is over that one sample.
@@ -1008,7 +1157,7 @@ fn updateTimeBar(
     // Close the previous window if this tick crossed its boundary, then
     // start a fresh one with this sample. The latest sample in the closed
     // window is whatever was last seen *before* the boundary, which is
-    // what `bar.high`/`bar.low` already reflect — but we don't carry an
+    // what `bar.high`/`bar.low` already reflect, but we don't carry an
     // explicit prev-close, so we reuse `bar.high`'s sample slot
     // accounting: we just emit open/high/low and use bar's last seen as
     // close. For wall-clock bars, "close" = the most recent sample value
@@ -1077,6 +1226,58 @@ fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
     try ctx.emit(subj, out);
     return .nil;
+}
+
+// --- Debug --------------------------------------------------------------
+
+/// `(print! X)` / `(print! LABEL X)`. Logs one line via `std.log.info`
+/// (scope `print`) and returns X unchanged so it sits cleanly in `->`
+/// chains: `(-> payload-float (print! "raw") (round 1) (publish! ...))`.
+/// Not a publish; counters are not bumped. The loader counts these and
+/// the server warns at startup, so a left-in `print!` is not silent.
+fn callPrint(ctx: *Context, args: []const Value) EvalError!Value {
+    if (args.len < 1 or args.len > 2) return error.ArityMismatch;
+    const label: ?[]const u8 = if (args.len == 2) try state.asString(args[0]) else null;
+    const value = args[args.len - 1];
+
+    var buf: std.ArrayList(u8) = .empty;
+    if (label) |l| {
+        try buf.print(ctx.arena, "[{s}] {s} = ", .{ ctx.subject, l });
+    } else {
+        try buf.print(ctx.arena, "[{s}] = ", .{ctx.subject});
+    }
+    try formatValue(&buf, ctx.arena, value);
+
+    std.log.scoped(.print).info("{s}", .{buf.items});
+
+    return value;
+}
+
+fn formatValue(buf: *std.ArrayList(u8), gpa: Allocator, v: Value) !void {
+    switch (v) {
+        .nil => try buf.appendSlice(gpa, "nil"),
+        .boolean => |b| try buf.appendSlice(gpa, if (b) "true" else "false"),
+        .number => |n| try buf.print(gpa, "{d}", .{n}),
+        .symbol => |s| try buf.appendSlice(gpa, s),
+        .keyword => |s| try buf.print(gpa, ":{s}", .{s}),
+        .string => |s| try buf.print(gpa, "\"{s}\"", .{s}),
+        .list => |items| {
+            try buf.append(gpa, '(');
+            for (items, 0..) |it, i| {
+                if (i > 0) try buf.append(gpa, ' ');
+                try formatValue(buf, gpa, it);
+            }
+            try buf.append(gpa, ')');
+        },
+        .vector => |items| {
+            try buf.append(gpa, '[');
+            for (items, 0..) |it, i| {
+                if (i > 0) try buf.append(gpa, ' ');
+                try formatValue(buf, gpa, it);
+            }
+            try buf.append(gpa, ']');
+        },
+    }
 }
 
 // --- JSON ops -----------------------------------------------------------
