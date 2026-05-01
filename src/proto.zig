@@ -52,6 +52,29 @@ pub const ParseResult = struct {
     consumed: usize,
 };
 
+/// Server-to-client frames the mixer needs to interpret coming back from
+/// a worker. Slices alias into the input buffer.
+pub const ServerOp = union(enum) {
+    info: []const u8, // raw JSON body
+    msg: Msg,
+    pong,
+    ping,
+    ok,
+    err: []const u8,
+
+    pub const Msg = struct {
+        subject: []const u8,
+        sid: []const u8,
+        reply: ?[]const u8,
+        payload: []const u8,
+    };
+};
+
+pub const ServerParseResult = struct {
+    op: ServerOp,
+    consumed: usize,
+};
+
 /// Attempt to parse one client op from `buf`. Returned slices alias into
 /// `buf`; the caller must consume or copy before shifting / overwriting the
 /// buffer.
@@ -140,6 +163,72 @@ fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Parse
     };
 }
 
+/// Parse one server-to-client op from `buf`. Symmetric with parseClientOp.
+pub fn parseServerOp(buf: []const u8) ParseError!ServerParseResult {
+    const nl = std.mem.indexOfScalar(u8, buf, '\n') orelse {
+        if (buf.len > max_control_line) return error.ControlLineTooLong;
+        return error.NeedMoreData;
+    };
+    if (nl > max_control_line) return error.ControlLineTooLong;
+
+    const line_end = nl + 1;
+    const line = buf[0..nl];
+    const trimmed = std.mem.trimEnd(u8, line, "\r");
+    if (trimmed.len == 0) return error.MalformedOp;
+
+    const verb_end = std.mem.indexOfAny(u8, trimmed, " \t") orelse trimmed.len;
+    const verb = trimmed[0..verb_end];
+    const rest_raw = if (verb_end == trimmed.len) trimmed[0..0] else trimmed[verb_end + 1 ..];
+    const rest = std.mem.trim(u8, rest_raw, " \t");
+
+    if (eqIgnoreCase(verb, "PING")) return .{ .op = .ping, .consumed = line_end };
+    if (eqIgnoreCase(verb, "PONG")) return .{ .op = .pong, .consumed = line_end };
+    if (eqIgnoreCase(verb, "INFO")) return .{ .op = .{ .info = rest }, .consumed = line_end };
+    if (eqIgnoreCase(verb, "+OK")) return .{ .op = .ok, .consumed = line_end };
+    if (std.mem.startsWith(u8, trimmed, "-ERR")) {
+        return .{ .op = .{ .err = rest }, .consumed = line_end };
+    }
+    if (eqIgnoreCase(verb, "MSG")) return parseMsg(buf, line_end, rest);
+    return error.UnknownOp;
+}
+
+fn parseMsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!ServerParseResult {
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
+    const subject = it.next() orelse return error.InvalidArgs;
+    const sid = it.next() orelse return error.InvalidArgs;
+    const a = it.next() orelse return error.InvalidArgs;
+    const b = it.next();
+    if (it.next() != null) return error.InvalidArgs;
+
+    var reply: ?[]const u8 = null;
+    const nbytes_str = blk: {
+        if (b) |last| {
+            reply = a;
+            break :blk last;
+        }
+        break :blk a;
+    };
+    const nbytes = std.fmt.parseInt(usize, nbytes_str, 10) catch return error.InvalidArgs;
+    if (nbytes > max_payload) return error.PayloadTooLarge;
+
+    const after_header = buf[line_end..];
+    if (after_header.len < nbytes + 1) return error.NeedMoreData;
+    const payload = after_header[0..nbytes];
+    const tail = after_header[nbytes..];
+    const trailer_len: usize = switch (tail[0]) {
+        '\r' => if (tail.len < 2) return error.NeedMoreData
+                else if (tail[1] == '\n') 2
+                else return error.MalformedOp,
+        '\n' => 1,
+        else => return error.MalformedOp,
+    };
+
+    return .{
+        .op = .{ .msg = .{ .subject = subject, .sid = sid, .reply = reply, .payload = payload } },
+        .consumed = line_end + nbytes + trailer_len,
+    };
+}
+
 fn eqIgnoreCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| if (std.ascii.toUpper(x) != std.ascii.toUpper(y)) return false;
@@ -149,6 +238,11 @@ fn eqIgnoreCase(a: []const u8, b: []const u8) bool {
 // --- Server-to-client writers -------------------------------------------
 // These append into a caller-owned ArrayList(u8) (the per-conn outbound buffer).
 
+/// Process role advertised in INFO. Lets clients (and humans tcpdumping the
+/// wire) tell whether they're talking to the routing mixer or a backend
+/// worker. Daemons report .standalone.
+pub const Mode = enum { standalone, mixer, worker };
+
 pub fn writeInfo(
     gpa: Allocator,
     out: *std.ArrayList(u8),
@@ -156,6 +250,7 @@ pub fn writeInfo(
     client_id: u64,
     host: []const u8,
     port: u16,
+    mode: Mode,
 ) !void {
     try out.print(gpa,
         "INFO {{" ++
@@ -168,11 +263,12 @@ pub fn writeInfo(
             "\"port\":{d}," ++
             "\"max_payload\":{d}," ++
             "\"client_id\":{d}," ++
+            "\"monoblok_mode\":\"{s}\"," ++
             "\"headers\":false," ++
             "\"auth_required\":false," ++
             "\"tls_required\":false" ++
         "}}\r\n",
-        .{ server_id, server_id, package_version, builtin.zig_version_string, host, port, max_payload, client_id },
+        .{ server_id, server_id, package_version, builtin.zig_version_string, host, port, max_payload, client_id, @tagName(mode) },
     );
 }
 
@@ -316,6 +412,35 @@ test "writeMsg basic" {
     defer buf.deinit(testing.allocator);
     try writeMsg(testing.allocator, &buf, "foo", "1", null, "hi");
     try testing.expectEqualStrings("MSG foo 1 2\r\nhi\r\n", buf.items);
+}
+
+test "parseServerOp INFO" {
+    const r = try parseServerOp("INFO {\"server_id\":\"x\"}\r\n");
+    try testing.expectEqualStrings("{\"server_id\":\"x\"}", r.op.info);
+}
+
+test "parseServerOp MSG without reply" {
+    const r = try parseServerOp("MSG foo 7 5\r\nhello\r\n");
+    try testing.expectEqualStrings("foo", r.op.msg.subject);
+    try testing.expectEqualStrings("7", r.op.msg.sid);
+    try testing.expectEqual(@as(?[]const u8, null), r.op.msg.reply);
+    try testing.expectEqualStrings("hello", r.op.msg.payload);
+}
+
+test "parseServerOp MSG with reply" {
+    const r = try parseServerOp("MSG foo 7 reply.box 3\r\nhey\r\n");
+    try testing.expectEqualStrings("foo", r.op.msg.subject);
+    try testing.expectEqualStrings("reply.box", r.op.msg.reply.?);
+    try testing.expectEqualStrings("hey", r.op.msg.payload);
+}
+
+test "parseServerOp -ERR" {
+    const r = try parseServerOp("-ERR 'bad'\r\n");
+    try testing.expectEqualStrings("'bad'", r.op.err);
+}
+
+test "parseServerOp partial MSG payload returns NeedMoreData" {
+    try testing.expectError(error.NeedMoreData, parseServerOp("MSG foo 7 5\r\nhel"));
 }
 
 test "writeMsg with reply" {
