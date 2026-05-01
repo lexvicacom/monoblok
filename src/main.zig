@@ -304,6 +304,17 @@ pub fn main(init: std.process.Init) !void {
     installShutdownSignals();
 
     try loop.run(.until_done);
+
+    // Loop has stopped; router + rules are still live (their defers fire
+    // below). Take the final snapshot here rather than inside the shutdown
+    // callback so the loop thread isn't blocked on disk I/O while still
+    // technically running.
+    if (srv.snapshot_path != null) {
+        std.log.info("shutdown: writing final snapshot...", .{});
+        srv.snapshotSync() catch |err| {
+            std.log.warn("shutdown: snapshot failed: {s}", .{@errorName(err)});
+        };
+    }
 }
 
 /// Set by main before installing signal handlers; read by the handler
