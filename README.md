@@ -14,20 +14,21 @@ A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats
 
 ## Install
 
-Prebuilt Mac (Apple Silicon) and Linux (x86_64, aarch64) binaries on the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest). Pick the latest tag and substitute it for `VERSION`:
+One-liner (Mac Apple Silicon, Linux x86_64 / aarch64): downloads and unpacks the latest release into the current directory.
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
 ```
-VERSION=v0.0.36 # or replace with a later tag
-PLATFORM=macos-aarch64   # or linux-x86_64, linux-aarch64
-curl -LO "https://github.com/lexvicacom/monoblok/releases/download/${VERSION}/monoblok-${VERSION}-${PLATFORM}.tar.gz"
-tar -xzf "monoblok-${VERSION}-${PLATFORM}.tar.gz"
-sudo install "monoblok-${VERSION}-${PLATFORM}/monoblok" /usr/local/bin/monoblok
-monoblok --port 4222 --patchbay "monoblok-${VERSION}-${PLATFORM}/patchbay.edn"
+
+Or do it by hand from the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest) and run
+
+```sh
+./monoblok-${VERSION}-${PLATFORM}/monoblok --port 4222 --patchbay ./monoblok-${VERSION}-${PLATFORM}/patchbay.edn
 ```
 
 Then drive it with any NATS client:
 
-```
+```sh
 nats sub 'sensors.*'
 nats pub sensors.temp 42.5
 ```
@@ -36,7 +37,7 @@ nats pub sensors.temp 42.5
 
 Linux release tarballs ship a unit file and installer in [scripts/](./scripts/):
 
-```
+```sh
 sudo bash scripts/install-systemd.sh
 sudo systemctl enable --now monoblok
 journalctl -u monoblok -f
