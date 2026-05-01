@@ -4,9 +4,9 @@
 
 # monoblok
 
-monoblok is a one-file declarative stream-processor-broker that speaks NATS. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
+monoblok is a tiny messaging broker with built-in _processing__. It speaks a subset of the [NATS](https://nats.io) protocol. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
 
-It's a single small binary written in Zig. Last-value streams on `$LVC.*` give late subscribers the current value per subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where most of the data movement has no value. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
+Last-value streams on `$LVC.*` give late subscribers the current value per subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where most of the data movement has no value. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
 ## Try it out with no install
 
