@@ -288,8 +288,7 @@ Cost scales with matching rules per PUB, not total rules in the file: 1 rule and
 
 ## Building from source
 
-Zig 0.16.0 exactly. No system libraries (the bridge uses vendored [nats.zig](https://github.com/nats-io/nats.zig), pure-Zig with `std.crypto.tls`).
-
+Zig 0.16.0 required.
 ```
 zig build --release=safe
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
