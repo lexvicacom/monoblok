@@ -85,6 +85,7 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 | [`bridge.edn`](./examples/bridge.edn)             | forward selected subjects to a real NATS server                 |
 | [`demo.edn`](./examples/demo.edn)                 | tour of every primitive on `demo.sensors.*`                     |
 | [`lvc.edn`](./examples/lvc.edn)                   | `$LVC.>` cache replay: a late joiner gets the last value        |
+| [`mixer.edn`](./examples/mixer.edn)               | mixer mode: one process fronts N workers, sharded by first token (run with `python3 examples/mixer.py`) |
 
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
@@ -170,6 +171,27 @@ A local publish (from a NATS client or a patchbay rule) whose subject matches an
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./docs/patchbay-cheatsheet.md).
 
+## Mixer mode (experimental)
+
+`monoblok --mixer cfg.edn` runs a stateless front-end that spawns N worker processes (each a normal monoblok) and forwards each publish to the worker owning its first subject token. Clients connect to just one NATS endpoint. Sharding is operator-picked by first token; wildcard-first-token SUBs are rejected.
+
+```edn
+(mixer
+  :listen "tcp://0.0.0.0:4222"
+  :workers
+    ((:shard "SENSORS" :patchbay "examples/mixer-sensors.edn")
+     (:shard "ORDERS"  :patchbay "examples/mixer-orders.edn")
+     (:shard "*"       :patchbay "examples/mixer-default.edn")))
+```
+
+Subscriptions are coalesced across clients: the mixer keeps one upstream SUB per unique filter no matter how many clients want it, so worker fan-out cost scales with subjects, not subscribers. A hundred dashboards on the same filter look like one to the worker.
+
+The point is to partition a noisy inbound stream across cores when one core could in theory saturate: each worker handles its own shard's ingest, parsing, and rule evaluation on its own core, while the mixer just routes bytes. I think build-out before build-across is the right call: see how much one machine can do first, and worry about multiple pods or hosts later, if ever.
+
+If your NATS account has an organised subject space (hopefully it does), the same first-token discipline scales beyond one box: run independent monobloks on different machines, each handling a subtree of the hierarchy with hardware provisioned to suit. It is not a cluster or HA story though: if any process in the tree dies systemd restarts the lot.
+
+Runnable example: [`examples/mixer.py`](./examples/mixer.py).
+
 ## Listeners
 
 By default monoblok listens on TCP (`--port`, default 4222). It can additionally or instead listen on an AF_UNIX stream socket:
@@ -214,9 +236,11 @@ Loud by design (every PUB prints), so pipe stderr to a file when investigating. 
 
 ## Architecture
 
-One `xev.Loop` owns accept, per-connection read/write completions, router state, and the LVC. No mutexes, no atomics on the hot path. Fan-out appends bytes directly to each subscriber's outbound buffer and kicks a single `write` per connection per publish, with partial-write handling.
+Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
 
-Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's single-file through monoblok. Adding a second thread would mean atomics or locks on every shared structure (router, LVC, per-rule state) and would be slower in the common case. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads.
+Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's single-file through monoblok. Adding a second thread would mean atomics or locks on every shared structure (router, LVC, per-rule state) and would be slower in the common case. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. If you outgrow one core, see [Mixer mode](#mixer-mode-experimental) below.
+
+Mixer mode reuses that same single-loop model per worker. The mixer-to-worker hop runs over inherited socketpairs rather than TCP or AF_UNIX, which simplifies things since the processes share a host.
 
 Zig 0.16's `std.Io` networking didn't fit a single-loop model on 0.16 (the macOS Dispatch backend is thread-per-connection), so the loop is libxev: proper kqueue / io_uring / epoll / IOCP picked at comptime. The server logs which backend it's using at startup.
 

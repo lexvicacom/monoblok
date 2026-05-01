@@ -80,6 +80,9 @@ pub const Server = struct {
     server_id: []const u8,
     listen_host: []const u8,
     listen_port: u16,
+    /// Process role advertised in INFO. main.zig sets this to .worker when
+    /// running with --inherit-fd; otherwise .standalone.
+    mode: proto.Mode = .standalone,
 
     /// `--trace`: copied into `rules.Context.trace` per PUB.
     trace_enabled: bool = false,
@@ -190,6 +193,27 @@ pub const Server = struct {
                 onShutdown,
             );
         }
+    }
+
+    /// Worker mode: take a pre-connected socketpair fd from the mixer and
+    /// serve one Conn on it. No listen, no accept; on EOF the worker exits.
+    pub fn serveInheritedFd(self: *Server, fd: std.posix.fd_t) !void {
+        // Apply CLOEXEC + NONBLOCK ourselves; the mixer's posix_spawn passes
+        // the fd as-is, so it's almost certainly blocking and unflagged.
+        if (std.c.fcntl(fd, std.posix.F.SETFD, @as(c_int, std.posix.FD_CLOEXEC)) < 0) {
+            return error.FcntlFailed;
+        }
+        const flags = std.c.fcntl(fd, std.posix.F.GETFL, @as(c_int, 0));
+        if (flags < 0) return error.FcntlFailed;
+        const nonblock_bit: c_int = @bitCast(std.posix.O{ .NONBLOCK = true });
+        if (std.c.fcntl(fd, std.posix.F.SETFL, @as(c_int, flags | nonblock_bit)) < 0) {
+            return error.FcntlFailed;
+        }
+
+        const tcp = xev.TCP.initFd(fd);
+        const conn_state = try Conn.init(self, tcp);
+        std.log.info("conn {d} accepted (inherited fd {d})", .{ conn_state.router_conn.id, fd });
+        conn_state.start(self.loop);
     }
 
     /// Bind a listening AF_UNIX stream socket at `path` and feed accepted
@@ -557,6 +581,7 @@ const Conn = struct {
             id,
             server.listen_host,
             server.listen_port,
+            server.mode,
         );
 
         return self;

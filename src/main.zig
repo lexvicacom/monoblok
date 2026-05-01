@@ -12,10 +12,12 @@ pub const router = @import("router.zig");
 pub const server = @import("server.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const bridge = @import("bridge.zig");
+pub const mixer = @import("mixer.zig");
+pub const mixer_config = @import("mixer_config.zig");
 
 const manifest = @import("manifest");
 
-const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, clock_tick_ms, stats_tick_ms, validate, help, version };
+const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, clock_tick_ms, stats_tick_ms, validate, mixer, inherit_fd, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -31,6 +33,8 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--clock-tick-ms", .clock_tick_ms },
     .{ "--stats-tick-ms", .stats_tick_ms },
     .{ "--validate", .validate },
+    .{ "--mixer", .mixer },
+    .{ "--inherit-fd", .inherit_fd },
     .{ "--help", .help },
     .{ "-h", .help },
     .{ "--version", .version },
@@ -53,6 +57,8 @@ pub fn main(init: std.process.Init) !void {
     var clock_tick_ms: u64 = server.default_clock_tick_ms;
     var stats_tick_ms: u64 = server.default_stats_tick_ms;
     var validate_only = false;
+    var mixer_path: ?[]const u8 = null;
+    var inherit_fd: ?std.posix.fd_t = null;
 
     var it = try init.minimal.args.iterateAllocator(gpa);
     defer it.deinit();
@@ -96,6 +102,11 @@ pub fn main(init: std.process.Init) !void {
                 if (stats_tick_ms == 0) fatal("--stats-tick-ms must be > 0");
             },
             .validate => validate_only = true,
+            .mixer => mixer_path = it.next() orelse fatal("--mixer requires a path"),
+            .inherit_fd => {
+                const v = it.next() orelse fatal("--inherit-fd requires an fd number");
+                inherit_fd = std.fmt.parseInt(std.posix.fd_t, v, 10) catch fatal("invalid --inherit-fd value");
+            },
             .help => {
                 printUsage();
                 return;
@@ -106,6 +117,9 @@ pub fn main(init: std.process.Init) !void {
             },
         }
     }
+
+    if (mixer_path != null and inherit_fd != null) fatal("--mixer and --inherit-fd are mutually exclusive");
+    if (mixer_path) |mp| return mixer_main(gpa, arena, fsio, mp);
 
     const patchbay_src: ?[]u8 = if (patchbay_path) |path| try readFile(fsio, arena, path) else null;
 
@@ -211,8 +225,13 @@ pub fn main(init: std.process.Init) !void {
     }
     const server_id = try arena.dupe(u8, &id_buf);
 
-    if (port == 0 and unix_socket_path == null) {
+    if (port == 0 and unix_socket_path == null and inherit_fd == null) {
         fatal("nothing to listen on (--port 0 disables TCP and --unix-socket was not given)");
+    }
+    // Worker mode: only the inherited socketpair fd; no TCP/unix listeners.
+    if (inherit_fd != null) {
+        port = 0;
+        unix_socket_path = null;
     }
 
     var srv: server.Server = .{
@@ -223,6 +242,7 @@ pub fn main(init: std.process.Init) !void {
         .server_id = server_id,
         .listen_host = "0.0.0.0",
         .listen_port = port,
+        .mode = if (inherit_fd != null) .worker else .standalone,
         .tcp_enabled = port != 0,
         .stats_enabled = stats_enabled,
         .trace_enabled = trace_enabled,
@@ -255,6 +275,13 @@ pub fn main(init: std.process.Init) !void {
         };
         std.log.info("monoblok listening on unix:{s} id={s}", .{ usp, server_id });
     }
+    if (inherit_fd) |fd| {
+        try srv.serveInheritedFd(fd);
+        std.log.info(
+            "monoblok worker mode: pid={d} inherited_fd={d} id={s} patchbay_rules={d}",
+            .{ std.c.getpid(), fd, server_id, loaded_rules.len },
+        );
+    }
 
     // SIGINT/SIGTERM: signal handler notifies an xev.Async; real work runs
     // on the loop thread in onShutdown.
@@ -281,6 +308,49 @@ fn installShutdownSignals() void {
 fn onSignalRequestShutdown(_: std.posix.SIG) callconv(.c) void {
     // Async-signal-safe: `notify()` is a non-blocking eventfd/mach write.
     if (shutdown_server_ptr.load(.acquire)) |srv| srv.requestShutdown();
+}
+
+fn mixer_main(gpa: std.mem.Allocator, arena: std.mem.Allocator, fsio: Io, path: []const u8) !void {
+    std.log.info("monoblok mixer mode: pid={d} cfg={s}", .{ std.c.getpid(), path });
+
+    const src = try readFile(fsio, arena, path);
+    const cfg = mixer_config.loadConfig(arena, src) catch |err| {
+        std.debug.print("monoblok: mixer config error: {s}\n", .{@errorName(err)});
+        std.process.exit(2);
+    };
+
+    var loop = try xev.Loop.init(.{});
+    defer loop.deinit();
+    std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
+
+    var m: mixer.Mixer = .{
+        .gpa = gpa,
+        .loop = &loop,
+        .cfg = cfg,
+    };
+    try m.start();
+    defer m.deinit();
+
+    mixer_shutdown_ptr.store(&m, .release);
+    installMixerShutdownSignals();
+
+    try loop.run(.until_done);
+}
+
+var mixer_shutdown_ptr: std.atomic.Value(?*mixer.Mixer) = .init(null);
+
+fn installMixerShutdownSignals() void {
+    const act: std.posix.Sigaction = .{
+        .handler = .{ .handler = onMixerSignalShutdown },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(.INT, &act, null);
+    std.posix.sigaction(.TERM, &act, null);
+}
+
+fn onMixerSignalShutdown(_: std.posix.SIG) callconv(.c) void {
+    if (mixer_shutdown_ptr.load(.acquire)) |m| m.requestShutdown();
 }
 
 fn bridgePublishTrampoline(ctx: *anyopaque, subj: []const u8, payload: []const u8) void {
@@ -403,4 +473,5 @@ test {
     _ = router;
     _ = snapshot;
     _ = bridge;
+    _ = mixer_config;
 }
