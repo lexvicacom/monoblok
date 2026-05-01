@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="monoblok.png" alt="monoblok" width="480" style="border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.25);">
-</p>
-
 # monoblok
 
 monoblok is a tiny messaging broker with built-in _processing_. It speaks a subset of the [NATS](https://nats.io) protocol. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
