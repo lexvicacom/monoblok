@@ -15,7 +15,7 @@
 ; from the server's clock walker if a window elapses without a new tick.
 
 ; Tick bars: every 60 trades, regardless of how long that takes.
-(on "MARKET.*"
+(on "MARKET.*" :reentrant true
   (bar! 60 payload-float))
 
 ; Wall-clock bars, aligned to whole minutes. Useful when you want a

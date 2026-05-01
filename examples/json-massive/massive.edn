@@ -7,7 +7,7 @@
 ; --- Stocks ----------------------------------------------------------------
 
 ; Stock trade: T.<SYM> -> { p, s, ... }
-(on "T.*"
+(on "T.*" :reentrant true
   (json-demux! "p" "s" payload))
 
 ; Stock NBBO quote: Q.<SYM> -> { bp, bs, ap, as, ... }
@@ -24,7 +24,7 @@
 
 ; --- Crypto ----------------------------------------------------------------
 
-(on "XT.*"
+(on "XT.*" :reentrant true
   (json-demux! "p" "s" payload))
 
 (on "XQ.*"
@@ -36,7 +36,7 @@
 ; --- Forex -----------------------------------------------------------------
 
 ; Forex quotes use single-letter b/a (no sizes). Demux those.
-(on "C.*"
+(on "C.*" :reentrant true
   (json-demux! "b" "a" payload))
 
 (on "CA.*"

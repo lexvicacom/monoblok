@@ -9,7 +9,7 @@
 ;   devices.kitchen {"temp":12.5,"hum":80} -> devices.kitchen.temp 12.5
 ;                                             devices.kitchen.hum  80
 ; Missing, null, and nested fields are skipped silently.
-(on "devices.*"
+(on "devices.*" :reentrant true
   (json-demux! "temp" "hum" "batt" payload))
 
 ; Step 2: from here on, treat each fanned-out subject as a normal
