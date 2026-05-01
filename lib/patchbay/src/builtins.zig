@@ -1230,9 +1230,9 @@ fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
 
 // --- Debug --------------------------------------------------------------
 
-/// `(print! X)` / `(print! LABEL X)`. Writes one line to stderr and
-/// returns X unchanged so it sits cleanly in `->` chains:
-/// `(-> payload-float (print! "raw") (round 1) (publish! ...))`.
+/// `(print! X)` / `(print! LABEL X)`. Logs one line via `std.log.info`
+/// (scope `print`) and returns X unchanged so it sits cleanly in `->`
+/// chains: `(-> payload-float (print! "raw") (round 1) (publish! ...))`.
 /// Not a publish; counters are not bumped. The loader counts these and
 /// the server warns at startup, so a left-in `print!` is not silent.
 fn callPrint(ctx: *Context, args: []const Value) EvalError!Value {
@@ -1240,38 +1240,42 @@ fn callPrint(ctx: *Context, args: []const Value) EvalError!Value {
     const label: ?[]const u8 = if (args.len == 2) try state.asString(args[0]) else null;
     const value = args[args.len - 1];
 
-    std.debug.print("print! [{s}]", .{ctx.subject});
-    if (label) |l| std.debug.print(" {s}", .{l});
-    std.debug.print(" = ", .{});
-    printValue(value);
-    std.debug.print("\n", .{});
+    var buf: std.ArrayList(u8) = .empty;
+    if (label) |l| {
+        try buf.print(ctx.arena, "[{s}] {s} = ", .{ ctx.subject, l });
+    } else {
+        try buf.print(ctx.arena, "[{s}] = ", .{ctx.subject});
+    }
+    try formatValue(&buf, ctx.arena, value);
+
+    std.log.scoped(.print).info("{s}", .{buf.items});
 
     return value;
 }
 
-fn printValue(v: Value) void {
+fn formatValue(buf: *std.ArrayList(u8), gpa: Allocator, v: Value) !void {
     switch (v) {
-        .nil => std.debug.print("nil", .{}),
-        .boolean => |b| std.debug.print("{s}", .{if (b) "true" else "false"}),
-        .number => |n| std.debug.print("{d}", .{n}),
-        .symbol => |s| std.debug.print("{s}", .{s}),
-        .keyword => |s| std.debug.print(":{s}", .{s}),
-        .string => |s| std.debug.print("\"{s}\"", .{s}),
+        .nil => try buf.appendSlice(gpa, "nil"),
+        .boolean => |b| try buf.appendSlice(gpa, if (b) "true" else "false"),
+        .number => |n| try buf.print(gpa, "{d}", .{n}),
+        .symbol => |s| try buf.appendSlice(gpa, s),
+        .keyword => |s| try buf.print(gpa, ":{s}", .{s}),
+        .string => |s| try buf.print(gpa, "\"{s}\"", .{s}),
         .list => |items| {
-            std.debug.print("(", .{});
+            try buf.append(gpa, '(');
             for (items, 0..) |it, i| {
-                if (i > 0) std.debug.print(" ", .{});
-                printValue(it);
+                if (i > 0) try buf.append(gpa, ' ');
+                try formatValue(buf, gpa, it);
             }
-            std.debug.print(")", .{});
+            try buf.append(gpa, ')');
         },
         .vector => |items| {
-            std.debug.print("[", .{});
+            try buf.append(gpa, '[');
             for (items, 0..) |it, i| {
-                if (i > 0) std.debug.print(" ", .{});
-                printValue(it);
+                if (i > 0) try buf.append(gpa, ' ');
+                try formatValue(buf, gpa, it);
             }
-            std.debug.print("]", .{});
+            try buf.append(gpa, ']');
         },
     }
 }
