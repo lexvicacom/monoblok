@@ -42,7 +42,16 @@ const Op = enum {
 };
 
 const op_map = std.StaticStringMap(Op).initComptime(.{
-    .{ "publish", .publish },
+    // `publish!` is the canonical terminal-emit form. `publish-to!` is a
+    // deprecated alias kept only because args used to differ; semantics are
+    // identical now (lenient: nil-skip + numeric coercion). Un-banged
+    // spellings are TODO-removable aliases for in-tree patchbays.
+    .{ "publish!", .publish_to },
+    // TODO: remove `publish` alias once existing patchbays migrate to `publish!`.
+    .{ "publish", .publish_to },
+    // TODO: remove `publish-to!` alias; it predates the publish/publish-to merge.
+    .{ "publish-to!", .publish_to },
+    // TODO: remove `publish-to` alias once existing patchbays migrate to `publish!`.
     .{ "publish-to", .publish_to },
     .{ "subject-append", .subject_append },
     .{ "str-concat", .str_concat },
@@ -85,8 +94,14 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "rising-edge", .rising_edge },
     .{ "falling-edge", .falling_edge },
     .{ "json-get", .json_get },
+    .{ "json-demux!", .json_demux },
+    // TODO: remove `json-demux` alias once existing patchbays migrate to `json-demux!`.
     .{ "json-demux", .json_demux },
+    .{ "bar!", .bar },
+    // TODO: remove `bar` alias once existing patchbays migrate to `bar!`.
     .{ "bar", .bar },
+    .{ "count!", .count },
+    // TODO: remove `count` alias once existing patchbays migrate to `count!`.
     .{ "count", .count },
 });
 
@@ -254,6 +269,8 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
 
 // --- Side-effecting publish ops -----------------------------------------
 
+// TODO: dead since the publish/publish-to merge — every spelling now routes
+// to callPublishTo. Delete once we're sure no out-of-tree caller imports it.
 fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const subj = try state.asString(args[0]);
@@ -263,8 +280,10 @@ fn callPublish(ctx: *Context, args: []const Value) EvalError!Value {
     return .nil;
 }
 
-/// `(publish-to SUBJECT VALUE)`. Args flipped so it threads through `->`.
-/// No-op on nil VALUE (suppressed upstream gate).
+/// `(publish! SUBJECT VALUE)` (also `publish`, `publish-to!`, `publish-to`).
+/// Validates SUBJECT, coerces VALUE to a payload string (numbers stringified
+/// canonically, booleans → "true"/"false"), enqueues. No-op on nil VALUE so
+/// an upstream gate suppression self-terminates the chain.
 fn callPublishTo(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     if (args[1] == .nil) return .nil;

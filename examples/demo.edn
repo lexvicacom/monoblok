@@ -10,14 +10,14 @@
   (-> payload-float
       (round 1)
       (squelch)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 ;; 2. Deadband: analog-style suppression; ignore moves smaller than 0.5.
 ;;    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.delta`.
 (on "demo.sensors.*"
   (-> payload-float
       (deadband 0.5)
-      (publish-to (subject-append "delta"))))
+      (publish! (subject-append "delta"))))
 
 ;; 3. Moving average + deadband: smooth a noisy stream over 10 samples
 ;;    and only emit when the smoothed value drifts by at least 1.0.
@@ -26,7 +26,7 @@
   (-> payload-float
       (moving-avg 10)
       (deadband 1.0)
-      (publish-to (subject-append "smoothed"))))
+      (publish! (subject-append "smoothed"))))
 
 ;; 3b. Time-windowed average: 5-second sliding mean. Old samples expire
 ;;     by age, so the average self-drains when the publisher goes quiet.
@@ -34,7 +34,7 @@
 (on "demo.sensors.*"
   (-> payload-float
       (moving-avg :ms 5000)
-      (publish-to (subject-append "avg5s"))))
+      (publish! (subject-append "avg5s"))))
 
 ;; 4. Delta + squelch: emit the per-tick change, but only when it
 ;;    differs from the last delta (so a stream of identical values
@@ -43,15 +43,15 @@
 (on "demo.sensors.*"
   (-> (delta payload-float)
       (squelch)
-      (publish-to (subject-append "delta-abs"))))
+      (publish! (subject-append "delta-abs"))))
 
 ;; 5. Transition: one rule covers both edges of a threshold. Fires
 ;;    "hot" once on crossing > 28, "cool" once on crossing back.
 ;;    Watch `demo.sensors.*.alert` and `demo.sensors.*.ok`.
 (on "demo.sensors.*"
   (transition (> payload-float 28.0)
-    (publish-to (subject-append "alert") "hot")
-    (publish-to (subject-append "ok")    "cool")))
+    (publish! (subject-append "alert") "hot")
+    (publish! (subject-append "ok")    "cool")))
 
 ;; 6. Hold-off: leading-edge rate gate. While above 40, emit at most
 ;;    once every 2s. Publish faster than that and extra publishes are
@@ -60,21 +60,21 @@
   (when (> payload-float 40.0)
     (-> payload
         (hold-off 2000)
-        (publish-to (subject-append "overload")))))
+        (publish! (subject-append "overload")))))
 
 ;; 7. Rising-edge: only fire on the false-to-true transition. Useful
 ;;    when you care about "went high" but not "is high."
 ;;    Watch `demo.sensors.*.spike`.
 (on "demo.sensors.*"
   (-> (rising-edge (> payload-float 50.0))
-      (publish-to (subject-append "spike"))))
+      (publish! (subject-append "spike"))))
 
 ;; 8. Alert mirror: anything on `demo.log.*` whose payload contains
 ;;    "alert" is copied to `demo.alerts`. Subject-token demo too:
 ;;    `(subject-token 2)` is the third dot-separated token.
 (on "demo.log.*"
   (when (contains? payload "alert")
-    (publish "demo.alerts"
+    (publish! "demo.alerts"
       (str-concat "[" (subject-token 1) "] " payload))))
 
 ;; 9. Count: a running tally of threshold crossings, not raw samples.
@@ -82,7 +82,7 @@
 ;;    the new total to `demo.sensors.*.count`. Pair with example 7
 ;;    (rising-edge "spike") and watch the count climb in lockstep.
 (on "demo.sensors.*"
-  (count (rising-edge (> payload-float 50.0))))
+  (count! (rising-edge (> payload-float 50.0))))
 
 (bridge
    :servers  ("nats://127.0.0.1:4223")

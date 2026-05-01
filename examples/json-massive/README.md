@@ -54,7 +54,7 @@ the original JSON or re-implementing the dedupe.
 
 [massive.edn](./massive.edn) runs a staged pipeline against the trade subject:
 
-1. `(json-demux ...)` against `T.*` fans out `T.<SYM>.p`, `T.<SYM>.s`.
+1. `(json-demux! ...)` against `T.*` fans out `T.<SYM>.p`, `T.<SYM>.s`.
 2. A second rule matches the demuxed `T.*.p` subject (via re-entry) and
    emits a rounded, deduplicated mirror on `T.<SYM>.p.stable`.
 3. A third rule alerts on big single-trade jumps to `alerts.trade.<SYM>`.
@@ -68,7 +68,7 @@ staged form work.
 just demuxes those frames into scalars instead of recomputing
 open / high / low / close from raw trades. If you only have a trade
 stream and need to build bars locally, see `examples/bars.edn` (uses
-`bar`).
+`bar!`).
 
 ## mock_producer environment variables
 

@@ -5,14 +5,14 @@
   (-> payload-float
       (round 3)
       (squelch)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 ; Fan out big jumps (>= 1.0 move between consecutive ticks) to
 ; alerts.market.<SYM>. delta is 0 on first sight so this stays quiet
 ; until we have a prior value.
 (on "MARKET.*"
   (when (>= (abs (delta payload-float)) 1.0)
-    (publish
+    (publish!
       (str-concat "alerts.market." (subject-token 1))
       payload)))
 

@@ -31,13 +31,14 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 
 ## Side effects
 
+Trailing `!` marks forms that emit (terminal effect, return nil). Scan a rule and the bangs are the lines that put bytes on the wire; everything else is pure. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) still work as aliases for now. `publish!` and `publish-to!` are now identical (the args-flipped distinction is gone): both take `SUBJECT VALUE`, both coerce numbers, both no-op on nil VALUE.
+
 | form | effect |
 |------|--------|
-| `(publish SUBJECT PAYLOAD)` | emit a publish |
-| `(publish-to SUBJECT VALUE)` | publish with args flipped (threads); no-op if VALUE is nil |
-| `(json-demux KEY... PAYLOAD)` | break a top-level JSON object out onto `<subject>.<key>` for each KEY |
-| `(count)` / `(count COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
-| `(bar WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
+| `(publish! SUBJECT VALUE)` | emit a publish; no-op if VALUE is nil; numbers coerced canonically |
+| `(json-demux! KEY... PAYLOAD)` | break a top-level JSON object out onto `<subject>.<key>` for each KEY |
+| `(count!)` / `(count! COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
+| `(bar! WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
 
 ## Strings and subjects
 
@@ -72,7 +73,7 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 ## Stateful gates
 
 State is per `(rule, subject, op)` and survives snapshot reload. Gates
-return their input on pass, `nil` on suppress; `publish-to` is a no-op
+return their input on pass, `nil` on suppress; `publish!` is a no-op
 on nil, so a chain of gates self-terminates.
 
 | form | passes when |
@@ -126,7 +127,7 @@ Backed by `std.json.Scanner`, so escapes / `\uXXXX` work.
 | form | returns |
 |------|---------|
 | `(json-get KEY PAYLOAD)` | field as number / string / bool, or nil if missing / malformed / null / nested |
-| `(json-demux KEY... PAYLOAD)` | side-effecting; publishes each present field to `<subject>.<key>`, returns nil |
+| `(json-demux! KEY... PAYLOAD)` | side-effecting; publishes each present field to `<subject>.<key>`, returns nil |
 
 ## Bridge keywords
 

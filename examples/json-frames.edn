@@ -10,7 +10,7 @@
 ;                                             devices.kitchen.hum  80
 ; Missing, null, and nested fields are skipped silently.
 (on "devices.*"
-  (json-demux "temp" "hum" "batt" payload))
+  (json-demux! "temp" "hum" "batt" payload))
 
 ; Step 2: from here on, treat each fanned-out subject as a normal
 ; scalar stream. Round, deadband, publish to a "stable" mirror.
@@ -18,19 +18,19 @@
   (-> payload-float
       (round 1)
       (deadband 0.2)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 (on "devices.*.hum"
   (-> payload-float
       (round 0)
       (squelch)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 ; Inline lookup: sometimes you only want one field from a frame and
 ; don't need the demux. Pull it straight off the JSON and into a
 ; threaded pipeline. json-get returns nil on missing/malformed/nested,
-; and publish-to is a no-op on nil, so the rule self-skips bad frames.
+; and publish! is a no-op on nil, so the rule self-skips bad frames.
 (on "devices.*"
   (-> payload
       (json-get "batt")
-      (publish-to (subject-append "battery"))))
+      (publish! (subject-append "battery"))))

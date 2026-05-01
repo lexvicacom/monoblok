@@ -14,7 +14,7 @@ If the parens look alien: every list `(head arg1 arg2 ...)` is a call
 where `head` is the operator and the rest are its arguments. No commas,
 no infix, no precedence to memorise; `(+ 1 2 3)` is `1 + 2 + 3` and
 `(> x 10)` is `x > 10`. Nesting is just a list inside a list:
-`(publish (subject-append "high") payload)` calls `publish` with two
+`(publish! (subject-append "high") payload)` calls `publish!` with two
 args, the first of which is itself the result of calling
 `subject-append`. Strings are double-quoted, numbers bare, and
 everything else (`subject`, `payload`, `when`, `+`) is a symbol
@@ -131,18 +131,27 @@ error, not a silent reinterpretation.
 
 ## Side effects
 
-`(publish SUBJECT PAYLOAD)` validates `SUBJECT` as a publishable
-subject (no wildcards, no `$LVC.*`) and enqueues a fan-out. Returns
-`nil`. Publishes from rules participate in normal delivery + LVC
-caching. By default they are not fed back through rule evaluation;
-opt in per rule with `:reentrant true` (see "Re-entry" below).
+Forms whose entire purpose is to emit (terminal effect, return nil)
+carry a trailing `!`. Scan a rule and the bangs are the lines that put
+bytes on the wire; everything else is pure or value-returning.
+Un-banged spellings (`publish`, `publish-to`, `publish-to!`,
+`json-demux`, `count`, `bar`) still work as aliases for now.
 
-`(publish-to SUBJECT VALUE)` is the same thing with args flipped so it
-slots on the tail of a `->` pipeline. Coerces numeric `VALUE` to its
-canonical string form. If `VALUE` is `nil` (which is what a gate
-returns when it suppresses), `publish-to` is a no-op. That nil
-short-circuit is what makes the pipeline form below read
-top-to-bottom.
+`(publish! SUBJECT VALUE)` validates `SUBJECT` as a publishable
+subject (no wildcards, no `$LVC.*`), coerces `VALUE` to its canonical
+string form (numbers stringified, booleans → `"true"` / `"false"`,
+strings passed through), and enqueues a fan-out. Returns `nil`.
+Publishes from rules participate in normal delivery + LVC caching. By
+default they are not fed back through rule evaluation; opt in per rule
+with `:reentrant true` (see "Re-entry" below).
+
+If `VALUE` is `nil` (which is what a gate returns when it suppresses),
+`publish!` is a no-op. That nil short-circuit is what makes the
+pipeline form below read top-to-bottom.
+
+`publish!` and `publish-to!` are now identical (`publish-to` predates
+the merge, when `publish` was a strict-string-only sibling). Use
+`publish!`.
 
 ## Re-entry
 
@@ -155,12 +164,12 @@ Opt in per rule with `:reentrant true` between the filter and the body:
 
 ```edn
 (on "devices.*" :reentrant true
-  (json-demux "temp" "hum" payload))
+  (json-demux! "temp" "hum" payload))
 
 (on "devices.*.temp"
   (-> payload-float
       (round 0)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 ```
 
 The first rule is reentrant, so its demuxed `devices.kitchen.temp`
@@ -187,17 +196,17 @@ last:
 (-> payload-float
     (round 1)
     (squelch)
-    (publish-to (subject-append "stable")))
+    (publish! (subject-append "stable")))
 ```
 
 expands to:
 
 ```edn
-(publish-to (subject-append "stable") (squelch (round 1 payload-float)))
+(publish! (subject-append "stable") (squelch (round 1 payload-float)))
 ```
 
 The gates (`squelch`, `deadband`) return the value on pass and `nil`
-on suppress, so `publish-to` at the tail becomes a no-op when the
+on suppress, so `publish!` at the tail becomes a no-op when the
 gate blocks. You don't need `when` anywhere in a threaded pipeline.
 
 ## Idempotent filters
@@ -221,7 +230,7 @@ boolean instead of value-or-nil, which composes cleanly inside
 
 Gates return the value on pass and `nil` on suppress. Truthy-on-pass
 keeps them usable as conditions in `when` / `and`, while passing the
-value through makes them compose directly with `->` and `publish-to`.
+value through makes them compose directly with `->` and `publish!`.
 `squelch` stores the stringified value; `deadband` stores the numeric
 anchor and only updates it on an accepted change. Both are **per rule,
 per subject**: two rules watching the same subject don't interfere,
@@ -233,13 +242,13 @@ and the first message a rule sees on a new subject always passes.
   (-> payload-float
       (round 1)
       (squelch)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 ; Analog deadband: suppress changes below 0.5.
 (on "sensors.*"
   (-> payload-float
       (deadband 0.5)
-      (publish-to (subject-append "delta"))))
+      (publish! (subject-append "delta"))))
 ```
 
 ## Time-based gates
@@ -268,7 +277,7 @@ same as the other gates.
   (when (> payload-float 80.0)
     (-> payload
         (hold-off 2000)
-        (publish-to (subject-append "alert")))))
+        (publish! (subject-append "alert")))))
 ```
 
 Stacks cleanly with value-based gates when you want both: "only if the
@@ -279,7 +288,7 @@ value changed, and at most once per 500ms."
     (round 1)
     (squelch)
     (hold-off 500)
-    (publish-to (subject-append "stable")))
+    (publish! (subject-append "stable")))
 ```
 
 `(throttle WINDOW MAX X)` is the related but distinct gate for "at most
@@ -295,7 +304,7 @@ about the spacing.
 (on "alerts.>"
   (-> payload
       (throttle :ms 60000 5)
-      (publish-to (subject-append "rate-limited"))))
+      (publish! (subject-append "rate-limited"))))
 ```
 
 `WINDOW` is either a bare integer `N` (tick window) or `:ms N` (time
@@ -320,7 +329,7 @@ A window is either a tick count or a wall-clock duration:
 Wall-clock time is the ingress timestamp stamped once per inbound PUB
 (same source `hold-off` reads). For windows that elapse without a new
 PUB, the server's clock walker (~500ms cadence) evicts old samples and
-closes any time-windowed `bar` whose window has fully passed, so a
+closes any time-windowed `bar!` whose window has fully passed, so a
 quiet feed doesn't leave you with a stale aggregate or an unflushed
 bar.
 
@@ -348,7 +357,7 @@ with a generous `N`.
   (-> payload-float
       (moving-avg 10)
       (deadband 1.0)
-      (publish-to (subject-append "smoothed"))))
+      (publish! (subject-append "smoothed"))))
 
 ; Same idea, but window over the last 5 seconds of wall-clock time
 ; instead of the last N samples. Useful when sample cadence varies and
@@ -356,7 +365,7 @@ with a generous `N`.
 (on "sensors.*"
   (-> payload-float
       (moving-avg :ms 5000)
-      (publish-to (subject-append "avg5s"))))
+      (publish! (subject-append "avg5s"))))
 
 ; Volatility detector: alert if the spread over the last 20 samples
 ; exceeds 5 units. Ring ops return numbers, so the non-threaded form
@@ -364,7 +373,7 @@ with a generous `N`.
 (on "sensors.*"
   (when (> (- (moving-max 20 payload-float)
               (moving-min 20 payload-float)) 5.0)
-    (publish (subject-append "volatile") payload)))
+    (publish! (subject-append "volatile") payload)))
 ```
 
 Window ops return numbers, so they compose directly with the
@@ -402,19 +411,19 @@ percentile/median (sort copy) and O(n) for stddev/variance.
 (on "rpc.latency.*"
   (-> payload-float
       (percentile 200 0.99)
-      (publish-to (subject-append "p99"))))
+      (publish! (subject-append "p99"))))
 
 ; Live event rate per subject, expressed in Hz.
 (on "events.>"
   (-> payload
       (rate :ms 1000)
-      (publish-to (subject-append "rate-hz"))))
+      (publish! (subject-append "rate-hz"))))
 
 ; Volatility flag: alert if the price stddev over the last minute
 ; jumps above 0.5.
 (on "MARKET.*"
   (when (> (stddev :ms 60000 payload-float) 0.5)
-    (publish (subject-append "volatile") payload)))
+    (publish! (subject-append "volatile") payload)))
 ```
 
 ## Edge gates
@@ -442,8 +451,8 @@ branches.
 ; Alert on cross-up, all-clear on cross-down, in a single rule.
 (on "temp.*.*"
   (transition (> (moving-avg 60 payload-float) 28.0)
-    (publish-to (subject-append "alert") "hot")
-    (publish-to (subject-append "ok")    "cool")))
+    (publish! (subject-append "alert") "hot")
+    (publish! (subject-append "ok")    "cool")))
 ```
 
 Compared to pairing two edge-gate rules, this evaluates the predicate
@@ -461,11 +470,11 @@ handled correctly.
 | form                          | what it does                                                                |
 |-------------------------------|-----------------------------------------------------------------------------|
 | `(json-get KEY PAYLOAD)`      | return that field's value as a number, string, or boolean. Nil otherwise.   |
-| `(json-demux KEY ... PAYLOAD)` | publish each KEY's value to `<subject>.<key>`. Side-effecting. Returns nil. |
+| `(json-demux! KEY ... PAYLOAD)` | publish each KEY's value to `<subject>.<key>`. Side-effecting. Returns nil. |
 
 `json-get` returns `nil` whenever the field can't be turned into a
 scalar (key missing, payload not a JSON object, value is `null`, value
-is a nested object/array). That nil flows through `publish-to` as a
+is a nested object/array). That nil flows through `publish!` as a
 no-op, so a JSON-aware pipeline reads exactly like the analog ones:
 
 ```edn
@@ -475,10 +484,10 @@ no-op, so a JSON-aware pipeline reads exactly like the analog ones:
       (json-get "temp")
       (round 1)
       (squelch)
-      (publish-to (subject-append "temp.stable"))))
+      (publish! (subject-append "temp.stable"))))
 ```
 
-`json-demux` is the breakout: one wire carrying a multi-field frame
+`json-demux!` is the breakout: one wire carrying a multi-field frame
 fanned out to one sub-subject per field, like a demultiplexer chip
 selecting an output line per key. Note that the publishing is
 implicit, the form has no return value to thread on. Useful as the
@@ -490,10 +499,10 @@ can stay scalar.
 ; sensors.foo {"temp":12.5,"hum":80} -> sensors.foo.temp 12.5
 ;                                       sensors.foo.hum  80
 (on "sensors.*"
-  (json-demux "temp" "hum" payload))
+  (json-demux! "temp" "hum" payload))
 ```
 
-If a key is missing, null, or holds a nested value, `json-demux` skips
+If a key is missing, null, or holds a nested value, `json-demux!` skips
 it silently rather than emitting an error. Numbers come out canonically
 formatted, strings are unquoted, booleans render as `true` / `false`.
 
@@ -503,7 +512,7 @@ easily write the threaded form `(-> payload (json-get "temp") ...)`.
 
 ## Bars
 
-`(bar WINDOW X)` is an OHLC bar accumulator for streams where you want
+`(bar! WINDOW X)` is an OHLC bar accumulator for streams where you want
 open / high / low / close summaries instead of every tick. `WINDOW` is
 either `N` (close every N samples) or `:ms N` (close every N ms of
 wall-clock time, aligned to `floor(now/N)*N`). Each call
@@ -534,13 +543,13 @@ within roughly half its tick of the wall-clock boundary.
 ```edn
 ; 60-tick OHLC bars per symbol on a market feed.
 (on "MARKET.*"
-  (bar 60 payload-float))
+  (bar! 60 payload-float))
 
 ; 1-minute aligned OHLC bars on the same feed. Bars cover wall-clock
 ; minutes (00:00..00:01, 00:01..00:02, ...) regardless of how many
 ; ticks land in each.
 (on "MARKET.*"
-  (bar :ms 60000 payload-float))
+  (bar! :ms 60000 payload-float))
 ```
 
 A subscriber to `MARKET.AAPL.bar.>` then sees a clean burst of four
@@ -548,16 +557,16 @@ messages per closed bar, in `open / high / low / close` order, with no
 intermediate per-tick noise.
 
 Volume isn't reported. For tick bars it's always exactly N; for time
-bars, pair the rule with `(count)` if you want the per-bar tick count.
+bars, pair the rule with `(count!)` if you want the per-bar tick count.
 
 ## Running counters
 
-`(count)` is a side-effecting running counter, per `(rule, subject)`.
+`(count!)` is a side-effecting running counter, per `(rule, subject)`.
 Each call increments and publishes the new total to `<subject>.count`.
 Returns nil so it threads or sits in a `do` block without disturbing the
 value being passed through.
 
-With one optional argument, `(count COND)` only increments when `COND`
+With one optional argument, `(count! COND)` only increments when `COND`
 is truthy (any value type, same rules as `if` / `when`). The predicate
 itself is fully general, so it composes with everything the dialect
 already has (`contains?`, comparisons, `changed?`, `rising-edge`, ...).
@@ -565,15 +574,15 @@ already has (`contains?`, comparisons, `changed?`, `rising-edge`, ...).
 ```edn
 ; Total tick count per symbol, live on MARKET.AAPL.count etc.
 (on "MARKET.*"
-  (count))
+  (count!))
 
 ; Error-event counter per service.
 (on "events.>"
-  (count (contains? payload "ERROR")))
+  (count! (contains? payload "ERROR")))
 
 ; Threshold breaches.
 (on "sensors.>"
-  (count (> payload-float 100)))
+  (count! (> payload-float 100)))
 ```
 
 State is a single number, snapshot-persisted, so a restart resumes from

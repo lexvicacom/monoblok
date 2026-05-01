@@ -215,13 +215,13 @@ test "parse nested list" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const vs = try parseAll(arena, "(on \"foo.*\" (publish (subject-append \"hi\") payload))");
+    const vs = try parseAll(arena, "(on \"foo.*\" (publish! (subject-append \"hi\") payload))");
     try testing.expectEqual(@as(usize, 1), vs.len);
     const top = vs[0].list;
     try testing.expectEqualStrings("on", top[0].symbol);
     try testing.expectEqualStrings("foo.*", top[1].string);
     const body = top[2].list;
-    try testing.expectEqualStrings("publish", body[0].symbol);
+    try testing.expectEqualStrings("publish!", body[0].symbol);
     const arg0 = body[1].list;
     try testing.expectEqualStrings("subject-append", arg0[0].symbol);
     try testing.expectEqualStrings("hi", arg0[1].string);

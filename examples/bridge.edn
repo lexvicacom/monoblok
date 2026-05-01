@@ -19,4 +19,4 @@
   :export  ("telemetry.>"))
 
 (on "telemetry.*"
-  (publish (subject-append "echoed") payload))
+  (publish! (subject-append "echoed") payload))

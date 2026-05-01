@@ -16,16 +16,16 @@
 
 ; Tick bars: every 60 trades, regardless of how long that takes.
 (on "MARKET.*"
-  (bar 60 payload-float))
+  (bar! 60 payload-float))
 
 ; Wall-clock bars, aligned to whole minutes. Useful when you want a
 ; clean per-minute chart row regardless of trade rate.
 ;(on "MARKET.*"
-;  (bar :ms 60000 payload-float))
+;  (bar! :ms 60000 payload-float))
 
 ; Downstream alerting can sit on the closed-bar stream and stay clean of
 ; intra-bar noise. Example: alert if the bar's close jumps by >= 1.0
 ; from the prior bar's close on the same symbol.
 (on "MARKET.*.bar.close"
   (when (>= (abs (delta payload-float)) 1.0)
-    (publish (str-concat "alerts.market." (subject-token 1)) payload)))
+    (publish! (str-concat "alerts.market." (subject-token 1)) payload)))

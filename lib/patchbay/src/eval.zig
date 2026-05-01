@@ -411,10 +411,15 @@ fn isLeafEmitter(v: Value) bool {
     if (v != .list or v.list.len == 0) return false;
     if (v.list[0] != .symbol) return false;
     const head = v.list[0].symbol;
-    return std.mem.eql(u8, head, "publish") or
+    return std.mem.eql(u8, head, "publish!") or
+        std.mem.eql(u8, head, "publish") or
+        std.mem.eql(u8, head, "publish-to!") or
         std.mem.eql(u8, head, "publish-to") or
+        std.mem.eql(u8, head, "count!") or
         std.mem.eql(u8, head, "count") or
+        std.mem.eql(u8, head, "json-demux!") or
         std.mem.eql(u8, head, "json-demux") or
+        std.mem.eql(u8, head, "bar!") or
         std.mem.eql(u8, head, "bar");
 }
 

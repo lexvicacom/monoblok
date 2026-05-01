@@ -8,15 +8,15 @@
 
 ; Stock trade: T.<SYM> -> { p, s, ... }
 (on "T.*"
-  (json-demux "p" "s" payload))
+  (json-demux! "p" "s" payload))
 
 ; Stock NBBO quote: Q.<SYM> -> { bp, bs, ap, as, ... }
 (on "Q.*"
-  (json-demux "bp" "bs" "ap" "as" payload))
+  (json-demux! "bp" "bs" "ap" "as" payload))
 
 ; Stock minute aggregate: AM.<SYM> -> { o, h, l, c, v, vw, ... }
 (on "AM.*"
-  (json-demux "o" "h" "l" "c" "v" "vw" payload))
+  (json-demux! "o" "h" "l" "c" "v" "vw" payload))
 
 ; --- Options (same T/Q ev letters as stocks, OCC symbol with O: prefix) ----
 ; The "T.*"/"Q.*" rules above already cover options because the wildcard
@@ -25,22 +25,22 @@
 ; --- Crypto ----------------------------------------------------------------
 
 (on "XT.*"
-  (json-demux "p" "s" payload))
+  (json-demux! "p" "s" payload))
 
 (on "XQ.*"
-  (json-demux "bp" "bs" "ap" "as" payload))
+  (json-demux! "bp" "bs" "ap" "as" payload))
 
 (on "XA.*"
-  (json-demux "o" "h" "l" "c" "v" "vw" payload))
+  (json-demux! "o" "h" "l" "c" "v" "vw" payload))
 
 ; --- Forex -----------------------------------------------------------------
 
 ; Forex quotes use single-letter b/a (no sizes). Demux those.
 (on "C.*"
-  (json-demux "b" "a" payload))
+  (json-demux! "b" "a" payload))
 
 (on "CA.*"
-  (json-demux "o" "h" "l" "c" "v" payload))
+  (json-demux! "o" "h" "l" "c" "v" payload))
 
 ; --- Cleanup pipelines (consume demuxed subjects via re-entry) -------------
 
@@ -49,7 +49,7 @@
   (-> payload-float
       (round 2)
       (squelch)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 ; Alert on big single-trade price jumps (>= 1.0 between consecutive ticks
 ; on the same symbol). delta is 0 on first sight so this stays quiet
@@ -60,14 +60,14 @@
 ; (and in the crypto/fx rules below) to build a per-symbol alert subject.
 (on "T.*.p"
   (when (>= (abs (delta payload-float)) 1.0)
-    (publish
+    (publish!
       (str-concat "alerts.trade." (subject-token 1))
       payload)))
 
 ; Crypto prices move bigger; alert on >= 1% moves between trades.
 (on "XT.*.p"
   (when (>= (abs (/ (delta payload-float) payload-float)) 0.01)
-    (publish
+    (publish!
       (str-concat "alerts.crypto." (subject-token 1))
       payload)))
 
@@ -75,6 +75,6 @@
 ; the demuxed bid; cheap proxy for "the market moved".
 (on "C.*.b"
   (when (>= (abs (delta payload-float)) 0.0005)
-    (publish
+    (publish!
       (str-concat "alerts.fx." (subject-token 1))
       payload)))

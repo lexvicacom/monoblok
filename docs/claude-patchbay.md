@@ -43,7 +43,7 @@ unless you ask for them. Opt a rule into re-entry with `(on FILTER
 :reentrant true BODY)`: its emissions then feed back through every
 matching rule (including itself), capped at depth 8 so a rule whose
 emission matches its own filter can't loop forever. Reach for it when
-you genuinely want a multi-stage pipeline (e.g. `json-demux` head rule
+you genuinely want a multi-stage pipeline (e.g. `json-demux!` head rule
 emitting scalars that downstream rules condition); otherwise leave it
 off.
 
@@ -93,8 +93,9 @@ Strings / subjects:
 
 Side effects:
 
-- `(publish SUBJECT PAYLOAD)` validates and enqueues. Returns nil.
-- `(publish-to SUBJECT VALUE)` same but args flipped for pipelines. No-op if VALUE is nil. Numbers are stringified canonically.
+Forms whose entire purpose is to emit (terminal effect, return nil) carry a trailing `!`. Scanning a rule, the bangs are the lines that put bytes on the wire; everything else is pure or value-returning. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) are still accepted as aliases. `publish` and `publish-to` were once distinct (args flipped); they collapsed to one form when the distinction stopped mattering. Use `publish!`.
+
+- `(publish! SUBJECT VALUE)` validates SUBJECT, coerces VALUE (numbers stringified canonically, booleans → "true"/"false"), enqueues. No-op if VALUE is nil so a suppressed gate upstream self-terminates the chain. Returns nil.
 
 Idempotent filters (per-rule, per-subject state; first sight always passes / is treated as "no prior"):
 
@@ -124,16 +125,16 @@ Edge gates (take a boolean, fire once per transition; first sight never fires):
 
 JSON (top-level object only, no JSON path, value-last):
 
-- `(json-get KEY PAYLOAD)` returns the field as number / string / boolean, or nil if missing, malformed, null, or nested. Threads through `->` and short-circuits `publish-to` on nil.
-- `(json-demux KEY ... PAYLOAD)` side-effecting demux: for each KEY, publishes the field's value to `<subject>.<key>`. Skips missing / null / nested fields silently. Returns nil. Use as the head rule for JSON-emitting devices so the rest of the patchbay stays scalar.
+- `(json-get KEY PAYLOAD)` returns the field as number / string / boolean, or nil if missing, malformed, null, or nested. Threads through `->` and short-circuits `publish!` on nil.
+- `(json-demux! KEY ... PAYLOAD)` side-effecting demux: for each KEY, publishes the field's value to `<subject>.<key>`. Skips missing / null / nested fields silently. Returns nil. Use as the head rule for JSON-emitting devices so the rest of the patchbay stays scalar.
 
 Bars (side-effecting, per (rule, subject, window-kind)):
 
-- `(bar WINDOW X)` accumulates X into an in-progress bar. WINDOW is `N` (close every N samples) or `:ms N` (close every N ms of wall-clock time, aligned to `floor(now/N)*N`). On close, publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume isn't reported (N for tick bars, varies for time bars; pair with `(count)` if you need it). Time bars also close from the server walker if a window elapses without a new sample, so close events land within ~half the walker tick (~500ms) of the boundary.
+- `(bar! WINDOW X)` accumulates X into an in-progress bar. WINDOW is `N` (close every N samples) or `:ms N` (close every N ms of wall-clock time, aligned to `floor(now/N)*N`). On close, publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume isn't reported (N for tick bars, varies for time bars; pair with `(count!)` if you need it). Time bars also close from the server walker if a window elapses without a new sample, so close events land within ~half the walker tick (~500ms) of the boundary.
 
 Running counters (side-effecting, per (rule, subject)):
 
-- `(count)` and `(count COND)` increment a running total and publish it to `<subject>.count`. With no args, fires every call; with one arg, only when COND is truthy (same rules as `if` / `when`, so any predicate composes — `(count (contains? payload "ERROR"))`, `(count (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
+- `(count!)` and `(count! COND)` increment a running total and publish it to `<subject>.count`. With no args, fires every call; with one arg, only when COND is truthy (same rules as `if` / `when`, so any predicate composes — `(count! (contains? payload "ERROR"))`, `(count! (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
 
 ## The `->` pipeline idiom
 
@@ -144,22 +145,22 @@ top-to-bottom as a data pipeline:
 (-> payload-float
     (round 1)
     (squelch)
-    (publish-to (subject-append "stable")))
+    (publish! (subject-append "stable")))
 ```
 
-Gates return `nil` on suppress; `publish-to` is a no-op on `nil`. That
+Gates return `nil` on suppress; `publish!` is a no-op on `nil`. That
 is how a single pipeline "round, dedupe, emit" works without a `when`.
 
 ## Idioms to prefer
 
-- For "dedupe after rounding / quantizing", thread `round` or `quantize` into `squelch` into `publish-to`. Don't hand-roll a last-value check.
+- For "dedupe after rounding / quantizing", thread `round` or `quantize` into `squelch` into `publish!`. Don't hand-roll a last-value check.
 - For analog noise, reach for `deadband` before `squelch`; for slow drift, wrap `moving-avg` in `deadband`.
 - For alert + all-clear pairs on one predicate, use `transition`, not two `rising-edge` / `falling-edge` rules. It shares the ring and the prev slot.
 - For one-sided alerts that still need to thread, use `rising-edge` / `falling-edge`.
 - When you need multiple windows on the same stream (e.g. max - min spread), drop out of `->` and write the explicit nested form. `->` only threads one value.
 - Keep subjects hierarchical: emit into `<input-subject>.<suffix>` via `subject-append` so downstream subscribers can pick the granularity they want.
 - Don't publish back into a subject your own rule matches unless you have explicitly thought about it. Rules without `:reentrant true` don't loop, but adding it on a rule whose emission can match its own filter (or another `:reentrant` rule's filter) is how you build cascades — keep the depth cap (8) in mind and prefer non-reentrant unless you genuinely need staging.
-- For sensors that emit JSON frames, prefer `json-demux` at the head of the rule chain to fan fields out to scalar sub-subjects, then write the rest of your patchbay against those scalars. Reach for `json-get` inline only when you genuinely want one field on the existing subject.
+- For sensors that emit JSON frames, prefer `json-demux!` at the head of the rule chain to fan fields out to scalar sub-subjects, then write the rest of your patchbay against those scalars. Reach for `json-get` inline only when you genuinely want one field on the existing subject.
 
 ## Anti-patterns
 
@@ -191,67 +192,67 @@ as-is. Nothing flows back.
 ; Fan high readings onto a dedicated sub-subject.
 (on "sensors.*"
   (when (> payload-float 30.0)
-    (publish (subject-append "high") payload)))
+    (publish! (subject-append "high") payload)))
 
 ; Mirror anything that looks like an alert onto events.alerts.
 (on ">"
   (when (contains? payload "alert")
-    (publish "events.alerts" (str-concat subject ": " payload))))
+    (publish! "events.alerts" (str-concat subject ": " payload))))
 
 ; Clean up an RPM stream: 50rpm buckets, drop duplicates.
 (on "car.*.rpm"
   (-> payload-float
       (quantize 50)
       (squelch)
-      (publish-to (subject-append "stable"))))
+      (publish! (subject-append "stable"))))
 
 ; Smooth + deadband in one pipeline.
 (on "sensors.*"
   (-> payload-float
       (moving-avg 10)
       (deadband 1.0)
-      (publish-to (subject-append "smoothed"))))
+      (publish! (subject-append "smoothed"))))
 
 ; Time-windowed smoothing: 5-second sliding average. Old samples drop
 ; off on the next push or on the server's clock walker.
 (on "sensors.*"
   (-> payload-float
       (moving-avg :ms 5000)
-      (publish-to (subject-append "avg5s"))))
+      (publish! (subject-append "avg5s"))))
 
 ; Sustained-heat alert and all-clear, one rule, one ring.
 (on "temp.*.*"
   (transition (> (moving-avg 60 payload-float) 28.0)
-    (publish-to (subject-append "alert") "hot")
-    (publish-to (subject-append "ok")    "cool")))
+    (publish! (subject-append "alert") "hot")
+    (publish! (subject-append "ok")    "cool")))
 
 ; Volatility: two windows, non-threaded form.
 (on "sensors.*"
   (when (> (- (moving-max 20 payload-float)
               (moving-min 20 payload-float)) 5.0)
-    (publish (subject-append "volatile") payload)))
+    (publish! (subject-append "volatile") payload)))
 
 ; 1-minute aligned OHLC bars on a market feed. Bars close on the next
 ; tick that crosses a wall-clock minute boundary, or from the server
 ; walker if the feed goes quiet.
 (on "MARKET.*"
-  (bar :ms 60000 payload-float))
+  (bar! :ms 60000 payload-float))
 
 ; Live events/sec per subject, useful for monitoring dashboards.
 (on "events.>"
-  (-> payload (rate :ms 1000) (publish-to (subject-append "hz"))))
+  (-> payload (rate :ms 1000) (publish! (subject-append "hz"))))
 
 ; Tail-latency monitor: only flag rules where p99 over the last 200
 ; samples exceeds a threshold.
 (on "rpc.latency.*"
   (when (> (percentile 200 0.99 payload-float) 250.0)
-    (publish (subject-append "slow") payload)))
+    (publish! (subject-append "slow") payload)))
 
 ; At most 5 alerts per minute, regardless of how they arrive.
 (on "alerts.>"
   (-> payload
       (throttle :ms 60000 5)
-      (publish-to (subject-append "rate-limited"))))
+      (publish! (subject-append "rate-limited"))))
 ```
 
 ## Authoring checklist
@@ -259,8 +260,8 @@ as-is. Nothing flows back.
 Before returning a patchbay file, verify:
 
 1. Every top-level form is `(on ...)` or a single optional `(bridge ...)`.
-2. Every `publish` / `publish-to` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
+2. Every `publish!` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
 3. Every numeric op is fed a numeric value (`payload-float` / `payload-int` / arithmetic result), not raw `payload`.
 4. `N` in `moving-*` is a literal integer and consistent per call site.
-5. Pipelines built with `->` end in a side-effecting form (`publish-to` or `publish`); a pipeline that ends in a pure value is dead code.
+5. Pipelines built with `->` end in a side-effecting form (`publish!`); a pipeline that ends in a pure value is dead code.
 6. Comments start with `;` and never leak prose outside them.

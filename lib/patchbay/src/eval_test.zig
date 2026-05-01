@@ -41,7 +41,7 @@ test "rule with publish side effect" {
     const src =
         \\(on "sensors.*"
         \\  (when (> (payload-float) 10.0)
-        \\    (publish (subject-append "high") (payload))))
+        \\    (publish! (subject-append "high") (payload))))
     ;
     // note: payload is a symbol in our grammar, not a call; adjust rule.
     _ = src;
@@ -49,7 +49,7 @@ test "rule with publish side effect" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (> payload-float 10.0)
-        \\    (publish (subject-append "high") payload)))
+        \\    (publish! (subject-append "high") payload)))
     );
     try testing.expectEqual(@as(usize, 1), rules.len);
 
@@ -72,7 +72,7 @@ test "rule does not fire when filter mismatches" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const rules = try loadRules(arena, "(on \"foo.bar\" (publish \"quux\" payload))");
+    const rules = try loadRules(arena, "(on \"foo.bar\" (publish! \"quux\" payload))");
     var tp: TestPublisher = .{ .alloc = arena };
     var ctx: Context = .{
         .subject = "foo.baz",
@@ -93,7 +93,7 @@ test "rule threshold below does not publish" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (> payload-float 10.0)
-        \\    (publish (subject-append "high") payload)))
+        \\    (publish! (subject-append "high") payload)))
     );
     var tp: TestPublisher = .{ .alloc = arena };
     var ctx: Context = .{
@@ -117,7 +117,7 @@ test "round and quantize are pure" {
         \\(on "sensors.*"
         \\  (when (and (= (round 1 42.567) 42.6)
         \\             (= (quantize 0.5 42.3) 42.5))
-        \\    (publish "ok" payload)))
+        \\    (publish! "ok" payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -141,7 +141,7 @@ test "squelch only emits on change" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (squelch (round 1 payload-float))
-        \\    (publish (subject-append "changed") payload)))
+        \\    (publish! (subject-append "changed") payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -175,7 +175,7 @@ test "deadband suppresses small deltas" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (deadband 0.5 payload-float)
-        \\    (publish (subject-append "stable") payload)))
+        \\    (publish! (subject-append "stable") payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -209,7 +209,7 @@ test "squelch state is per-subject" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (squelch payload)
-        \\    (publish (subject-append "changed") payload)))
+        \\    (publish! (subject-append "changed") payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -242,7 +242,7 @@ test "moving-avg smooths a stream" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (> (moving-avg 3 payload-float) 10.0)
-        \\    (publish (subject-append "hot") payload)))
+        \\    (publish! (subject-append "hot") payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -275,7 +275,7 @@ test "moving-max and moving-min track window extremes" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (> (- (moving-max 3 payload-float) (moving-min 3 payload-float)) 5.0)
-        \\    (publish (subject-append "spread") payload)))
+        \\    (publish! (subject-append "spread") payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -307,7 +307,7 @@ test "moving-avg composes with deadband" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (deadband 1.0 (moving-avg 3 payload-float))
-        \\    (publish (subject-append "drift") payload)))
+        \\    (publish! (subject-append "drift") payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -345,7 +345,7 @@ test "thread -> with round, squelch, publish-to" {
         \\  (-> payload-float
         \\      (round 1)
         \\      (squelch)
-        \\      (publish-to (subject-append "stable"))))
+        \\      (publish! (subject-append "stable"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -381,7 +381,7 @@ test "thread -> expands moving-avg pipeline" {
         \\  (-> payload-float
         \\      (moving-avg 3)
         \\      (deadband 1.0)
-        \\      (publish-to (subject-append "drift"))))
+        \\      (publish! (subject-append "drift"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -413,11 +413,11 @@ test "rising-edge and falling-edge fire once per transition" {
         \\(on "sensors.*"
         \\  (-> (> payload-float 10.0)
         \\      (rising-edge)
-        \\      (publish-to (subject-append "alert"))))
+        \\      (publish! (subject-append "alert"))))
         \\(on "sensors.*"
         \\  (-> (> payload-float 10.0)
         \\      (falling-edge)
-        \\      (publish-to (subject-append "ok"))))
+        \\      (publish! (subject-append "ok"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -449,8 +449,8 @@ test "transition dispatches rising and falling in one rule" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (transition (> payload-float 10.0)
-        \\    (publish-to (subject-append "alert") "up")
-        \\    (publish-to (subject-append "ok") "down")))
+        \\    (publish! (subject-append "alert") "up")
+        \\    (publish! (subject-append "ok") "down")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -482,7 +482,7 @@ test "contains? and str-concat" {
     const rules = try loadRules(arena,
         \\(on ">"
         \\  (when (contains? payload "alert")
-        \\    (publish "events.alerts" (str-concat subject ": " payload))))
+        \\    (publish! "events.alerts" (str-concat subject ": " payload))))
     );
     var tp: TestPublisher = .{ .alloc = arena };
     var ctx: Context = .{
@@ -506,7 +506,7 @@ test "starts-with? and ends-with?" {
     const rules = try loadRules(arena,
         \\(on ">"
         \\  (when (and (starts-with? subject "sensors.") (ends-with? payload "!"))
-        \\    (publish "hit" payload)))
+        \\    (publish! "hit" payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -538,7 +538,7 @@ test "subject-token extracts Nth dot-separated token" {
 
     const rules = try loadRules(arena,
         \\(on ">"
-        \\  (publish (str-concat "room." (subject-token 1)) payload))
+        \\  (publish! (str-concat "room." (subject-token 1)) payload))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -563,7 +563,7 @@ test "payload-int parses integer payloads" {
     const rules = try loadRules(arena,
         \\(on ">"
         \\  (when (> payload-int 100)
-        \\    (publish "big" payload)))
+        \\    (publish! "big" payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -591,11 +591,11 @@ test "clamp, min, max, abs, sign" {
     const rules = try loadRules(arena,
         \\(on ">"
         \\  (do
-        \\    (-> payload-float (clamp 0 10) (publish-to "c"))
-        \\    (-> (min 1 2 3) (publish-to "m"))
-        \\    (-> (max 1 5 3) (publish-to "x"))
-        \\    (-> (abs -7) (publish-to "a"))
-        \\    (-> (sign -42) (publish-to "s"))))
+        \\    (-> payload-float (clamp 0 10) (publish! "c"))
+        \\    (-> (min 1 2 3) (publish! "m"))
+        \\    (-> (max 1 5 3) (publish! "x"))
+        \\    (-> (abs -7) (publish! "a"))
+        \\    (-> (sign -42) (publish! "s"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -624,7 +624,7 @@ test "changed? fires only on distinct values" {
     const rules = try loadRules(arena,
         \\(on ">"
         \\  (when (changed? payload)
-        \\    (publish "c" payload)))
+        \\    (publish! "c" payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -657,7 +657,7 @@ test "squelch and deadband on same subject do not alias" {
     const rules = try loadRules(arena,
         \\(on "sensors.*"
         \\  (when (and (squelch payload) (deadband 0.5 payload-float))
-        \\    (publish "hit" payload)))
+        \\    (publish! "hit" payload)))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -687,7 +687,7 @@ test "delta returns difference from last value" {
 
     const rules = try loadRules(arena,
         \\(on ">"
-        \\  (-> (delta payload-float) (publish-to "d")))
+        \\  (-> (delta payload-float) (publish! "d")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -719,7 +719,7 @@ test "hold-off suppresses rapid re-fires within the interval" {
         \\(on "sensors.*"
         \\  (-> payload-float
         \\      (hold-off 500)
-        \\      (publish-to (subject-append "gated"))))
+        \\      (publish! (subject-append "gated"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -760,7 +760,7 @@ test "hold-off state is per-subject" {
         \\(on "sensors.*"
         \\  (-> payload-float
         \\      (hold-off 500)
-        \\      (publish-to (subject-append "gated"))))
+        \\      (publish! (subject-append "gated"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -797,7 +797,7 @@ test "json-get extracts numeric field and threads through pipeline" {
         \\  (-> payload
         \\      (json-get "temp")
         \\      (round 1)
-        \\      (publish-to (subject-append "temp"))))
+        \\      (publish! (subject-append "temp"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -826,7 +826,7 @@ test "json-get returns nil for missing key, malformed payload, nested values" {
         \\(on "x.*"
         \\  (-> payload
         \\      (json-get "v")
-        \\      (publish-to (subject-append "out"))))
+        \\      (publish! (subject-append "out"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -861,8 +861,8 @@ test "json-get extracts strings (escapes decoded) and booleans" {
     const rules = try loadRules(arena,
         \\(on ">"
         \\  (do
-        \\    (publish-to "out.s" (json-get "s" payload))
-        \\    (publish-to "out.b" (json-get "b" payload))))
+        \\    (publish! "out.s" (json-get "s" payload))
+        \\    (publish! "out.b" (json-get "b" payload))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -889,7 +889,7 @@ test "json-demux fans a flat object out onto sub-subjects" {
 
     const rules = try loadRules(arena,
         \\(on "sensors.*"
-        \\  (json-demux "temp" "hum" "missing" "nested" payload))
+        \\  (json-demux! "temp" "hum" "missing" "nested" payload))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -916,7 +916,7 @@ test "bar emits open/high/low/close every N ticks" {
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar 4 payload-float))
+        \\  (bar! 4 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -963,7 +963,7 @@ test "bar state is per-subject" {
 
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar 2 payload-float))
+        \\  (bar! 2 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -999,7 +999,7 @@ test "count fires every call when unconditional, per (rule, subject)" {
 
     const rules = try loadRules(arena,
         \\(on "events.>"
-        \\  (count))
+        \\  (count!))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1039,7 +1039,7 @@ test "count with predicate only increments on truthy" {
 
     const rules = try loadRules(arena,
         \\(on "events.>"
-        \\  (count (contains? payload "ERROR")))
+        \\  (count! (contains? payload "ERROR")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1073,7 +1073,7 @@ test "moving-avg with window-ms evicts by age" {
         \\(on "sensors.*"
         \\  (-> payload-float
         \\      (moving-avg :ms 1000)
-        \\      (publish-to (subject-append "avg"))))
+        \\      (publish! (subject-append "avg"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1121,8 +1121,8 @@ test "ticks and window-ms keep distinct slots on the same rule" {
     const rules = try loadRules(arena,
         \\(on "x.*"
         \\  (do
-        \\    (-> payload-float (moving-avg 2)     (publish-to "tick.avg"))
-        \\    (-> payload-float (moving-avg :ms 1000) (publish-to "time.avg"))))
+        \\    (-> payload-float (moving-avg 2)     (publish! "tick.avg"))
+        \\    (-> payload-float (moving-avg :ms 1000) (publish! "time.avg"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1162,7 +1162,7 @@ test "bar with window-ms closes on the next tick after the boundary" {
     // 1s aligned bars. Boundary at floor(now/1000)*1000.
     const rules = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar :ms 1000 payload-float))
+        \\  (bar! :ms 1000 payload-float))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1206,7 +1206,7 @@ test "tickClocks closes a stalled time bar" {
 
     const loaded = try loadRules(arena,
         \\(on "MARKET.*"
-        \\  (bar :ms 1000 payload-float))
+        \\  (bar! :ms 1000 payload-float))
     );
     defer deinitRules(loaded, testing.allocator);
 
@@ -1245,7 +1245,7 @@ test "rate over a 1s window reports events per second" {
         \\(on "x"
         \\  (-> payload-float
         \\      (rate :ms 1000)
-        \\      (publish-to "hz")))
+        \\      (publish! "hz")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1298,7 +1298,7 @@ test "rate rejects (ticks N) — needs a time window" {
     const arena = arena_state.allocator();
 
     const rules = try loadRules(arena,
-        \\(on "x" (-> payload-float (rate 10) (publish-to "hz")))
+        \\(on "x" (-> payload-float (rate 10) (publish! "hz")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1324,7 +1324,7 @@ test "percentile interpolates between window samples" {
         \\(on "lat"
         \\  (-> payload-float
         \\      (percentile 5 0.5)
-        \\      (publish-to "p50")))
+        \\      (publish! "p50")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1351,7 +1351,7 @@ test "median is sugar for percentile 0.5" {
     const arena = arena_state.allocator();
 
     const rules = try loadRules(arena,
-        \\(on "x" (-> payload-float (median 4) (publish-to "med")))
+        \\(on "x" (-> payload-float (median 4) (publish! "med")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1380,8 +1380,8 @@ test "stddev and variance over a tick window" {
     const rules = try loadRules(arena,
         \\(on "x"
         \\  (do
-        \\    (-> payload-float (stddev 8)   (publish-to "sd"))
-        \\    (-> payload-float (variance 8) (publish-to "var"))))
+        \\    (-> payload-float (stddev 8)   (publish! "sd"))
+        \\    (-> payload-float (variance 8) (publish! "var"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1414,7 +1414,7 @@ test "throttle passes at most MAX per ticks window" {
         \\(on "x"
         \\  (-> payload
         \\      (throttle 5 2)
-        \\      (publish-to "out")))
+        \\      (publish! "out")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1448,7 +1448,7 @@ test "throttle passes at most MAX per window-ms" {
         \\(on "x"
         \\  (-> payload
         \\      (throttle :ms 1000 3)
-        \\      (publish-to "out")))
+        \\      (publish! "out")))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1497,7 +1497,7 @@ test "tickClocks evicts old samples from time-ring moving-avg" {
         \\(on "x"
         \\  (-> payload-float
         \\      (moving-avg :ms 1000)
-        \\      (publish-to "avg")))
+        \\      (publish! "avg")))
     );
     defer deinitRules(loaded, testing.allocator);
 
@@ -1565,11 +1565,11 @@ test "staged rules: demuxed subject re-enters and matches downstream" {
     // "stable" mirror, only reachable via re-entry.
     const rules = try loadRules(arena,
         \\(on "devices.*" :reentrant true
-        \\  (json-demux "temp" payload))
+        \\  (json-demux! "temp" payload))
         \\(on "devices.*.temp"
         \\  (-> payload-float
         \\      (round 0)
-        \\      (publish-to (subject-append "stable"))))
+        \\      (publish! (subject-append "stable"))))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1607,7 +1607,7 @@ test "re-entry depth cap prevents runaway loops" {
     // emissions (the original + one per allowed re-entry).
     const rules = try loadRules(arena,
         \\(on "loop.>" :reentrant true
-        \\  (publish (subject-append "x") payload))
+        \\  (publish! (subject-append "x") payload))
     );
     defer deinitRules(rules, testing.allocator);
 
@@ -1641,11 +1641,11 @@ test "re-entry is opt-in: non-reentrant rule does not feed downstream rules" {
     // marked :reentrant — its emission must not match the downstream rule.
     const rules = try loadRules(arena,
         \\(on "devices.*"
-        \\  (json-demux "temp" payload))
+        \\  (json-demux! "temp" payload))
         \\(on "devices.*.temp"
         \\  (-> payload-float
         \\      (round 0)
-        \\      (publish-to (subject-append "stable"))))
+        \\      (publish! (subject-append "stable"))))
     );
     defer deinitRules(rules, testing.allocator);
 
