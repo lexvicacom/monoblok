@@ -255,7 +255,13 @@ bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
 
 ## Benchmarks
 
-It turns out I have a lot to learn on getting useful numbers. Need to ponder it all a bit more. Suffice to say, monoblok is probably on average 35% **slower** than the mature Go nats-server, but getting meaninful comparisons is trickier, and with far more variables than I first realised. If you do want to run some benchmarks and take the figures for what they are (most likely BS) then feel free - see the scripts dir.
+Getting meaningful numbers turned out to be trickier than I first realised — single-row variance on a laptop is large, the bench client (nats CLI, itself a Go process) can be the bottleneck on some rows, and battery vs AC throttling alone roughly halves throughput on Apple Silicon (face palm). So no specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
+
+The shape of the comparison vs. nats-server, though, is consistent across runs:
+
+- **nats-server wins on pure publish throughput.** Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over.
+- **The two are roughly comparable at low fan-out** (1-10 subscribers per publish).
+- **monoblok scales better with subscriber count.** The single-threaded deduped-kicks fan-out avoids the per-subscriber lock work a multi-threaded server pays. Crossover happens somewhere around 10-30 subscribers; the further past that you go, the bigger monoblok's lead.
 
 ## Building from source
 
