@@ -259,9 +259,11 @@ Getting meaningful numbers turned out to be trickier than I first realised: sing
 
 The shape of the comparison vs. nats-server, though, is consistent across runs:
 
-- **nats-server wins on pure publish throughput.** Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over.
+- **nats-server wins on pure publish throughput on big machines.** Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over and there are spare cores to spread it across. On small ARM VPSes the gap narrows or disappears: nats-server has less parallelism to exploit, and monoblok's single-threaded design has no overhead to pay.
 - **The two are roughly comparable at low fan-out** (1-10 subscribers per publish).
 - **monoblok scales better with subscriber count.** The single-threaded deduped-kicks fan-out avoids the per-subscriber lock work a multi-threaded server pays. Crossover happens somewhere around 10-30 subscribers; the further past that you go, the bigger monoblok's lead.
+
+Worth keeping in mind: nats-server has a decade of production-grade performance work behind it. Any monoblok win in these benches should be read as "the single-threaded design happens to fit this specific workload shape well," not "monoblok is faster than nats." The right tool for most pub/sub deployments is still nats-server; monoblok is for the cases where the patchbay or LVC features earn their place, and "fast enough on a small box" is a happy side-effect of the design, not the headline.
 
 ## Building from source
 
