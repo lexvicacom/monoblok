@@ -867,9 +867,15 @@ const Conn = struct {
                     );
                 }
 
-                router.publish(subject, headers, payload) catch |err| {
-                    std.log.warn("publish error: {s}", .{@errorName(err)});
-                };
+                if (p.no_responders) {
+                    router.publishRequest(subject, headers, payload, p.reply, true) catch |err| {
+                        std.log.warn("publish error: {s}", .{@errorName(err)});
+                    };
+                } else {
+                    router.publish(subject, headers, payload) catch |err| {
+                        std.log.warn("publish error: {s}", .{@errorName(err)});
+                    };
+                }
 
                 if (self.server.stats_enabled) self.server.recordPub(ctx.rule_publishes);
                 if (self.verbose) try proto.writeOk(gpa, &rconn.out);

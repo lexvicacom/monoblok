@@ -396,6 +396,32 @@ pub const Router = struct {
     /// is the opaque NATS-v1 header chunk forwarded verbatim to subscribers
     /// via HMSG. The LVC stores payload only (headers are dropped on cache).
     pub fn publish(self: *Router, subject: []const u8, headers: ?[]const u8, payload: []const u8) !void {
+        return self.publishInner(subject, headers, payload, null, false);
+    }
+
+    /// Like `publish`, but caller can pass the parsed `no_responders` flag and
+    /// `reply` subject so this publish can synthesize a 503 to the reply
+    /// subject when zero subscribers match. Used by the server when it
+    /// dispatches an HPUB carrying `Nats-Request-No-Responders: true`.
+    pub fn publishRequest(
+        self: *Router,
+        subject: []const u8,
+        headers: ?[]const u8,
+        payload: []const u8,
+        reply: ?[]const u8,
+        no_responders: bool,
+    ) !void {
+        return self.publishInner(subject, headers, payload, reply, no_responders);
+    }
+
+    fn publishInner(
+        self: *Router,
+        subject: []const u8,
+        headers: ?[]const u8,
+        payload: []const u8,
+        reply: ?[]const u8,
+        no_responders: bool,
+    ) !void {
         // $STATS.* is excluded from the LVC (tick-driven, stale by design).
         if (self.lvc_enabled and !std.mem.startsWith(u8, subject, stats_prefix)) {
             try self.storeLast(subject, payload);
@@ -405,6 +431,8 @@ pub const Router = struct {
         const have_wildcard = self.wildcard_subs.items.len != 0;
         if (!have_literal and !have_wildcard) {
             if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
+            // Zero subs at all: still synthesize the 503 if requested.
+            if (no_responders) if (reply) |r| try self.emitNoResponders(r);
             return;
         }
 
@@ -483,6 +511,25 @@ pub const Router = struct {
         // Bridge fires after local fan-out so a blocked remote can't starve
         // local subscribers.
         if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
+
+        // No-responders signal: if the publisher asked for it and zero
+        // subscribers actually received the message, synthesize an empty
+        // HMSG with NATS/1.0 503 to the reply subject so the requestor's
+        // _INBOX.* sub fails fast instead of timing out.
+        if (no_responders and kicks.items.len == 0) {
+            if (reply) |r| try self.emitNoResponders(r);
+        }
+    }
+
+    /// Synthesize an empty HMSG with `NATS/1.0 503\r\n\r\n` headers to
+    /// `reply_subject`. Goes through the normal publish path so the
+    /// requestor's _INBOX.* subscription gets it via fan-out. Explicit
+    /// `anyerror` to break the inferred-error-set cycle with publishInner.
+    fn emitNoResponders(self: *Router, reply_subject: []const u8) anyerror!void {
+        const status_headers = "NATS/1.0 503\r\n\r\n";
+        // Recurse without the no_responders flag to avoid an infinite loop
+        // if the reply subject also has no subscribers.
+        try self.publishInner(reply_subject, status_headers, "", null, false);
     }
 
     /// Get-or-create a round-robin cursor for `(filter, group)`. Key is owned
@@ -859,6 +906,52 @@ test "router: queue groups on different filters are independent" {
     // Same group name but distinct filters: each is its own pool.
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(b));
+}
+
+test "router: no-responders synthesizes 503 to reply when zero subs match" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const requestor = try makeConn(testing.allocator, 1);
+    defer requestor.deinit();
+    try router.subscribe(requestor, "_INBOX.xyz", "1", null);
+
+    // Request to a subject with no subscribers, with no_responders=true.
+    try router.publishRequest("svc.req", null, "ping", "_INBOX.xyz", true);
+
+    // Requestor should have received an HMSG with NATS/1.0 503 to _INBOX.xyz.
+    // (deliveredMsgCount counts plain MSG \n boundaries; HMSG framing is
+    // different, so just check the bytes.)
+    try testing.expect(std.mem.indexOf(u8, requestor.out.items, "HMSG _INBOX.xyz 1") != null);
+    try testing.expect(std.mem.indexOf(u8, requestor.out.items, "NATS/1.0 503") != null);
+}
+
+test "router: no-responders does not fire when at least one sub matches" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const requestor = try makeConn(testing.allocator, 1);
+    defer requestor.deinit();
+    const responder = try makeConn(testing.allocator, 2);
+    defer responder.deinit();
+
+    try router.subscribe(requestor, "_INBOX.xyz", "1", null);
+    try router.subscribe(responder, "svc.req", "2", null);
+
+    try router.publishRequest("svc.req", null, "ping", "_INBOX.xyz", true);
+
+    // Responder gets the request; requestor gets nothing yet (responder
+    // hasn't replied), so no 503 synthesized.
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(responder));
+    try testing.expectEqual(@as(usize, 0), deliveredMsgCount(requestor));
+}
+
+test "router: no-responders without reply does nothing" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+    // No subs at all. With reply=null, the synth-503 has nowhere to go and
+    // must not panic / loop.
+    try router.publishRequest("svc.req", null, "ping", null, true);
 }
 
 test "router: removing one group member reroutes to remaining" {

@@ -36,8 +36,13 @@ pub const ClientOp = union(enum) {
         reply: ?[]const u8,
         /// Optional NATS protocol-v1 header chunk (HPUB). When non-null, the
         /// bytes start with `NATS/1.0\r\n` and end with `\r\n\r\n`. The server
-        /// treats this as opaque (forward to subscribers, do not interpret).
+        /// treats this as opaque (forward to subscribers, do not interpret),
+        /// except for the one signal it acts on: `no_responders`.
         headers: ?[]const u8 = null,
+        /// Set when headers contain `Nats-Request-No-Responders: true`. Parsed
+        /// at the wire boundary so the router can short-circuit empty-fanout
+        /// requests without re-scanning the header bytes per publish.
+        no_responders: bool = false,
         payload: []const u8,
     };
     pub const Sub = struct {
@@ -211,10 +216,37 @@ fn parseHpub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Pars
         else => return error.MalformedOp,
     };
 
+    const no_responders = headerHasNoResponders(headers);
     return .{
-        .op = .{ .pub_msg = .{ .subject = subject, .reply = reply, .headers = headers, .payload = payload } },
+        .op = .{ .pub_msg = .{
+            .subject = subject,
+            .reply = reply,
+            .headers = headers,
+            .no_responders = no_responders,
+            .payload = payload,
+        } },
         .consumed = line_end + total_len + trailer_len,
     };
+}
+
+/// Single-pass scan for `Nats-Request-No-Responders: true`. The header chunk
+/// is small in practice (a few lines), so a substring search beats a full
+/// line-by-line parse. Match is ASCII-case-sensitive on the canonical name
+/// real clients send; the value just needs to start with `t` (true vs false).
+fn headerHasNoResponders(headers: []const u8) bool {
+    const needle = "Nats-Request-No-Responders:";
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, headers, i, needle)) |at| {
+        // Confirm line-anchored: previous byte is start-of-buffer or LF.
+        if (at == 0 or headers[at - 1] == '\n') {
+            var j = at + needle.len;
+            while (j < headers.len and (headers[j] == ' ' or headers[j] == '\t')) : (j += 1) {}
+            if (j < headers.len and (headers[j] == 't' or headers[j] == 'T')) return true;
+            return false;
+        }
+        i = at + 1;
+    }
+    return false;
 }
 
 /// Parse one server-to-client op from `buf`. Symmetric with parseClientOp.
@@ -682,6 +714,31 @@ test "parse HPUB with empty payload" {
 
 test "parse HPUB hdr_len > total_len rejected" {
     try testing.expectError(error.InvalidArgs, parseClientOp("HPUB foo 10 5\r\nshort\r\n"));
+}
+
+test "parse HPUB detects Nats-Request-No-Responders" {
+    const headers = "NATS/1.0\r\nNats-Request-No-Responders: true\r\n\r\n";
+    var msg: [256]u8 = undefined;
+    const wire = try std.fmt.bufPrint(&msg, "HPUB foo {d} {d}\r\n{s}\r\n", .{ headers.len, headers.len, headers });
+    const r = try parseClientOp(wire);
+    try testing.expect(r.op.pub_msg.no_responders);
+}
+
+test "parse HPUB no_responders default false" {
+    const headers = "NATS/1.0\r\nNats-Request-No-Responders: false\r\n\r\n";
+    var msg: [256]u8 = undefined;
+    const wire = try std.fmt.bufPrint(&msg, "HPUB foo {d} {d}\r\n{s}\r\n", .{ headers.len, headers.len, headers });
+    const r = try parseClientOp(wire);
+    try testing.expect(!r.op.pub_msg.no_responders);
+}
+
+test "parse HPUB no_responders ignores prefix-match in header value" {
+    // A header whose *value* contains the needle should not trigger.
+    const headers = "NATS/1.0\r\nX-Note: Nats-Request-No-Responders: true is a feature\r\n\r\n";
+    var msg: [256]u8 = undefined;
+    const wire = try std.fmt.bufPrint(&msg, "HPUB foo {d} {d}\r\n{s}\r\n", .{ headers.len, headers.len, headers });
+    const r = try parseClientOp(wire);
+    try testing.expect(!r.op.pub_msg.no_responders);
 }
 
 test "writeHmsg basic" {
