@@ -255,7 +255,7 @@ bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
 
 ## Benchmarks
 
-Getting meaningful numbers turned out to be trickier than I first realised — single-row variance on a laptop is large, the bench client (nats CLI, itself a Go process) can be the bottleneck on some rows, and battery vs AC throttling alone roughly halves throughput on Apple Silicon (face palm). So no specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
+Getting meaningful numbers turned out to be trickier than I first realised: single-row variance on a laptop is large, the bench client (nats CLI, itself a Go process) can be the bottleneck on some rows, and battery vs AC throttling alone roughly halves throughput on Apple Silicon (face palm). So no specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
 
 The shape of the comparison vs. nats-server, though, is consistent across runs:
 
