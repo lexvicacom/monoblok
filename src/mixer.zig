@@ -299,7 +299,11 @@ pub const Worker = struct {
         };
         for (entry.subscribers.items) |sub| {
             if (sub.client.closing) continue;
-            try proto.writeMsg(self.mixer.gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
+            if (m.headers) |h| {
+                try proto.writeHmsg(self.mixer.gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, h, m.payload);
+            } else {
+                try proto.writeMsg(self.mixer.gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
+            }
             sub.client.maybeKickWrite(self.mixer.loop);
         }
     }
