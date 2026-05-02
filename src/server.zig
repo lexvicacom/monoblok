@@ -554,7 +554,7 @@ pub const Server = struct {
     fn publishStat(self: *Server, subject: []const u8, value: u64) !void {
         var buf: [32]u8 = undefined;
         const payload = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
-        try self.router.publish(subject, payload);
+        try self.router.publish(subject, null, payload);
     }
 
     fn onAccept(
@@ -812,7 +812,7 @@ const Conn = struct {
                     try proto.writeErr(gpa, &rconn.out, "Invalid Subject");
                     return;
                 };
-                router.subscribe(rconn, s.subject, s.sid) catch |err| switch (err) {
+                router.subscribe(rconn, s.subject, s.sid, s.queue) catch |err| switch (err) {
                     error.LvcDisabled => try proto.writeErr(gpa, &rconn.out, "$LVC is disabled"),
                     else => try proto.writeErr(gpa, &rconn.out, "Subscribe Failed"),
                 };
@@ -842,6 +842,7 @@ const Conn = struct {
                 const arena = self.msg_arena.allocator();
                 const subject = try arena.dupe(u8, p.subject);
                 const payload = try arena.dupe(u8, p.payload);
+                const headers: ?[]const u8 = if (p.headers) |h| try arena.dupe(u8, h) else null;
 
                 var ctx: rules_mod.Context = .{
                     .subject = subject,
@@ -866,9 +867,15 @@ const Conn = struct {
                     );
                 }
 
-                router.publish(subject, payload) catch |err| {
-                    std.log.warn("publish error: {s}", .{@errorName(err)});
-                };
+                if (p.no_responders) {
+                    router.publishRequest(subject, headers, payload, p.reply, true) catch |err| {
+                        std.log.warn("publish error: {s}", .{@errorName(err)});
+                    };
+                } else {
+                    router.publish(subject, headers, payload) catch |err| {
+                        std.log.warn("publish error: {s}", .{@errorName(err)});
+                    };
+                }
 
                 if (self.server.stats_enabled) self.server.recordPub(ctx.rule_publishes);
                 if (self.verbose) try proto.writeOk(gpa, &rconn.out);
