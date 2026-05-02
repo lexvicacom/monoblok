@@ -577,6 +577,21 @@ pub const Server = struct {
             return .disarm;
         };
 
+        // TCP_NODELAY on the AF_INET socket. Without it, Nagle coalesces
+        // small MSGs in the 1-pub/1-sub path and throughput drops by an
+        // order of magnitude. Skip on AF_UNIX (option doesn't apply).
+        if (c != &self.unix_accept_completion) {
+            const enable: c_int = 1;
+            std.posix.setsockopt(
+                tcp.fd,
+                std.posix.IPPROTO.TCP,
+                std.posix.TCP.NODELAY,
+                std.mem.asBytes(&enable),
+            ) catch |err| {
+                std.log.warn("TCP_NODELAY failed: {s}", .{@errorName(err)});
+            };
+        }
+
         const conn_state = Conn.init(self, tcp) catch |err| {
             std.log.warn("conn init failed: {s}", .{@errorName(err)});
             return .disarm;
