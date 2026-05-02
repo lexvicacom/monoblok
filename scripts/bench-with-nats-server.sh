@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Bench monoblok and nats-server on the current host. Same workload is
-# driven against both, one at a time — not concurrently.
+# driven against both, one at a time (not concurrently).
+#
+# Monoblok runs with --no-lvc here so the comparison measures core routing
+# throughput on both sides. nats-server has no last-value cache, so leaving
+# monoblok's LVC on would be measuring an extra feature, not the routing
+# path itself. For LVC-on numbers see bench.sh.
 #
 # Honours NATS_URL (same env var the nats CLI reads) for the address;
 # defaults to nats://127.0.0.1:4222. Both servers bind to the same port
@@ -125,24 +130,33 @@ $HAS_NATS_SERVER && echo "$(nats-server --version 2>&1 | head -1)"
 echo
 
 # --- monoblok -----------------------------------------------------------------
-"$MB_BIN" --port $PORT > /tmp/mb.log 2>&1 &
+# --no-lvc keeps this comparison apples-to-apples with nats-server, which has
+# no last-value cache. Monoblok's default is LVC-on (every PUB pays one
+# hashmap upsert + payload copy); running with it on here would measure
+# "monoblok plus a feature nats-server doesn't have" rather than core
+# routing throughput. For real-world numbers with LVC on, see bench.sh.
+"$MB_BIN" --port $PORT --no-lvc > /tmp/mb.log 2>&1 &
 MB_PID=$!
 sleep 0.3
 kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
 
-# Cooldown between rows. Back-to-back 500k-msg runs throttle laptop CPUs
+# Cooldown between rows. Back-to-back high-rate runs throttle laptop CPUs
 # (we saw 6.4M -> 3.3M monotonic decay across 6 consecutive rows on an MBA
 # on battery). 5s is enough to let the cores cool back to baseline; tune
 # via BENCH_COOLDOWN_S if you want a different value.
+#
+# Message counts are sized to keep each timed run >= ~1s at the throughput
+# range we're measuring (~2-6M msgs/sec). Smaller counts finish too fast
+# for the nats CLI's measurement window to settle and produce noisy rows.
 COOLDOWN_S="${BENCH_COOLDOWN_S:-5}"
 
 echo "Running monoblok benchmarks..."
-MB_1=$(run_pub 1 500000 64);    sleep "$COOLDOWN_S"
-MB_2=$(run_pub 2 10000 64);     sleep "$COOLDOWN_S"
-MB_3=$(run_pub 8 50000 128);    sleep "$COOLDOWN_S"
-MB_4=$(run_fanout 1 200000);    sleep "$COOLDOWN_S"
-MB_5=$(run_fanout 10 50000);    sleep "$COOLDOWN_S"
-MB_6=$(run_fanout 50 20000)
+MB_1=$(run_pub 1 5000000 64);    sleep "$COOLDOWN_S"
+MB_2=$(run_pub 2 2000000 64);    sleep "$COOLDOWN_S"
+MB_3=$(run_pub 8 1000000 128);   sleep "$COOLDOWN_S"
+MB_4=$(run_fanout 1 2000000);    sleep "$COOLDOWN_S"
+MB_5=$(run_fanout 10 500000);    sleep "$COOLDOWN_S"
+MB_6=$(run_fanout 50 200000)
 kill $MB_PID 2>/dev/null; wait $MB_PID 2>/dev/null || true
 MB_PID=""
 sleep "$COOLDOWN_S"
@@ -155,12 +169,12 @@ if $HAS_NATS_SERVER; then
     sleep 0.4
     if kill -0 $NS_PID 2>/dev/null; then
         echo "Running nats-server benchmarks..."
-        NS_1=$(run_pub 1 500000 64);    sleep "$COOLDOWN_S"
-        NS_2=$(run_pub 2 10000 64);     sleep "$COOLDOWN_S"
-        NS_3=$(run_pub 8 50000 128);    sleep "$COOLDOWN_S"
-        NS_4=$(run_fanout 1 200000);    sleep "$COOLDOWN_S"
-        NS_5=$(run_fanout 10 50000);    sleep "$COOLDOWN_S"
-        NS_6=$(run_fanout 50 20000)
+        NS_1=$(run_pub 1 5000000 64);    sleep "$COOLDOWN_S"
+        NS_2=$(run_pub 2 2000000 64);    sleep "$COOLDOWN_S"
+        NS_3=$(run_pub 8 1000000 128);   sleep "$COOLDOWN_S"
+        NS_4=$(run_fanout 1 2000000);    sleep "$COOLDOWN_S"
+        NS_5=$(run_fanout 10 500000);    sleep "$COOLDOWN_S"
+        NS_6=$(run_fanout 50 200000)
         kill $NS_PID 2>/dev/null; wait $NS_PID 2>/dev/null || true
         NS_PID=""
     else
