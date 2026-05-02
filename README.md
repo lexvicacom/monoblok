@@ -247,33 +247,35 @@ bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
 
 FYI rather than scientific. `nats-server` is a mature Go codebase doing a lot more than monoblok (accounting, metrics, slow-consumer detection, clustering, JetStream, TLS, auth). These numbers are not a "faster than nats-server" claim. monoblok is benchmarked with an **empty patchbay**, so this is raw PUB/SUB + fan-out only; a real patchbay adds work per matching publish.
 
-Numbers are msgs/sec from `nats bench`, single run each. monoblok built `--release=safe`, vs `nats-server` v2.12.7. `scripts/bench-with-nats-server.sh` drives the table sequentially with a 5s cooldown between rows so back-to-back runs don't thermally throttle the host.
+Baseline machine is a **Hetzner CAX11**: 2 vCPU Ampere ARM, 4 GB RAM, ~£5/month, the cheapest box in their ARM lineup. Anything more interesting is plenty of headroom; if it holds up here it holds up anywhere. Note that this is a shared-CPU instance and only has 2 cores, so a noisy neighbour or a stray cron tick is enough to skew a single row by 10-20%; the patchbay-overhead table is a 3-run median to take some of that out, the nats-server table is a single run.
 
-**MacBook Air M2** (8-core, 16 GB, macOS 15.6, kqueue):
+Numbers are msgs/sec from `nats bench`, monoblok built `--release=safe`, vs `nats-server` v2.10.7. `scripts/bench-with-nats-server.sh` drives the table sequentially with a 5s cooldown between rows.
+
+**Hetzner CAX11** (2-core Ampere ARM, 4 GB, Linux 6.8 aarch64, io_uring):
 
 | workload            |   monoblok |  nats-server |     Δ |
 |---------------------|-----------:|-------------:|------:|
-| 1 pub × 500k × 64B  |    8.52M/s |      8.91M/s |   −4% |
-| 2 pub × 10k × 64B   |    4.60M/s |      3.90M/s |  +18% |
-| 8 pub × 50k × 128B  |    5.32M/s |      4.47M/s |  +19% |
-| 1 pub → 1 sub       |    3.00M/s |      3.16M/s |   −5% |
-| 1 pub → 10 subs     |    8.67M/s |      4.03M/s | +115% |
-| 1 pub → 50 subs     |   11.18M/s |      2.97M/s | +276% |
+| 1 pub × 500k × 64B  |    2.52M/s |      2.22M/s |  +13% |
+| 2 pub × 10k × 64B   |    1.75M/s |      1.53M/s |  +14% |
+| 8 pub × 50k × 128B  |    2.24M/s |      1.80M/s |  +24% |
+| 1 pub → 1 sub       |    1.17M/s |      0.93M/s |  +26% |
+| 1 pub → 10 subs     |    2.49M/s |      1.84M/s |  +35% |
+| 1 pub → 50 subs     |    2.67M/s |      1.98M/s |  +35% |
 
-Fan-out is where monoblok pulls ahead hardest, but multi-publisher and pub-only rows hold their own. The 1-sub row is the standing exception (likely a low-concurrency bug). `--release=fast` adds another ~10–15%. Take this all with a pinch of salt: NATS is the reliable, tuned Porsche; monoblok is a rusty Civic with a bolted-on eBay turbo.
+`--release=fast` adds another ~10-15%. NATS is the reliable, tuned Porsche; monoblok is a rusty Civic with a bolted-on eBay turbo.
 
 ### Patchbay overhead
 
-Empty patchbay vs 1 rule vs 50 rules on the same M2 (`bash scripts/bench.sh`):
+Empty patchbay vs 1 rule vs 50 rules on the same CAX11 (`bash scripts/bench.sh`, median of 3 runs):
 
 | workload                |    no patchbay |       1 rule |    Δ |     50 rules |    Δ |
 |-------------------------|---------------:|-------------:|-----:|-------------:|-----:|
-| 1 pub × 1M × 64B        |        9.45M/s |      7.14M/s | −24% |      6.48M/s | −31% |
-| 2 pub × 500k × 64B      |        8.65M/s |      6.62M/s | −23% |      6.62M/s | −24% |
-| 8 pub × 200k × 128B     |        6.54M/s |      5.10M/s | −22% |      5.21M/s | −20% |
-| 1 pub → 1 sub           |        3.41M/s |      3.37M/s |  −1% |      3.03M/s | −11% |
-| 1 pub → 10 subs         |        8.13M/s |      8.71M/s |  +7% |      8.52M/s |  +5% |
-| 1 pub → 50 subs         |       11.62M/s |     10.55M/s |  −9% |     10.59M/s |  −9% |
+| 1 pub × 1M × 64B        |        2.38M/s |      2.48M/s |  +4% |      2.46M/s |  +3% |
+| 2 pub × 500k × 64B      |        3.40M/s |      2.82M/s | -17% |      2.63M/s | -23% |
+| 8 pub × 200k × 128B     |        2.69M/s |      2.18M/s | -19% |      2.65M/s |  -1% |
+| 1 pub → 1 sub           |        1.14M/s |      1.22M/s |  +7% |      1.14M/s |  +0% |
+| 1 pub → 10 subs         |        2.41M/s |      2.35M/s |  -2% |      2.39M/s |  -1% |
+| 1 pub → 50 subs         |        2.61M/s |      2.64M/s |  +1% |      2.59M/s |  -1% |
 
 Cost scales with matching rules per PUB, not total rules in the file: 1 rule and 50 rules land in roughly the same place because the dispatch table only invokes rules whose filter actually matches.
 
