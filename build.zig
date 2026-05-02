@@ -65,6 +65,30 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_patchbay_tests.step);
+
+    // In-process router microbench. Forces ReleaseFast since debug numbers
+    // are useless for comparing routing-table changes. Run with:
+    //   zig build bench-router -- [N] [M] [PUBS]
+    const bench_router_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_router.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "xev", .module = libxev_dep.module("xev") },
+            .{ .name = "manifest", .module = manifest_mod },
+            .{ .name = "patchbay", .module = patchbay_mod },
+            .{ .name = "nats", .module = nats_dep.module("nats") },
+        },
+    });
+    const bench_router_exe = b.addExecutable(.{
+        .name = "bench-router",
+        .root_module = bench_router_mod,
+    });
+    const run_bench_router = b.addRunArtifact(bench_router_exe);
+    if (b.args) |args| run_bench_router.addArgs(args);
+    const bench_router_step = b.step("bench-router", "Run the in-process router microbench");
+    bench_router_step.dependOn(&run_bench_router.step);
 }
 
 
