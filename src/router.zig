@@ -51,10 +51,15 @@ pub const Conn = struct {
         subject: []const u8,
         sid: []const u8,
         reply: ?[]const u8,
+        headers: ?[]const u8,
         payload: []const u8,
     ) !void {
         if (c.isClosed()) return;
-        try proto.writeMsg(c.gpa, &c.out, subject, sid, reply, payload);
+        if (headers) |h| {
+            try proto.writeHmsg(c.gpa, &c.out, subject, sid, reply, h, payload);
+        } else {
+            try proto.writeMsg(c.gpa, &c.out, subject, sid, reply, payload);
+        }
         if (c.out.items.len > c.out_hwm) c.out_hwm = c.out.items.len;
     }
 };
@@ -71,6 +76,11 @@ const Subscription = struct {
     is_literal: bool,
     max_msgs: ?u64,
     delivered: u64,
+    /// Queue group name (NATS QGROUP). When set, this sub competes with other
+    /// subs sharing the same `(match_filter, queue_group)` for each matching
+    /// publish: exactly one of them is picked round-robin per message. When
+    /// null, the sub gets every matching message (the default fan-out).
+    queue_group: ?[]u8,
 };
 
 pub const Router = struct {
@@ -90,6 +100,10 @@ pub const Router = struct {
     /// local fan-out; the bridge does its own subject-filter match.
     bridge_ctx: ?*anyopaque = null,
     bridge_fn: ?*const fn (ctx: *anyopaque, subject: []const u8, payload: []const u8) void = null,
+    /// Round-robin cursors for queue groups. Keyed by "<match_filter>\x00<group>"
+    /// (NUL separator avoids collisions when a filter or group name contains a
+    /// dot). Owned keys; lazily inserted on first publish to a group.
+    qg_rr: std.StringHashMapUnmanaged(u64) = .empty,
 
     pub const LiteralBucket = struct {
         subs: std.ArrayListUnmanaged(*Subscription) = .empty,
@@ -121,12 +135,16 @@ pub const Router = struct {
             e.value_ptr.deinit(self.gpa);
         }
         self.last_value.deinit();
+        var qg_it = self.qg_rr.iterator();
+        while (qg_it.next()) |e| self.gpa.free(e.key_ptr.*);
+        self.qg_rr.deinit(self.gpa);
     }
 
     fn freeSub(self: *Router, s: *Subscription) void {
         self.gpa.free(s.sid);
         self.gpa.free(s.filter);
         self.gpa.free(s.tokens);
+        if (s.queue_group) |qg| self.gpa.free(qg);
         self.gpa.destroy(s);
     }
 
@@ -138,6 +156,7 @@ pub const Router = struct {
         conn: *Conn,
         filter: []const u8,
         sid: []const u8,
+        queue_group: ?[]const u8,
     ) !void {
         try subject_mod.validateFilter(filter);
 
@@ -156,6 +175,8 @@ pub const Router = struct {
         const match_filter: []const u8 = if (is_lvc) filter_owned[lvc_prefix.len..] else filter_owned;
         const tokens = try splitTokens(self.gpa, match_filter);
         errdefer self.gpa.free(tokens);
+        const qg_owned: ?[]u8 = if (queue_group) |qg| try self.gpa.dupe(u8, qg) else null;
+        errdefer if (qg_owned) |qg| self.gpa.free(qg);
 
         const sub = try self.gpa.create(Subscription);
         errdefer self.gpa.destroy(sub);
@@ -170,6 +191,7 @@ pub const Router = struct {
             .is_literal = is_literal,
             .max_msgs = null,
             .delivered = 0,
+            .queue_group = qg_owned,
         };
 
         if (is_literal) {
@@ -223,7 +245,7 @@ pub const Router = struct {
             if (!subject_mod.matchesTokens(filter_tokens, cached_tokens)) continue;
 
             const out_subject = try std.fmt.allocPrint(scratch, "{s}{s}", .{ lvc_prefix, cached_subject });
-            conn.writeMsg(out_subject, sid, null, e.value_ptr.items) catch {};
+            conn.writeMsg(out_subject, sid, null, null, e.value_ptr.items) catch {};
         }
     }
 
@@ -370,8 +392,36 @@ pub const Router = struct {
         }
     }
 
-    /// Fan-out a publish to matching subscribers.
-    pub fn publish(self: *Router, subject: []const u8, payload: []const u8) !void {
+    /// Fan-out a publish to matching subscribers. `headers`, when non-null,
+    /// is the opaque NATS-v1 header chunk forwarded verbatim to subscribers
+    /// via HMSG. The LVC stores payload only (headers are dropped on cache).
+    pub fn publish(self: *Router, subject: []const u8, headers: ?[]const u8, payload: []const u8) !void {
+        return self.publishInner(subject, headers, payload, null, false);
+    }
+
+    /// Like `publish`, but caller can pass the parsed `no_responders` flag and
+    /// `reply` subject so this publish can synthesize a 503 to the reply
+    /// subject when zero subscribers match. Used by the server when it
+    /// dispatches an HPUB carrying `Nats-Request-No-Responders: true`.
+    pub fn publishRequest(
+        self: *Router,
+        subject: []const u8,
+        headers: ?[]const u8,
+        payload: []const u8,
+        reply: ?[]const u8,
+        no_responders: bool,
+    ) !void {
+        return self.publishInner(subject, headers, payload, reply, no_responders);
+    }
+
+    fn publishInner(
+        self: *Router,
+        subject: []const u8,
+        headers: ?[]const u8,
+        payload: []const u8,
+        reply: ?[]const u8,
+        no_responders: bool,
+    ) !void {
         // $STATS.* is excluded from the LVC (tick-driven, stale by design).
         if (self.lvc_enabled and !std.mem.startsWith(u8, subject, stats_prefix)) {
             try self.storeLast(subject, payload);
@@ -381,6 +431,8 @@ pub const Router = struct {
         const have_wildcard = self.wildcard_subs.items.len != 0;
         if (!have_literal and !have_wildcard) {
             if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
+            // Zero subs at all: still synthesize the 503 if requested.
+            if (no_responders) if (reply) |r| try self.emitNoResponders(r);
             return;
         }
 
@@ -391,11 +443,19 @@ pub const Router = struct {
         // Subs that hit max_msgs or whose conn closed mid-fanout. Removed
         // after iteration so we don't mutate the bucket we're walking.
         var to_drop: std.ArrayListUnmanaged(*Subscription) = .empty;
+        // Queue-group buckets: one entry per (filter, group) seen this publish.
+        // Keyed by the same composite key used by qg_rr ("<filter>\x00<group>").
+        // Filled during the matching loops below; resolved once at the end.
+        var qg_buckets: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(*Subscription)) = .empty;
 
         if (have_literal) {
             if (self.literal_subs.getPtr(subject)) |bucket| {
                 for (bucket.subs.items) |s| {
-                    try self.deliverOne(s, subject, payload, scratch, &kicks, &to_drop);
+                    if (s.queue_group) |qg| {
+                        try addToQgBucket(&qg_buckets, scratch, s.match_filter, qg, s);
+                    } else {
+                        try self.deliverOne(s, subject, headers, payload, scratch, &kicks, &to_drop);
+                    }
                 }
             }
         }
@@ -405,7 +465,25 @@ pub const Router = struct {
             const sub_tokens = splitInto(subject, &sub_tokens_buf);
             for (self.wildcard_subs.items) |s| {
                 if (!subject_mod.matchesTokens(s.tokens, sub_tokens)) continue;
-                try self.deliverOne(s, subject, payload, scratch, &kicks, &to_drop);
+                if (s.queue_group) |qg| {
+                    try addToQgBucket(&qg_buckets, scratch, s.match_filter, qg, s);
+                } else {
+                    try self.deliverOne(s, subject, headers, payload, scratch, &kicks, &to_drop);
+                }
+            }
+        }
+
+        // Resolve each queue-group bucket: pick one subscriber via the persistent
+        // round-robin cursor on `qg_rr`.
+        if (qg_buckets.count() != 0) {
+            var qg_it = qg_buckets.iterator();
+            while (qg_it.next()) |e| {
+                const candidates = e.value_ptr.items;
+                if (candidates.len == 0) continue;
+                const cursor = try self.qgCursor(e.key_ptr.*);
+                const idx = cursor.* % candidates.len;
+                cursor.* +%= 1;
+                try self.deliverOne(candidates[idx], subject, headers, payload, scratch, &kicks, &to_drop);
             }
         }
 
@@ -433,15 +511,51 @@ pub const Router = struct {
         // Bridge fires after local fan-out so a blocked remote can't starve
         // local subscribers.
         if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
+
+        // No-responders signal: if the publisher asked for it and zero
+        // subscribers actually received the message, synthesize an empty
+        // HMSG with NATS/1.0 503 to the reply subject so the requestor's
+        // _INBOX.* sub fails fast instead of timing out.
+        if (no_responders and kicks.items.len == 0) {
+            if (reply) |r| try self.emitNoResponders(r);
+        }
+    }
+
+    /// Synthesize an empty HMSG with `NATS/1.0 503\r\n\r\n` headers to
+    /// `reply_subject`. Goes through the normal publish path so the
+    /// requestor's _INBOX.* subscription gets it via fan-out. Explicit
+    /// `anyerror` to break the inferred-error-set cycle with publishInner.
+    fn emitNoResponders(self: *Router, reply_subject: []const u8) anyerror!void {
+        const status_headers = "NATS/1.0 503\r\n\r\n";
+        // Recurse without the no_responders flag to avoid an infinite loop
+        // if the reply subject also has no subscribers.
+        try self.publishInner(reply_subject, status_headers, "", null, false);
+    }
+
+    /// Get-or-create a round-robin cursor for `(filter, group)`. Key is owned
+    /// by `qg_rr`; cursor wraps via `+%=` so it never traps.
+    fn qgCursor(self: *Router, composite_key: []const u8) !*u64 {
+        const gop = try self.qg_rr.getOrPut(self.gpa, composite_key);
+        if (!gop.found_existing) {
+            const owned = self.gpa.dupe(u8, composite_key) catch |err| {
+                _ = self.qg_rr.remove(composite_key);
+                return err;
+            };
+            gop.key_ptr.* = owned;
+            gop.value_ptr.* = 0;
+        }
+        return gop.value_ptr;
     }
 
     /// Append MSG bytes to the conn's outbound buffer, record a kick, queue
     /// the sub for removal on close / max_msgs. Per-sub writeMsg failures
-    /// are silently dropped.
+    /// are silently dropped. LVC subscribers always get plain MSG: cached
+    /// values have no headers in this version.
     fn deliverOne(
         self: *Router,
         s: *Subscription,
         subject: []const u8,
+        headers: ?[]const u8,
         payload: []const u8,
         scratch: Allocator,
         kicks: *std.ArrayListUnmanaged(*Conn),
@@ -454,9 +568,9 @@ pub const Router = struct {
         }
         if (s.is_lvc) {
             const out_subject = std.fmt.allocPrint(scratch, "{s}{s}", .{ lvc_prefix, subject }) catch return;
-            s.conn.writeMsg(out_subject, s.sid, null, payload) catch {};
+            s.conn.writeMsg(out_subject, s.sid, null, null, payload) catch {};
         } else {
-            s.conn.writeMsg(subject, s.sid, null, payload) catch {};
+            s.conn.writeMsg(subject, s.sid, null, headers, payload) catch {};
         }
         try kicks.append(scratch, s.conn);
         s.delivered += 1;
@@ -481,6 +595,21 @@ pub const Router = struct {
         try list.appendSlice(self.gpa, payload);
     }
 };
+
+/// Add `s` to the queue-group bucket keyed by `(filter, group)`. Composite
+/// key uses NUL as separator; allocated in `scratch` (per-publish arena).
+fn addToQgBucket(
+    qg_buckets: *std.StringHashMapUnmanaged(std.ArrayListUnmanaged(*Subscription)),
+    scratch: Allocator,
+    filter: []const u8,
+    group: []const u8,
+    sub: *Subscription,
+) !void {
+    const key = try std.fmt.allocPrint(scratch, "{s}\x00{s}", .{ filter, group });
+    const gop = try qg_buckets.getOrPut(scratch, key);
+    if (!gop.found_existing) gop.value_ptr.* = .empty;
+    try gop.value_ptr.append(scratch, sub);
+}
 
 fn splitTokens(gpa: Allocator, s: []const u8) ![][]const u8 {
     var count: usize = 1;
@@ -515,7 +644,7 @@ pub fn rulesPublisher(r: *Router) rules_mod.Publisher {
 
 fn rulesPublish(ctx: *anyopaque, subj: []const u8, payload: []const u8) anyerror!void {
     const r: *Router = @ptrCast(@alignCast(ctx));
-    try r.publish(subj, payload);
+    try r.publish(subj, null, payload);
 }
 
 // --- Tests --------------------------------------------------------------
@@ -544,10 +673,10 @@ test "router: literal subs go in the literal bucket, wildcards in wildcard list"
 
     const a = try makeConn(testing.allocator, 1);
     defer a.deinit();
-    try router.subscribe(a, "foo.bar", "1");
-    try router.subscribe(a, "foo.*", "2");
-    try router.subscribe(a, "baz.>", "3");
-    try router.subscribe(a, "qux.zot", "4");
+    try router.subscribe(a, "foo.bar", "1", null);
+    try router.subscribe(a, "foo.*", "2", null);
+    try router.subscribe(a, "baz.>", "3", null);
+    try router.subscribe(a, "qux.zot", "4", null);
 
     try testing.expectEqual(@as(usize, 2), router.literal_subs.count());
     try testing.expectEqual(@as(usize, 2), router.wildcard_subs.items.len);
@@ -564,10 +693,10 @@ test "router: literal-only publish does not touch wildcard subs" {
     const b = try makeConn(testing.allocator, 2);
     defer b.deinit();
 
-    try router.subscribe(a, "foo.bar", "1");
-    try router.subscribe(b, "other.>", "2");
+    try router.subscribe(a, "foo.bar", "1", null);
+    try router.subscribe(b, "other.>", "2", null);
 
-    try router.publish("foo.bar", "hi");
+    try router.publish("foo.bar", null, "hi");
 
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
     try testing.expectEqual(@as(usize, 0), deliveredMsgCount(b));
@@ -579,11 +708,11 @@ test "router: wildcard sub matches via wildcard path" {
 
     const a = try makeConn(testing.allocator, 1);
     defer a.deinit();
-    try router.subscribe(a, "foo.*", "1");
+    try router.subscribe(a, "foo.*", "1", null);
 
-    try router.publish("foo.bar", "x");
-    try router.publish("foo.baz", "y");
-    try router.publish("nope.bar", "z");
+    try router.publish("foo.bar", null, "x");
+    try router.publish("foo.baz", null, "y");
+    try router.publish("nope.bar", null, "z");
 
     try testing.expectEqual(@as(usize, 2), deliveredMsgCount(a));
 }
@@ -594,12 +723,12 @@ test "router: max_msgs auto-unsub drops sub from literal bucket" {
 
     const a = try makeConn(testing.allocator, 1);
     defer a.deinit();
-    try router.subscribe(a, "foo.bar", "1");
+    try router.subscribe(a, "foo.bar", "1", null);
     try router.unsubscribe(a, "1", 2);
 
-    try router.publish("foo.bar", "x");
-    try router.publish("foo.bar", "y");
-    try router.publish("foo.bar", "z");
+    try router.publish("foo.bar", null, "x");
+    try router.publish("foo.bar", null, "y");
+    try router.publish("foo.bar", null, "z");
 
     try testing.expectEqual(@as(usize, 2), deliveredMsgCount(a));
     // Bucket should be cleaned up after the second delivery removed the sub.
@@ -612,11 +741,11 @@ test "router: max_msgs auto-unsub drops wildcard sub" {
 
     const a = try makeConn(testing.allocator, 1);
     defer a.deinit();
-    try router.subscribe(a, "foo.*", "1");
+    try router.subscribe(a, "foo.*", "1", null);
     try router.unsubscribe(a, "1", 1);
 
-    try router.publish("foo.bar", "x");
-    try router.publish("foo.baz", "y");
+    try router.publish("foo.bar", null, "x");
+    try router.publish("foo.baz", null, "y");
 
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
     try testing.expectEqual(@as(usize, 0), router.wildcard_subs.items.len);
@@ -630,10 +759,10 @@ test "router: removeAllFor cleans up across both paths" {
     const b = try makeConn(testing.allocator, 2);
     defer b.deinit();
 
-    try router.subscribe(a, "foo.bar", "1");
-    try router.subscribe(a, "foo.*", "2");
-    try router.subscribe(b, "foo.bar", "3");
-    try router.subscribe(b, "wild.>", "4");
+    try router.subscribe(a, "foo.bar", "1", null);
+    try router.subscribe(a, "foo.*", "2", null);
+    try router.subscribe(b, "foo.bar", "3", null);
+    try router.subscribe(b, "wild.>", "4", null);
 
     a.markClosed();
     router.removeAllFor(a);
@@ -642,7 +771,7 @@ test "router: removeAllFor cleans up across both paths" {
     try testing.expectEqual(@as(usize, 1), router.literal_subs.count());
     try testing.expectEqual(@as(usize, 1), router.wildcard_subs.items.len);
 
-    try router.publish("foo.bar", "x");
+    try router.publish("foo.bar", null, "x");
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(b));
 }
 
@@ -652,7 +781,7 @@ test "router: empty bucket is reclaimed when last sub leaves" {
 
     const a = try makeConn(testing.allocator, 1);
     defer a.deinit();
-    try router.subscribe(a, "foo.bar", "1");
+    try router.subscribe(a, "foo.bar", "1", null);
     try testing.expectEqual(@as(usize, 1), router.literal_subs.count());
 
     try router.unsubscribe(a, "1", null);
@@ -668,14 +797,188 @@ test "router: bucket key survives owner sub leaving while others remain" {
     const b = try makeConn(testing.allocator, 2);
     defer b.deinit();
 
-    try router.subscribe(a, "foo.bar", "1");
-    try router.subscribe(b, "foo.bar", "2");
+    try router.subscribe(a, "foo.bar", "1", null);
+    try router.subscribe(b, "foo.bar", "2", null);
 
     // Drop the first sub, which contributed the bucket key initially.
     try router.unsubscribe(a, "1", null);
 
     // Bucket should still exist and still match publishes.
     try testing.expectEqual(@as(usize, 1), router.literal_subs.count());
-    try router.publish("foo.bar", "x");
+    try router.publish("foo.bar", null, "x");
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(b));
+}
+
+test "router: queue group delivers to one of N round-robin" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+    const b = try makeConn(testing.allocator, 2);
+    defer b.deinit();
+    const c = try makeConn(testing.allocator, 3);
+    defer c.deinit();
+
+    try router.subscribe(a, "work.>", "1", "workers");
+    try router.subscribe(b, "work.>", "2", "workers");
+    try router.subscribe(c, "work.>", "3", "workers");
+
+    try router.publish("work.a", null, "1");
+    try router.publish("work.b", null, "2");
+    try router.publish("work.c", null, "3");
+    try router.publish("work.d", null, "4");
+    try router.publish("work.e", null, "5");
+    try router.publish("work.f", null, "6");
+
+    // 6 messages spread across 3 group members, exactly one per message.
+    const total = deliveredMsgCount(a) + deliveredMsgCount(b) + deliveredMsgCount(c);
+    try testing.expectEqual(@as(usize, 6), total);
+    // Round-robin: each conn should get exactly 2.
+    try testing.expectEqual(@as(usize, 2), deliveredMsgCount(a));
+    try testing.expectEqual(@as(usize, 2), deliveredMsgCount(b));
+    try testing.expectEqual(@as(usize, 2), deliveredMsgCount(c));
+}
+
+test "router: plain sub + queue group both deliver" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+    const b = try makeConn(testing.allocator, 2);
+    defer b.deinit();
+    const audit = try makeConn(testing.allocator, 3);
+    defer audit.deinit();
+
+    try router.subscribe(a, "evt.>", "1", "workers");
+    try router.subscribe(b, "evt.>", "2", "workers");
+    try router.subscribe(audit, "evt.>", "3", null); // plain, no group
+
+    try router.publish("evt.x", null, "1");
+    try router.publish("evt.y", null, "2");
+
+    // Plain sub gets every message; group splits 2 messages across a/b.
+    try testing.expectEqual(@as(usize, 2), deliveredMsgCount(audit));
+    try testing.expectEqual(@as(usize, 2), deliveredMsgCount(a) + deliveredMsgCount(b));
+}
+
+test "router: distinct queue groups each get one message" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+    const b = try makeConn(testing.allocator, 2);
+    defer b.deinit();
+    const c = try makeConn(testing.allocator, 3);
+    defer c.deinit();
+    const d = try makeConn(testing.allocator, 4);
+    defer d.deinit();
+
+    try router.subscribe(a, "evt.>", "1", "workers");
+    try router.subscribe(b, "evt.>", "2", "workers");
+    try router.subscribe(c, "evt.>", "3", "auditors");
+    try router.subscribe(d, "evt.>", "4", "auditors");
+
+    try router.publish("evt.x", null, "1");
+
+    // Both groups get exactly one delivery for the same message.
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a) + deliveredMsgCount(b));
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(c) + deliveredMsgCount(d));
+}
+
+test "router: queue groups on different filters are independent" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+    const b = try makeConn(testing.allocator, 2);
+    defer b.deinit();
+
+    try router.subscribe(a, "left.>", "1", "shared");
+    try router.subscribe(b, "right.>", "2", "shared");
+
+    try router.publish("left.x", null, "1");
+    try router.publish("right.x", null, "2");
+
+    // Same group name but distinct filters: each is its own pool.
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(b));
+}
+
+test "router: no-responders synthesizes 503 to reply when zero subs match" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const requestor = try makeConn(testing.allocator, 1);
+    defer requestor.deinit();
+    try router.subscribe(requestor, "_INBOX.xyz", "1", null);
+
+    // Request to a subject with no subscribers, with no_responders=true.
+    try router.publishRequest("svc.req", null, "ping", "_INBOX.xyz", true);
+
+    // Requestor should have received an HMSG with NATS/1.0 503 to _INBOX.xyz.
+    // (deliveredMsgCount counts plain MSG \n boundaries; HMSG framing is
+    // different, so just check the bytes.)
+    try testing.expect(std.mem.indexOf(u8, requestor.out.items, "HMSG _INBOX.xyz 1") != null);
+    try testing.expect(std.mem.indexOf(u8, requestor.out.items, "NATS/1.0 503") != null);
+}
+
+test "router: no-responders does not fire when at least one sub matches" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const requestor = try makeConn(testing.allocator, 1);
+    defer requestor.deinit();
+    const responder = try makeConn(testing.allocator, 2);
+    defer responder.deinit();
+
+    try router.subscribe(requestor, "_INBOX.xyz", "1", null);
+    try router.subscribe(responder, "svc.req", "2", null);
+
+    try router.publishRequest("svc.req", null, "ping", "_INBOX.xyz", true);
+
+    // Responder gets the request; requestor gets nothing yet (responder
+    // hasn't replied), so no 503 synthesized.
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(responder));
+    try testing.expectEqual(@as(usize, 0), deliveredMsgCount(requestor));
+}
+
+test "router: no-responders without reply does nothing" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+    // No subs at all. With reply=null, the synth-503 has nowhere to go and
+    // must not panic / loop.
+    try router.publishRequest("svc.req", null, "ping", null, true);
+}
+
+test "router: removing one group member reroutes to remaining" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+    const b = try makeConn(testing.allocator, 2);
+    defer b.deinit();
+
+    try router.subscribe(a, "work.>", "1", "g");
+    try router.subscribe(b, "work.>", "2", "g");
+
+    try router.publish("work.x", null, "1");
+    try router.publish("work.y", null, "2");
+
+    // Each got 1 so far.
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(b));
+
+    try router.unsubscribe(a, "1", null);
+
+    try router.publish("work.z", null, "3");
+    try router.publish("work.w", null, "4");
+
+    // a is gone; b gets all subsequent messages.
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
+    try testing.expectEqual(@as(usize, 3), deliveredMsgCount(b));
 }
