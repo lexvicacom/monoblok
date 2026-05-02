@@ -88,8 +88,14 @@ pub const Router = struct {
     /// Literal-filter subs, keyed by `match_filter`. Bucket owns its key
     /// (duped on first insert, freed when the bucket goes empty).
     literal_subs: std.StringHashMapUnmanaged(LiteralBucket) = .empty,
-    /// Wildcard-filter subs (`*` or `>`). Linear scan per publish.
-    wildcard_subs: std.ArrayListUnmanaged(*Subscription) = .empty,
+    /// Wildcard-filter subs whose first token is a literal (`foo.*`,
+    /// `T.*.p`), bucketed by that first token so a publish only scans
+    /// subs whose first token matches the subject's. Bucket owns its key.
+    wildcard_buckets: std.StringHashMapUnmanaged(WildcardBucket) = .empty,
+    /// Wildcard-filter subs whose first token is itself a wildcard
+    /// (`*.foo`, `>`). These have to be considered for every publish, so
+    /// they stay in a single linear list.
+    wildcard_global: std.ArrayListUnmanaged(*Subscription) = .empty,
     lvc_enabled: bool,
     last_value: std.StringHashMap(std.ArrayList(u8)),
     /// Reusable scratch for `publish` (kicks list, to_drop list, LVC subject
@@ -109,6 +115,21 @@ pub const Router = struct {
         subs: std.ArrayListUnmanaged(*Subscription) = .empty,
     };
 
+    pub const WildcardBucket = struct {
+        subs: std.ArrayListUnmanaged(*Subscription) = .empty,
+    };
+
+    /// Returns the first dot-separated token of `s`, or all of `s` if no dot.
+    fn firstToken(s: []const u8) []const u8 {
+        const i = std.mem.indexOfScalar(u8, s, '.') orelse return s;
+        return s[0..i];
+    }
+
+    /// True if `tok` is a wildcard token (`*` or `>`).
+    fn isWildcardToken(tok: []const u8) bool {
+        return tok.len == 1 and (tok[0] == '*' or tok[0] == '>');
+    }
+
     pub fn init(gpa: Allocator, lvc_enabled: bool) Router {
         return .{
             .gpa = gpa,
@@ -127,8 +148,15 @@ pub const Router = struct {
             self.gpa.free(e.key_ptr.*);
         }
         self.literal_subs.deinit(self.gpa);
-        for (self.wildcard_subs.items) |s| self.freeSub(s);
-        self.wildcard_subs.deinit(self.gpa);
+        var wb_it = self.wildcard_buckets.iterator();
+        while (wb_it.next()) |e| {
+            for (e.value_ptr.subs.items) |s| self.freeSub(s);
+            e.value_ptr.subs.deinit(self.gpa);
+            self.gpa.free(e.key_ptr.*);
+        }
+        self.wildcard_buckets.deinit(self.gpa);
+        for (self.wildcard_global.items) |s| self.freeSub(s);
+        self.wildcard_global.deinit(self.gpa);
         var lv_it = self.last_value.iterator();
         while (lv_it.next()) |e| {
             self.gpa.free(e.key_ptr.*);
@@ -221,9 +249,38 @@ pub const Router = struct {
             }
             if (is_lvc) try self.emitCached(conn, match_filter, sid);
         } else {
-            try self.wildcard_subs.append(self.gpa, sub);
-            errdefer _ = self.wildcard_subs.pop();
-            if (is_lvc) try self.emitCached(conn, match_filter, sid);
+            const first_tok = firstToken(match_filter);
+            if (isWildcardToken(first_tok)) {
+                try self.wildcard_global.append(self.gpa, sub);
+                errdefer _ = self.wildcard_global.pop();
+                if (is_lvc) try self.emitCached(conn, match_filter, sid);
+            } else {
+                const gop = try self.wildcard_buckets.getOrPut(self.gpa, first_tok);
+                if (!gop.found_existing) {
+                    const key_owned = self.gpa.dupe(u8, first_tok) catch |err| {
+                        _ = self.wildcard_buckets.remove(first_tok);
+                        return err;
+                    };
+                    gop.key_ptr.* = key_owned;
+                    gop.value_ptr.* = .{};
+                }
+                gop.value_ptr.subs.append(self.gpa, sub) catch |err| {
+                    if (!gop.found_existing) {
+                        self.gpa.free(gop.key_ptr.*);
+                        _ = self.wildcard_buckets.remove(first_tok);
+                    }
+                    return err;
+                };
+                errdefer {
+                    _ = gop.value_ptr.subs.pop();
+                    if (!gop.found_existing) {
+                        gop.value_ptr.subs.deinit(self.gpa);
+                        self.gpa.free(gop.key_ptr.*);
+                        _ = self.wildcard_buckets.remove(first_tok);
+                    }
+                }
+                if (is_lvc) try self.emitCached(conn, match_filter, sid);
+            }
         }
 
         conn.kick();
@@ -270,11 +327,29 @@ pub const Router = struct {
                 }
             }
         } else {
-            var i: usize = 0;
-            while (i < self.wildcard_subs.items.len) : (i += 1) {
-                if (self.wildcard_subs.items[i] == sub) {
-                    _ = self.wildcard_subs.swapRemove(i);
-                    break;
+            const first_tok = firstToken(sub.match_filter);
+            if (isWildcardToken(first_tok)) {
+                var i: usize = 0;
+                while (i < self.wildcard_global.items.len) : (i += 1) {
+                    if (self.wildcard_global.items[i] == sub) {
+                        _ = self.wildcard_global.swapRemove(i);
+                        break;
+                    }
+                }
+            } else if (self.wildcard_buckets.getEntry(first_tok)) |entry| {
+                const bucket = entry.value_ptr;
+                var i: usize = 0;
+                while (i < bucket.subs.items.len) : (i += 1) {
+                    if (bucket.subs.items[i] == sub) {
+                        _ = bucket.subs.swapRemove(i);
+                        break;
+                    }
+                }
+                if (bucket.subs.items.len == 0) {
+                    bucket.subs.deinit(self.gpa);
+                    const key = entry.key_ptr.*;
+                    _ = self.wildcard_buckets.remove(key);
+                    self.gpa.free(key);
                 }
             }
         }
@@ -282,41 +357,38 @@ pub const Router = struct {
     }
 
     pub fn unsubscribe(self: *Router, conn: *Conn, sid: []const u8, max_msgs: ?u64) !void {
-        try self.scanLiteralAndPrune(scanModeUnsub(conn, sid, max_msgs));
-
-        var i: usize = 0;
-        while (i < self.wildcard_subs.items.len) {
-            const s = self.wildcard_subs.items[i];
-            if (s.conn == conn and std.mem.eql(u8, s.sid, sid)) {
-                if (max_msgs) |m| {
-                    if (s.delivered >= m) {
-                        _ = self.wildcard_subs.swapRemove(i);
-                        self.freeSub(s);
-                        continue;
-                    }
-                    s.max_msgs = m;
-                } else {
-                    _ = self.wildcard_subs.swapRemove(i);
-                    self.freeSub(s);
-                    continue;
-                }
-            }
-            i += 1;
-        }
+        const mode = scanModeUnsub(conn, sid, max_msgs);
+        try self.scanLiteralAndPrune(mode);
+        try self.scanWildcardBucketsAndPrune(mode);
+        self.scanGlobalList(&self.wildcard_global, mode);
     }
 
     pub fn removeAllFor(self: *Router, conn: *Conn) void {
         // Best-effort: a scratch-alloc failure leaves stale subs, but the
         // conn is going away anyway.
-        self.scanLiteralAndPrune(scanModeRemoveAll(conn)) catch {};
+        const mode = scanModeRemoveAll(conn);
+        self.scanLiteralAndPrune(mode) catch {};
+        self.scanWildcardBucketsAndPrune(mode) catch {};
+        self.scanGlobalList(&self.wildcard_global, mode);
+    }
 
+    /// Apply `mode` to every sub in a flat list. No bucket bookkeeping.
+    fn scanGlobalList(self: *Router, list: *std.ArrayListUnmanaged(*Subscription), mode: ScanMode) void {
         var i: usize = 0;
-        while (i < self.wildcard_subs.items.len) {
-            const s = self.wildcard_subs.items[i];
-            if (s.conn == conn) {
-                _ = self.wildcard_subs.swapRemove(i);
-                self.freeSub(s);
-            } else i += 1;
+        while (i < list.items.len) {
+            const s = list.items[i];
+            const r = mode.classify(s);
+            switch (r.action) {
+                .keep => i += 1,
+                .set_max => {
+                    s.max_msgs = r.max_msgs;
+                    i += 1;
+                },
+                .drop => {
+                    _ = list.swapRemove(i);
+                    self.freeSub(s);
+                },
+            }
         }
     }
 
@@ -392,6 +464,44 @@ pub const Router = struct {
         }
     }
 
+    /// Mirror of `scanLiteralAndPrune` for the first-token-bucketed wildcard map.
+    fn scanWildcardBucketsAndPrune(self: *Router, mode: ScanMode) !void {
+        var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        var empties: std.ArrayListUnmanaged([]const u8) = .empty;
+        var wb_it = self.wildcard_buckets.iterator();
+        while (wb_it.next()) |e| {
+            var i: usize = 0;
+            while (i < e.value_ptr.subs.items.len) {
+                const s = e.value_ptr.subs.items[i];
+                const r = mode.classify(s);
+                switch (r.action) {
+                    .keep => i += 1,
+                    .set_max => {
+                        s.max_msgs = r.max_msgs;
+                        i += 1;
+                    },
+                    .drop => {
+                        _ = e.value_ptr.subs.swapRemove(i);
+                        self.freeSub(s);
+                    },
+                }
+            }
+            if (e.value_ptr.subs.items.len == 0) {
+                try empties.append(arena, e.key_ptr.*);
+            }
+        }
+        for (empties.items) |key| {
+            if (self.wildcard_buckets.fetchRemove(key)) |kv| {
+                var bucket_copy = kv.value;
+                bucket_copy.subs.deinit(self.gpa);
+                self.gpa.free(kv.key);
+            }
+        }
+    }
+
     /// Fan-out a publish to matching subscribers. `headers`, when non-null,
     /// is the opaque NATS-v1 header chunk forwarded verbatim to subscribers
     /// via HMSG. The LVC stores payload only (headers are dropped on cache).
@@ -428,8 +538,9 @@ pub const Router = struct {
         }
 
         const have_literal = self.literal_subs.count() != 0;
-        const have_wildcard = self.wildcard_subs.items.len != 0;
-        if (!have_literal and !have_wildcard) {
+        const have_wildcard_buckets = self.wildcard_buckets.count() != 0;
+        const have_wildcard_global = self.wildcard_global.items.len != 0;
+        if (!have_literal and !have_wildcard_buckets and !have_wildcard_global) {
             if (self.bridge_fn) |f| if (self.bridge_ctx) |ctx| f(ctx, subject, payload);
             // Zero subs at all: still synthesize the 503 if requested.
             if (no_responders) if (reply) |r| try self.emitNoResponders(r);
@@ -460,15 +571,32 @@ pub const Router = struct {
             }
         }
 
-        if (have_wildcard) {
+        if (have_wildcard_buckets or have_wildcard_global) {
             var sub_tokens_buf: [subject_mod.max_tokens][]const u8 = undefined;
             const sub_tokens = splitInto(subject, &sub_tokens_buf);
-            for (self.wildcard_subs.items) |s| {
-                if (!subject_mod.matchesTokens(s.tokens, sub_tokens)) continue;
-                if (s.queue_group) |qg| {
-                    try addToQgBucket(&qg_buckets, scratch, s.match_filter, qg, s);
-                } else {
-                    try self.deliverOne(s, subject, reply, headers, payload, scratch, &kicks, &to_drop);
+            const subj_first = firstToken(subject);
+
+            if (have_wildcard_buckets) {
+                if (self.wildcard_buckets.getPtr(subj_first)) |bucket| {
+                    for (bucket.subs.items) |s| {
+                        if (!subject_mod.matchesTokens(s.tokens, sub_tokens)) continue;
+                        if (s.queue_group) |qg| {
+                            try addToQgBucket(&qg_buckets, scratch, s.match_filter, qg, s);
+                        } else {
+                            try self.deliverOne(s, subject, reply, headers, payload, scratch, &kicks, &to_drop);
+                        }
+                    }
+                }
+            }
+
+            if (have_wildcard_global) {
+                for (self.wildcard_global.items) |s| {
+                    if (!subject_mod.matchesTokens(s.tokens, sub_tokens)) continue;
+                    if (s.queue_group) |qg| {
+                        try addToQgBucket(&qg_buckets, scratch, s.match_filter, qg, s);
+                    } else {
+                        try self.deliverOne(s, subject, reply, headers, payload, scratch, &kicks, &to_drop);
+                    }
                 }
             }
         }
@@ -682,9 +810,14 @@ test "router: literal subs go in the literal bucket, wildcards in wildcard list"
     try router.subscribe(a, "qux.zot", "4", null);
 
     try testing.expectEqual(@as(usize, 2), router.literal_subs.count());
-    try testing.expectEqual(@as(usize, 2), router.wildcard_subs.items.len);
+    // foo.* and baz.> both have literal first tokens, so they go into
+    // wildcard_buckets keyed by "foo" and "baz" respectively.
+    try testing.expectEqual(@as(usize, 2), router.wildcard_buckets.count());
+    try testing.expectEqual(@as(usize, 0), router.wildcard_global.items.len);
     try testing.expect(router.literal_subs.contains("foo.bar"));
     try testing.expect(router.literal_subs.contains("qux.zot"));
+    try testing.expect(router.wildcard_buckets.contains("foo"));
+    try testing.expect(router.wildcard_buckets.contains("baz"));
 }
 
 test "router: literal-only publish does not touch wildcard subs" {
@@ -751,7 +884,8 @@ test "router: max_msgs auto-unsub drops wildcard sub" {
     try router.publish("foo.baz", null, "y");
 
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
-    try testing.expectEqual(@as(usize, 0), router.wildcard_subs.items.len);
+    try testing.expectEqual(@as(usize, 0), router.wildcard_buckets.count());
+    try testing.expectEqual(@as(usize, 0), router.wildcard_global.items.len);
 }
 
 test "router: removeAllFor cleans up across both paths" {
@@ -772,7 +906,8 @@ test "router: removeAllFor cleans up across both paths" {
     a.deinit();
 
     try testing.expectEqual(@as(usize, 1), router.literal_subs.count());
-    try testing.expectEqual(@as(usize, 1), router.wildcard_subs.items.len);
+    try testing.expectEqual(@as(usize, 1), router.wildcard_buckets.count());
+    try testing.expect(router.wildcard_buckets.contains("wild"));
 
     try router.publish("foo.bar", null, "x");
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(b));
@@ -1041,4 +1176,71 @@ test "router: removing one group member reroutes to remaining" {
     // a is gone; b gets all subsequent messages.
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
     try testing.expectEqual(@as(usize, 3), deliveredMsgCount(b));
+}
+
+test "router: wildcard with leading wildcard token goes to global list" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+
+    // First-token wildcards must live in wildcard_global since they could
+    // match any first-token bucket.
+    try router.subscribe(a, "*.foo", "1", null);
+    try router.subscribe(a, ">", "2", null);
+
+    try testing.expectEqual(@as(usize, 0), router.wildcard_buckets.count());
+    try testing.expectEqual(@as(usize, 2), router.wildcard_global.items.len);
+}
+
+test "router: bucketed wildcard scan skips other buckets" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+    const b = try makeConn(testing.allocator, 2);
+    defer b.deinit();
+
+    try router.subscribe(a, "foo.*", "1", null);
+    try router.subscribe(b, "bar.*", "2", null);
+
+    // Publish on foo.x: only `a` should match. Confirms the bar bucket
+    // wasn't even scanned (functionally; perf gain is implicit).
+    try router.publish("foo.x", null, "hi");
+    try testing.expectEqual(@as(usize, 1), deliveredMsgCount(a));
+    try testing.expectEqual(@as(usize, 0), deliveredMsgCount(b));
+}
+
+test "router: leading-wildcard sub matches subjects from any bucket" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+
+    try router.subscribe(a, "*.x", "1", null);
+
+    try router.publish("foo.x", null, "1");
+    try router.publish("bar.x", null, "2");
+    try router.publish("baz.x", null, "3");
+    try router.publish("foo.y", null, "4");
+
+    // Three matches across three first-token buckets, plus one miss.
+    try testing.expectEqual(@as(usize, 3), deliveredMsgCount(a));
+}
+
+test "router: empty wildcard bucket is reclaimed when last sub leaves" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const a = try makeConn(testing.allocator, 1);
+    defer a.deinit();
+
+    try router.subscribe(a, "foo.*", "1", null);
+    try testing.expectEqual(@as(usize, 1), router.wildcard_buckets.count());
+
+    try router.unsubscribe(a, "1", null);
+    try testing.expectEqual(@as(usize, 0), router.wildcard_buckets.count());
 }
