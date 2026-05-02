@@ -82,6 +82,10 @@ pub const Router = struct {
     wildcard_subs: std.ArrayListUnmanaged(*Subscription) = .empty,
     lvc_enabled: bool,
     last_value: std.StringHashMap(std.ArrayList(u8)),
+    /// Reusable scratch for `publish` (kicks list, to_drop list, LVC subject
+    /// formatting). Reset with retain_capacity per publish so the steady
+    /// state allocates nothing.
+    publish_arena: std.heap.ArenaAllocator,
     /// Optional export hook (the NATS bridge). Called once per publish after
     /// local fan-out; the bridge does its own subject-filter match.
     bridge_ctx: ?*anyopaque = null,
@@ -96,10 +100,12 @@ pub const Router = struct {
             .gpa = gpa,
             .lvc_enabled = lvc_enabled,
             .last_value = .init(gpa),
+            .publish_arena = .init(gpa),
         };
     }
 
     pub fn deinit(self: *Router) void {
+        self.publish_arena.deinit();
         var it = self.literal_subs.iterator();
         while (it.next()) |e| {
             for (e.value_ptr.subs.items) |s| self.freeSub(s);
@@ -378,9 +384,8 @@ pub const Router = struct {
             return;
         }
 
-        var scratch_state: std.heap.ArenaAllocator = .init(self.gpa);
-        defer scratch_state.deinit();
-        const scratch = scratch_state.allocator();
+        defer _ = self.publish_arena.reset(.retain_capacity);
+        const scratch = self.publish_arena.allocator();
 
         var kicks: std.ArrayListUnmanaged(*Conn) = .empty;
         // Subs that hit max_msgs or whose conn closed mid-fanout. Removed
@@ -406,17 +411,23 @@ pub const Router = struct {
 
         for (to_drop.items) |s| self.dropSub(s);
 
-        // Dedup kicks: each conn kicked at most once per publish.
-        std.mem.sort(*Conn, kicks.items, {}, struct {
-            fn lt(_: void, a: *Conn, b: *Conn) bool {
-                return @intFromPtr(a) < @intFromPtr(b);
+        // Dedup kicks: each conn kicked at most once per publish. Sort+dedup
+        // is O(n log n) and worth the work for fan-out workloads, but with 0
+        // or 1 kick (the common 1-sub case) we skip it entirely.
+        if (kicks.items.len <= 1) {
+            if (kicks.items.len == 1) kicks.items[0].kick();
+        } else {
+            std.mem.sort(*Conn, kicks.items, {}, struct {
+                fn lt(_: void, a: *Conn, b: *Conn) bool {
+                    return @intFromPtr(a) < @intFromPtr(b);
+                }
+            }.lt);
+            var last: ?*Conn = null;
+            for (kicks.items) |c| {
+                if (last == c) continue;
+                c.kick();
+                last = c;
             }
-        }.lt);
-        var last: ?*Conn = null;
-        for (kicks.items) |c| {
-            if (last == c) continue;
-            c.kick();
-            last = c;
         }
 
         // Bridge fires after local fan-out so a blocked remote can't starve
