@@ -191,6 +191,8 @@ Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-chea
 
 Build-out before build-across: start with one monoblok and reach for the mixer when one core actually isn't enough. See [docs/mixer.md](./docs/mixer.md) for the sharding rule, SUB constraints, supervisor policy, and what's out of scope in v1. Runnable example: [`examples/mixer.py`](./examples/mixer.py).
 
+Note: the mixer was built when patchbay evaluation was the per-process bottleneck. Now that the patchbay is fast, the mixer's own parse loop (every byte gets parsed twice, once at the mixer and once at the worker) tends to cap before the workers do. Sustained-load measurements have the mixer pinned at one core while workers sit at ~50% each, and adding more client connections doesn't move throughput.
+
 ## Listeners
 
 By default monoblok listens on TCP (`--port`, default 4222). It can additionally or instead listen on an AF_UNIX stream socket:
