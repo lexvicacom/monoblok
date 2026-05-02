@@ -47,6 +47,14 @@ monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is 
 
 The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
 
+## NATS Core compat
+
+monoblok speaks the NATS Core wire protocol. Supported: PUB / SUB / UNSUB / MSG, wildcards (`*`, `>`), request/reply via the reply-subject convention, queue groups, headers, no-responders, and auto-unsub-after-N.
+
+Out of scope: TLS (terminate with an NLB/HAProxy/nginx?), auth in any form (token, user-pass, NKey, JWT), JetStream and anything built on it (streams, KV, object store), and cluster routes / leaf nodes / `$SYS.*`.
+
+Caveats:: the LVC stores payload only, so HMSG replays from the cache come back as plain MSG without the original header chunk. The outbound NATS bridge forwards payload only.
+
 ## Patchbay
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
