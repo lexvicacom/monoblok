@@ -34,6 +34,10 @@ pub const ClientOp = union(enum) {
     pub const Pub = struct {
         subject: []const u8,
         reply: ?[]const u8,
+        /// Optional NATS protocol-v1 header chunk (HPUB). When non-null, the
+        /// bytes start with `NATS/1.0\r\n` and end with `\r\n\r\n`. The server
+        /// treats this as opaque (forward to subscribers, do not interpret).
+        headers: ?[]const u8 = null,
         payload: []const u8,
     };
     pub const Sub = struct {
@@ -66,6 +70,9 @@ pub const ServerOp = union(enum) {
         subject: []const u8,
         sid: []const u8,
         reply: ?[]const u8,
+        /// Optional NATS protocol-v1 header chunk (HMSG). Same shape and
+        /// opacity rules as `Pub.headers`.
+        headers: ?[]const u8 = null,
         payload: []const u8,
     };
 };
@@ -101,6 +108,7 @@ pub fn parseClientOp(buf: []const u8) ParseError!ParseResult {
     if (eqIgnoreCase(verb, "SUB")) return .{ .op = try parseSub(rest), .consumed = line_end };
     if (eqIgnoreCase(verb, "UNSUB")) return .{ .op = try parseUnsub(rest), .consumed = line_end };
     if (eqIgnoreCase(verb, "PUB")) return parsePub(buf, line_end, rest);
+    if (eqIgnoreCase(verb, "HPUB")) return parseHpub(buf, line_end, rest);
     return error.UnknownOp;
 }
 
@@ -163,6 +171,52 @@ fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Parse
     };
 }
 
+/// HPUB <subject> [reply] <hdr_len> <total_len>\r\n<headers><payload>\r\n
+/// `headers` is opaque to us (the v1 protocol's NATS/1.0\r\n...\r\n\r\n chunk);
+/// `payload` is the bytes after the header chunk. Both are slices into `buf`.
+fn parseHpub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!ParseResult {
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
+    const subject = it.next() orelse return error.InvalidArgs;
+    const a = it.next() orelse return error.InvalidArgs;
+    const b = it.next() orelse return error.InvalidArgs;
+    const c = it.next();
+    if (it.next() != null) return error.InvalidArgs;
+
+    var reply: ?[]const u8 = null;
+    var hdr_str: []const u8 = undefined;
+    var total_str: []const u8 = undefined;
+    if (c) |last| {
+        reply = a;
+        hdr_str = b;
+        total_str = last;
+    } else {
+        hdr_str = a;
+        total_str = b;
+    }
+    const hdr_len = std.fmt.parseInt(usize, hdr_str, 10) catch return error.InvalidArgs;
+    const total_len = std.fmt.parseInt(usize, total_str, 10) catch return error.InvalidArgs;
+    if (hdr_len > total_len) return error.InvalidArgs;
+    if (total_len > max_payload) return error.PayloadTooLarge;
+
+    const after_header = buf[line_end..];
+    if (after_header.len < total_len + 1) return error.NeedMoreData;
+    const headers = after_header[0..hdr_len];
+    const payload = after_header[hdr_len..total_len];
+    const tail = after_header[total_len..];
+    const trailer_len: usize = switch (tail[0]) {
+        '\r' => if (tail.len < 2) return error.NeedMoreData
+                else if (tail[1] == '\n') 2
+                else return error.MalformedOp,
+        '\n' => 1,
+        else => return error.MalformedOp,
+    };
+
+    return .{
+        .op = .{ .pub_msg = .{ .subject = subject, .reply = reply, .headers = headers, .payload = payload } },
+        .consumed = line_end + total_len + trailer_len,
+    };
+}
+
 /// Parse one server-to-client op from `buf`. Symmetric with parseClientOp.
 pub fn parseServerOp(buf: []const u8) ParseError!ServerParseResult {
     const nl = std.mem.indexOfScalar(u8, buf, '\n') orelse {
@@ -189,6 +243,7 @@ pub fn parseServerOp(buf: []const u8) ParseError!ServerParseResult {
         return .{ .op = .{ .err = rest }, .consumed = line_end };
     }
     if (eqIgnoreCase(verb, "MSG")) return parseMsg(buf, line_end, rest);
+    if (eqIgnoreCase(verb, "HMSG")) return parseHmsg(buf, line_end, rest);
     return error.UnknownOp;
 }
 
@@ -226,6 +281,51 @@ fn parseMsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Serve
     return .{
         .op = .{ .msg = .{ .subject = subject, .sid = sid, .reply = reply, .payload = payload } },
         .consumed = line_end + nbytes + trailer_len,
+    };
+}
+
+/// HMSG <subject> <sid> [reply] <hdr_len> <total_len>\r\n<headers><payload>\r\n
+fn parseHmsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!ServerParseResult {
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
+    const subject = it.next() orelse return error.InvalidArgs;
+    const sid = it.next() orelse return error.InvalidArgs;
+    const a = it.next() orelse return error.InvalidArgs;
+    const b = it.next() orelse return error.InvalidArgs;
+    const c = it.next();
+    if (it.next() != null) return error.InvalidArgs;
+
+    var reply: ?[]const u8 = null;
+    var hdr_str: []const u8 = undefined;
+    var total_str: []const u8 = undefined;
+    if (c) |last| {
+        reply = a;
+        hdr_str = b;
+        total_str = last;
+    } else {
+        hdr_str = a;
+        total_str = b;
+    }
+    const hdr_len = std.fmt.parseInt(usize, hdr_str, 10) catch return error.InvalidArgs;
+    const total_len = std.fmt.parseInt(usize, total_str, 10) catch return error.InvalidArgs;
+    if (hdr_len > total_len) return error.InvalidArgs;
+    if (total_len > max_payload) return error.PayloadTooLarge;
+
+    const after_header = buf[line_end..];
+    if (after_header.len < total_len + 1) return error.NeedMoreData;
+    const headers = after_header[0..hdr_len];
+    const payload = after_header[hdr_len..total_len];
+    const tail = after_header[total_len..];
+    const trailer_len: usize = switch (tail[0]) {
+        '\r' => if (tail.len < 2) return error.NeedMoreData
+                else if (tail[1] == '\n') 2
+                else return error.MalformedOp,
+        '\n' => 1,
+        else => return error.MalformedOp,
+    };
+
+    return .{
+        .op = .{ .msg = .{ .subject = subject, .sid = sid, .reply = reply, .headers = headers, .payload = payload } },
+        .consumed = line_end + total_len + trailer_len,
     };
 }
 
@@ -313,7 +413,7 @@ pub fn writeInfo(
             "\"max_payload\":{d}," ++
             "\"client_id\":{d}," ++
             "\"monoblok_mode\":\"{s}\"," ++
-            "\"headers\":false," ++
+            "\"headers\":true," ++
             "\"auth_required\":false," ++
             "\"tls_required\":false" ++
         "}}\r\n",
@@ -350,6 +450,29 @@ pub fn writeMsg(
     } else {
         try out.print(gpa, "MSG {s} {s} {d}\r\n", .{ subject, sid, payload.len });
     }
+    try out.appendSlice(gpa, payload);
+    try out.appendSlice(gpa, "\r\n");
+}
+
+/// HMSG <subject> <sid> [reply] <hdr_len> <total_len>\r\n<headers><payload>\r\n
+/// `headers` is the opaque header chunk (NATS/1.0\r\n...\r\n\r\n) emitted by
+/// the original publisher; we forward it byte-for-byte.
+pub fn writeHmsg(
+    gpa: Allocator,
+    out: *std.ArrayList(u8),
+    subject: []const u8,
+    sid: []const u8,
+    reply: ?[]const u8,
+    headers: []const u8,
+    payload: []const u8,
+) !void {
+    const total = headers.len + payload.len;
+    if (reply) |r| {
+        try out.print(gpa, "HMSG {s} {s} {s} {d} {d}\r\n", .{ subject, sid, r, headers.len, total });
+    } else {
+        try out.print(gpa, "HMSG {s} {s} {d} {d}\r\n", .{ subject, sid, headers.len, total });
+    }
+    try out.appendSlice(gpa, headers);
     try out.appendSlice(gpa, payload);
     try out.appendSlice(gpa, "\r\n");
 }
@@ -521,4 +644,65 @@ test "writeMsg with reply" {
     defer buf.deinit(testing.allocator);
     try writeMsg(testing.allocator, &buf, "foo", "1", "reply.box", "hi");
     try testing.expectEqualStrings("MSG foo 1 reply.box 2\r\nhi\r\n", buf.items);
+}
+
+test "parse HPUB without reply" {
+    // HPUB foo <hdr_len> <total_len>\r\n<headers><payload>\r\n
+    const headers = "NATS/1.0\r\nFoo: bar\r\n\r\n";
+    const payload = "hello";
+    var msg: [128]u8 = undefined;
+    const wire = try std.fmt.bufPrint(&msg, "HPUB foo {d} {d}\r\n{s}{s}\r\n", .{ headers.len, headers.len + payload.len, headers, payload });
+    const r = try parseClientOp(wire);
+    try testing.expectEqualStrings("foo", r.op.pub_msg.subject);
+    try testing.expectEqual(@as(?[]const u8, null), r.op.pub_msg.reply);
+    try testing.expectEqualStrings(headers, r.op.pub_msg.headers.?);
+    try testing.expectEqualStrings(payload, r.op.pub_msg.payload);
+}
+
+test "parse HPUB with reply" {
+    const headers = "NATS/1.0\r\nKey: val\r\n\r\n";
+    const payload = "hi";
+    var msg: [128]u8 = undefined;
+    const wire = try std.fmt.bufPrint(&msg, "HPUB foo reply.x {d} {d}\r\n{s}{s}\r\n", .{ headers.len, headers.len + payload.len, headers, payload });
+    const r = try parseClientOp(wire);
+    try testing.expectEqualStrings("foo", r.op.pub_msg.subject);
+    try testing.expectEqualStrings("reply.x", r.op.pub_msg.reply.?);
+    try testing.expectEqualStrings(headers, r.op.pub_msg.headers.?);
+    try testing.expectEqualStrings(payload, r.op.pub_msg.payload);
+}
+
+test "parse HPUB with empty payload" {
+    const headers = "NATS/1.0\r\n\r\n";
+    var msg: [128]u8 = undefined;
+    const wire = try std.fmt.bufPrint(&msg, "HPUB foo {d} {d}\r\n{s}\r\n", .{ headers.len, headers.len, headers });
+    const r = try parseClientOp(wire);
+    try testing.expectEqualStrings(headers, r.op.pub_msg.headers.?);
+    try testing.expectEqualStrings("", r.op.pub_msg.payload);
+}
+
+test "parse HPUB hdr_len > total_len rejected" {
+    try testing.expectError(error.InvalidArgs, parseClientOp("HPUB foo 10 5\r\nshort\r\n"));
+}
+
+test "writeHmsg basic" {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    const headers = "NATS/1.0\r\nA: 1\r\n\r\n";
+    try writeHmsg(testing.allocator, &buf, "foo", "7", null, headers, "hi");
+    var expected: [128]u8 = undefined;
+    const want = try std.fmt.bufPrint(&expected, "HMSG foo 7 {d} {d}\r\n{s}hi\r\n", .{ headers.len, headers.len + 2, headers });
+    try testing.expectEqualStrings(want, buf.items);
+}
+
+test "parseServerOp HMSG round-trip" {
+    var wire: std.ArrayList(u8) = .empty;
+    defer wire.deinit(testing.allocator);
+    const headers = "NATS/1.0\r\nX: y\r\n\r\n";
+    try writeHmsg(testing.allocator, &wire, "foo", "1", "rep", headers, "hello");
+    const r = try parseServerOp(wire.items);
+    try testing.expectEqualStrings("foo", r.op.msg.subject);
+    try testing.expectEqualStrings("1", r.op.msg.sid);
+    try testing.expectEqualStrings("rep", r.op.msg.reply.?);
+    try testing.expectEqualStrings(headers, r.op.msg.headers.?);
+    try testing.expectEqualStrings("hello", r.op.msg.payload);
 }
