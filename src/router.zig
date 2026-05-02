@@ -454,7 +454,7 @@ pub const Router = struct {
                     if (s.queue_group) |qg| {
                         try addToQgBucket(&qg_buckets, scratch, s.match_filter, qg, s);
                     } else {
-                        try self.deliverOne(s, subject, headers, payload, scratch, &kicks, &to_drop);
+                        try self.deliverOne(s, subject, reply, headers, payload, scratch, &kicks, &to_drop);
                     }
                 }
             }
@@ -468,7 +468,7 @@ pub const Router = struct {
                 if (s.queue_group) |qg| {
                     try addToQgBucket(&qg_buckets, scratch, s.match_filter, qg, s);
                 } else {
-                    try self.deliverOne(s, subject, headers, payload, scratch, &kicks, &to_drop);
+                    try self.deliverOne(s, subject, reply, headers, payload, scratch, &kicks, &to_drop);
                 }
             }
         }
@@ -483,7 +483,7 @@ pub const Router = struct {
                 const cursor = try self.qgCursor(e.key_ptr.*);
                 const idx = cursor.* % candidates.len;
                 cursor.* +%= 1;
-                try self.deliverOne(candidates[idx], subject, headers, payload, scratch, &kicks, &to_drop);
+                try self.deliverOne(candidates[idx], subject, reply, headers, payload, scratch, &kicks, &to_drop);
             }
         }
 
@@ -555,6 +555,7 @@ pub const Router = struct {
         self: *Router,
         s: *Subscription,
         subject: []const u8,
+        reply: ?[]const u8,
         headers: ?[]const u8,
         payload: []const u8,
         scratch: Allocator,
@@ -567,10 +568,12 @@ pub const Router = struct {
             return;
         }
         if (s.is_lvc) {
+            // LVC replays carry no reply-to: cached values are stale by the time
+            // they're delivered, and the original requestor is long gone.
             const out_subject = std.fmt.allocPrint(scratch, "{s}{s}", .{ lvc_prefix, subject }) catch return;
             s.conn.writeMsg(out_subject, s.sid, null, null, payload) catch {};
         } else {
-            s.conn.writeMsg(subject, s.sid, null, headers, payload) catch {};
+            s.conn.writeMsg(subject, s.sid, reply, headers, payload) catch {};
         }
         try kicks.append(scratch, s.conn);
         s.delivered += 1;
@@ -944,6 +947,63 @@ test "router: no-responders does not fire when at least one sub matches" {
     // hasn't replied), so no 503 synthesized.
     try testing.expectEqual(@as(usize, 1), deliveredMsgCount(responder));
     try testing.expectEqual(@as(usize, 0), deliveredMsgCount(requestor));
+}
+
+test "router: reply subject is forwarded to subscribers" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const responder = try makeConn(testing.allocator, 1);
+    defer responder.deinit();
+    try router.subscribe(responder, "svc.req", "7", null);
+
+    // Plain request (no NoResponders header) carrying a reply subject.
+    try router.publishRequest("svc.req", null, "ping", "_INBOX.abc", false);
+
+    // The 4-token MSG form is `MSG <subject> <sid> <reply> <bytes>`.
+    try testing.expect(std.mem.indexOf(u8, responder.out.items, "MSG svc.req 7 _INBOX.abc 4\r\nping\r\n") != null);
+}
+
+test "router: wildcard subscribers also receive reply subject" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const responder = try makeConn(testing.allocator, 1);
+    defer responder.deinit();
+    try router.subscribe(responder, "svc.*", "9", null);
+
+    try router.publishRequest("svc.req", null, "ping", "_INBOX.xyz", false);
+
+    try testing.expect(std.mem.indexOf(u8, responder.out.items, "MSG svc.req 9 _INBOX.xyz 4\r\nping\r\n") != null);
+}
+
+test "router: queue-group subscriber receives reply subject" {
+    var router: Router = .init(testing.allocator, false);
+    defer router.deinit();
+
+    const responder = try makeConn(testing.allocator, 1);
+    defer responder.deinit();
+    try router.subscribe(responder, "svc.req", "3", "workers");
+
+    try router.publishRequest("svc.req", null, "ping", "_INBOX.q", false);
+
+    try testing.expect(std.mem.indexOf(u8, responder.out.items, "MSG svc.req 3 _INBOX.q 4\r\nping\r\n") != null);
+}
+
+test "router: LVC replay does not carry reply subject" {
+    var router: Router = .init(testing.allocator, true);
+    defer router.deinit();
+
+    // Seed the LVC, then subscribe to $LVC.foo — the cached value should be
+    // delivered as plain MSG (no reply).
+    try router.publish("foo", null, "cached");
+
+    const sub = try makeConn(testing.allocator, 1);
+    defer sub.deinit();
+    try router.subscribe(sub, "$LVC.foo", "11", null);
+
+    // 3-token form, no reply field.
+    try testing.expect(std.mem.indexOf(u8, sub.out.items, "MSG $LVC.foo 11 6\r\ncached\r\n") != null);
 }
 
 test "router: no-responders without reply does nothing" {
