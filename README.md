@@ -1,6 +1,6 @@
 # monoblok
 
-monoblok is a tiny messaging broker with built-in _processing_. It speaks a subset of the [NATS](https://nats.io) protocol. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
+monoblok is a tiny messaging broker with built-in _processing_. It speaks enough of the [NATS](https://nats.io) protocol to be useful. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
 
 Last-value streams on `$LVC.*` give late subscribers the current value per subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
 
@@ -10,52 +10,18 @@ A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats
 
 ## Install
 
-One-liner (Mac Apple Silicon, Linux x86_64 / aarch64): downloads and unpacks the latest release into the current directory.
+One-liner for Mac/Linux: downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
 ```
 
-Or do it by hand from the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest) and run
+Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
-```sh
-./monoblok-${VERSION}-${PLATFORM}/monoblok --port 4222 --patchbay ./monoblok-${VERSION}-${PLATFORM}/patchbay.edn
-```
 
-Then drive it with any NATS client:
+## Core features
 
-```sh
-nats sub 'sensors.*'
-nats pub sensors.temp 42.5
-```
-
-### systemd
-
-Linux release tarballs ship a unit file and installer in [scripts/](./scripts/):
-
-```sh
-sudo bash scripts/install-systemd.sh
-sudo systemctl enable --now monoblok
-journalctl -u monoblok -f
-```
-
-Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
-
-### Deploying
-
-monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good shape. monoblok runs on one core; the kernel net stack and io_uring workers will use the other. A 1-vCPU box makes them share the same core, costing throughput. More than two cores is wasted spend (the extras sit idle). A Hetzner CAX11 (about €6/mo) or similar is the sweet spot for moderate traffic; AWS `t4g.small` or `c7g.large` works for Graviton; Oracle Ampere A1 free tier runs just fine. 
-
-The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
-
-## NATS Core compat
-
-monoblok speaks the NATS Core wire protocol. Supported: PUB / SUB / UNSUB / MSG, wildcards (`*`, `>`), request/reply via the reply-subject convention, queue groups, headers, no-responders, and auto-unsub-after-N.
-
-Out of scope: TLS (terminate with an NLB/HAProxy/nginx?), auth in any form (token, user-pass, NKey, JWT), JetStream and anything built on it (streams, KV, object store), and cluster routes / leaf nodes / `$SYS.*`.
-
-Caveats:: the LVC stores payload only, so HMSG replays from the cache come back as plain MSG without the original header chunk. The outbound NATS bridge forwards payload only.
-
-## Patchbay
+### patchbay
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
 
@@ -94,15 +60,8 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
-### What it isn't
 
-[NEX](https://github.com/synadia-io/nex) runs arbitrary code (JS, Wasm, binaries) on agents next to the cluster, with HTTP, DB, anything. patchbay is an in-broker DSL with no processes and no sandbox where the only side effect is `publish`; reach for NEX when you need external I/O. nats-server's built-in [subject mappings](https://docs.nats.io/nats-concepts/subject_mapping) rewrite subjects with wildcards but can't see the payload or keep state; use those if all you want is "rename `bar.a.b` to `baz.b.a`".
-
-### Patchbay overhead
-
-Per-PUB cost depends on what the matching rule actually does. Rule of thumb: ~20–30% off pub-heavy throughput once rules start matching, fan-out workloads closer to break-even. Cost scales with **matching** rules per PUB, not total rules in the file. See [Benchmarks](#benchmarks) below and [`--trace`](#--trace-per-evaluation-debugger) to see where time goes inside a specific rule.
-
-### Patchbay with Claude Code
+#### Claude Code
 
 [docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
 
@@ -116,7 +75,7 @@ Once loaded, describe the stream you have and the stream you want.
   <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
 </p>
 
-## `$LVC.*`: last-value-cache stream
+### `$LVC.*`: last-value-cache stream
 
 Every subject has an implicit last-value cache. Subscribing to `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value first (if any), then every subsequent publish. Wildcards work. `PUB $LVC.*` is rejected.
 
@@ -129,31 +88,14 @@ PUB foo.bar 13      ; -> subscriber receives 13
 
 On by default; `--no-lvc` disables (~2–4% overhead when enabled).
 
-### Snapshots
+## NATS support
 
-Warm-start from disk so restarts don't lose the cache or the state inside gates and windows.
+### As a server
 
-```
-monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
-```
+Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers (mostly).
+Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
 
-`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule whose filter no longer matches at its recorded position is skipped with a warning.
-
-## `$STATS.*`: live counters
-
-The server publishes cumulative counters to `$STATS.*` on a 1-minute wall-clock tick. Values are u64 decimals; subscribers compute their own rates across ticks.
-
-| subject                          | value                                             |
-|----------------------------------|---------------------------------------------------|
-| `$STATS.global.pubs`             | total inbound client PUBs since start             |
-| `$STATS.rules.<i>.emitted`       | successful `publish!` calls by rule               |
-| `$STATS.rules.<i>.suppressed`    | gate suppressions by rule                         |
-| `$STATS.bridge.published`        | publishes forwarded to the remote NATS cluster    |
-| `$STATS.bridge.dropped`          | publishes the bridge failed to forward            |
-
-Rules are indexed by position in the patchbay file, 0-based. Client publishes to `$STATS.*` are rejected. The stream is deliberately **not** cached by the LVC.
-
-## Outbound NATS bridge
+### Outbound NATS bridge
 
 <p align="center">
   <img src="bridge.png" alt="bridge" width="720">
@@ -193,16 +135,16 @@ Build-out before build-across: start with one monoblok and reach for the mixer w
 
 Note: mixer mode is experimental. The mixer runs single-threaded like the workers, so its own throughput on one core is the system-wide cap on inbound publishes. In microbenches the mixer's per-PUB cost (parse, shard by first token, forward bytes) is roughly an order of magnitude cheaper than a worker running a real patchbay (squelch, deadband, moving averages, JSON demux), so one mixer comfortably feeds many worker cores' worth of signal-conditioning load. The ratio collapses if your patchbay does almost nothing per PUB, in which case the mixer can saturate before the workers do — but a near-null patchbay is also a deployment that probably doesn't need the patchbay tier at all.
 
-## Listeners
+### Snapshots
 
-By default monoblok listens on TCP (`--port`, default 4222). It can additionally or instead listen on an AF_UNIX stream socket:
+Warm-start from disk so restarts don't lose the cache or the state inside gates and windows.
 
 ```
-monoblok --port 4222 --unix-socket /tmp/monoblok.sock --patchbay patchbay.edn   # both
-monoblok --port 0    --unix-socket /tmp/monoblok.sock --patchbay patchbay.edn   # unix only
+monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
 ```
 
-Both listeners share the same router, so a publish from one side fans out to subscribers on the other. The socket is mode 0600, removed on graceful shutdown, stale files unlinked on startup.
+`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
+whose filter no longer matches at its recorded position is skipped with a warning.
 
 ## Observability
 
@@ -219,7 +161,7 @@ info: stats: pubs=10000 max_rule_publishes=0 max_out_hwm=41160B
 
 ### `--trace`: per-evaluation debugger
 
-Prints every patchbay form the evaluator visits to stderr, with result and elapsed time. Side-effecting ops show `=> published "subj" payload [duration]` instead of bare nil; suppressed gates show a hint (`=> nil (squelched)`, `=> nil (within deadband)`, etc).
+Prints every patchbay form the evaluator visits to stderr, with result and elapsed time. 
 
 ```
 $ monoblok --port 4222 --patchbay patchbay.edn --trace
@@ -233,31 +175,38 @@ trace: sensors.temp 42.5
 total [3ms]
 ```
 
-Loud by design (every PUB prints), so pipe stderr to a file when investigating. Adds per-form overhead, so the timings under `--trace` are inflated relative to a normal run; bench with `--release=fast` and the flag off.
 
 ## Architecture
 
 Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
 
-Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's single-file through monoblok. Adding a second thread would mean atomics or locks on every shared structure (router, LVC, per-rule state) and would be slower in the common case. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. If you outgrow one core, see [Mixer mode](#mixer-mode-experimental) below.
+Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's serial through monoblok. Adding a second thread would mean atomics or locks. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. 
 
 Mixer mode reuses that same single-loop model per worker. The mixer-to-worker hop runs over inherited socketpairs rather than TCP or AF_UNIX, which simplifies things since the processes share a host.
 
-Zig 0.16's `std.Io` networking didn't fit a single-loop model on 0.16 (the macOS Dispatch backend is thread-per-connection), so the loop is libxev: proper kqueue / io_uring / epoll / IOCP picked at comptime. The server logs which backend it's using at startup.
+## Deploying
 
-## Tests
+monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good start. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
 
+The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
+
+### systemd
+
+Linux release tarballs ship a unit file and installer in [scripts/](./scripts/):
+
+```sh
+sudo bash scripts/install-systemd.sh
+sudo systemctl enable --now monoblok
+journalctl -u monoblok -f
 ```
-zig build test              # unit tests
-bash scripts/smoke.sh       # end-to-end over raw TCP
-bash scripts/bench.sh       # pub + fan-out bench (needs `nats` CLI)
-```
+
+Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
 
 ## Benchmarks
 
-Getting meaningful numbers turned out to be trickier than I first realised: single-row variance on a laptop is large, the bench client (nats CLI, itself a Go process) can be the bottleneck on some rows, and battery vs AC throttling alone roughly halves throughput on Apple Silicon (face palm). So no specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
+Getting meaningful numbers turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
 
-The shape of the comparison vs. nats-server, though, is consistent across runs:
+The **shape** of the comparison vs. nats-server, though, is consistent across runs:
 
 - **nats-server wins on pure publish throughput on big machines.** Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over and there are spare cores to spread it across. On small ARM VPSes the gap narrows or disappears: nats-server has less parallelism to exploit, and monoblok's single-threaded design has no overhead to pay.
 - **The two are roughly comparable at low fan-out** (1-10 subscribers per publish).
@@ -267,7 +216,7 @@ Worth keeping in mind: nats-server has a decade of production-grade performance 
 
 ## Building from source
 
-Zig 0.16.0 required.
+Zig 0.16.0 is required.
 ```
 zig build --release=safe
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
@@ -277,7 +226,7 @@ Release binaries are built natively per arch by `.github/workflows/release.yml` 
 
 ## AI
 
-Yes, Claude helps. [Some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
+It's 2026, Claude helps me a lot. This is something of a _scarlet letter_ to many - [some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
 
 ## License
 
