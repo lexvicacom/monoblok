@@ -16,36 +16,7 @@ One-liner for Mac/Linux: downloads and unpacks the latest release into the curre
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
 ```
 
-Or do it by hand from the [latest release page](https://github.com/lexvicacom/monoblok/releases/latest) and run
-
-```sh
-./monoblok-${VERSION}-${PLATFORM}/monoblok --port 4222 --patchbay ./monoblok-${VERSION}-${PLATFORM}/patchbay.edn
-```
-
-Then drive it with any NATS client:
-
-```sh
-nats sub 'sensors.*'
-nats pub sensors.temp 42.5
-```
-
-### Deploying
-
-monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good start. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
-
-The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
-
-#### systemd
-
-Linux release tarballs ship a unit file and installer in [scripts/](./scripts/):
-
-```sh
-sudo bash scripts/install-systemd.sh
-sudo systemctl enable --now monoblok
-journalctl -u monoblok -f
-```
-
-Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
+Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 
 ## Core features
@@ -205,14 +176,6 @@ total [3ms]
 ```
 
 
-
-## Tests
-
-```
-zig build test              # unit tests
-bash scripts/smoke.sh       # end-to-end over raw TCP
-```
-
 ## Architecture
 
 Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
@@ -220,6 +183,24 @@ Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/
 Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's serial through monoblok. Adding a second thread would mean atomics or locks. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. 
 
 Mixer mode reuses that same single-loop model per worker. The mixer-to-worker hop runs over inherited socketpairs rather than TCP or AF_UNIX, which simplifies things since the processes share a host.
+
+## Deploying
+
+monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good start. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
+
+The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
+
+### systemd
+
+Linux release tarballs ship a unit file and installer in [scripts/](./scripts/):
+
+```sh
+sudo bash scripts/install-systemd.sh
+sudo systemctl enable --now monoblok
+journalctl -u monoblok -f
+```
+
+Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
 
 ## Benchmarks
 
