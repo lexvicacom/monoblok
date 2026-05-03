@@ -1,15 +1,8 @@
 # monoblok
 
-monoblok is a tiny messaging broker with built-in _processing_. It speaks a subset of the [NATS](https://nats.io) protocol. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
+monoblok is a tiny messaging broker with built-in _processing_. It speaks enough of the [NATS](https://nats.io) protocol to be useful. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
 
 Last-value streams on `$LVC.*` give late subscribers the current value per subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/).
-
-
-## NATS Core compat
-
-monoblok speaks the NATS Core wire protocol. Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers (mostly).
-
-Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
 
 ## Try it out with no install
 
@@ -130,9 +123,17 @@ Warm-start from disk so restarts don't lose the cache or the state inside gates 
 monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
 ```
 
-`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule whose filter no longer matches at its recorded position is skipped with a warning.
+`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
+whose filter no longer matches at its recorded position is skipped with a warning.
 
-## Outbound NATS bridge
+## NATS support
+
+### As a server
+
+Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers (mostly).
+Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
+
+### Outbound NATS bridge
 
 <p align="center">
   <img src="bridge.png" alt="bridge" width="720">
@@ -155,7 +156,7 @@ A local publish (from a NATS client or a patchbay rule) whose subject matches an
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./docs/patchbay-cheatsheet.md).
 
-## Mixer mode (very experimental)
+## Mixer mode (experimental)
 
 `monoblok --mixer cfg.edn` runs a stateless front-end that spawns N worker processes (each a normal monoblok) and forwards each publish to the worker owning its first subject token. Clients connect to just one NATS endpoint. Subscriptions coalesce across clients (one upstream SUB per unique filter), so a hundred dashboards on the same filter look like one to the worker.
 
