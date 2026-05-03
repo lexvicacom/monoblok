@@ -109,6 +109,29 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_bench_patchbay.addArgs(args);
     const bench_patchbay_step = b.step("bench-patchbay", "Run the in-process patchbay microbench");
     bench_patchbay_step.dependOn(&run_bench_patchbay.step);
+
+    // In-process mixer microbench.
+    //   zig build bench-mixer -- [PATH] [N] [PUBS]
+    const bench_mixer_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_mixer.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "xev", .module = libxev_dep.module("xev") },
+            .{ .name = "manifest", .module = manifest_mod },
+            .{ .name = "patchbay", .module = patchbay_mod },
+            .{ .name = "nats", .module = nats_dep.module("nats") },
+        },
+    });
+    const bench_mixer_exe = b.addExecutable(.{
+        .name = "bench-mixer",
+        .root_module = bench_mixer_mod,
+    });
+    const run_bench_mixer = b.addRunArtifact(bench_mixer_exe);
+    if (b.args) |args| run_bench_mixer.addArgs(args);
+    const bench_mixer_step = b.step("bench-mixer", "Run the in-process mixer microbench");
+    bench_mixer_step.dependOn(&run_bench_mixer.step);
 }
 
 

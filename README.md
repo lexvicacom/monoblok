@@ -191,7 +191,7 @@ Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-chea
 
 Build-out before build-across: start with one monoblok and reach for the mixer when one core actually isn't enough. See [docs/mixer.md](./docs/mixer.md) for the sharding rule, SUB constraints, supervisor policy, and what's out of scope in v1. Runnable example: [`examples/mixer.py`](./examples/mixer.py).
 
-Note: the mixer was built when patchbay evaluation was the per-process bottleneck. Now that the patchbay is fast, the mixer's own parse loop (every byte gets parsed twice, once at the mixer and once at the worker) tends to cap before the workers do. Sustained-load measurements have the mixer pinned at one core while workers sit at ~50% each, and adding more client connections doesn't move throughput.
+Note: mixer mode is experimental. The mixer runs single-threaded like the workers, so its own throughput on one core is the system-wide cap on inbound publishes. In microbenches the mixer's per-PUB cost (parse, shard by first token, forward bytes) is roughly an order of magnitude cheaper than a worker running a real patchbay (squelch, deadband, moving averages, JSON demux), so one mixer comfortably feeds many worker cores' worth of signal-conditioning load. The ratio collapses if your patchbay does almost nothing per PUB, in which case the mixer can saturate before the workers do — but a near-null patchbay is also a deployment that probably doesn't need the patchbay tier at all.
 
 ## Listeners
 
