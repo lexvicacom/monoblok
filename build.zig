@@ -89,6 +89,26 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_bench_router.addArgs(args);
     const bench_router_step = b.step("bench-router", "Run the in-process router microbench");
     bench_router_step.dependOn(&run_bench_router.step);
+
+    // In-process patchbay microbench. ReleaseFast for the same reasons.
+    //   zig build bench-patchbay -- [MODE] [N] [PUBS]
+    const bench_patchbay_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_patchbay.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "patchbay", .module = patchbay_mod },
+        },
+    });
+    const bench_patchbay_exe = b.addExecutable(.{
+        .name = "bench-patchbay",
+        .root_module = bench_patchbay_mod,
+    });
+    const run_bench_patchbay = b.addRunArtifact(bench_patchbay_exe);
+    if (b.args) |args| run_bench_patchbay.addArgs(args);
+    const bench_patchbay_step = b.step("bench-patchbay", "Run the in-process patchbay microbench");
+    bench_patchbay_step.dependOn(&run_bench_patchbay.step);
 }
 
 
