@@ -23,7 +23,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 ### patchbay
 
-patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is a library used by the monoblok server and one day [tinyblok]([/lexvicacom/tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
+patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is a library used by the monoblok server and one day [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
 Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
 
