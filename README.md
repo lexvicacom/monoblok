@@ -90,12 +90,12 @@ On by default; `--no-lvc` disables (~2–4% overhead when enabled).
 
 ## NATS support
 
-### As a server
+### Server
 
 Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers (mostly).
 Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
 
-### Outbound NATS bridge
+### Export NATS bridge
 
 <p align="center">
   <img src="bridge.png" alt="bridge" width="720">
