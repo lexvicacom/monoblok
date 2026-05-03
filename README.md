@@ -23,7 +23,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 ### patchbay
 
-patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is a library used by the monoblok server and one day [tinyblok](/lexvicacom/tinyblok) on MCUs.
+patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is a library used by the monoblok server and one day [tinyblok]([/lexvicacom/tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
 Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
 
@@ -62,10 +62,7 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
-
-#### Claude Code
-
-[docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
+A nice way to learn it is with Claude. [docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ./CLAUDE.md
