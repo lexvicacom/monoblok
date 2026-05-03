@@ -117,6 +117,8 @@ A local publish (from a NATS client or a patchbay rule) whose subject matches an
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./docs/patchbay-cheatsheet.md).
 
+In the roadmap is microcontroller interop with monoblok and/or NATS itself. The current thinking is `publish!` forms on an MCU join a ring buffer that gets flushed remotely when there is a connection. Naturally memory constraints are a big thing here.
+
 ## Mixer mode (experimental)
 
 `monoblok --mixer cfg.edn` runs a stateless front-end that spawns N worker processes (each a normal monoblok) and forwards each publish to the worker owning its first subject token. Clients connect to just one NATS endpoint. Subscriptions coalesce across clients (one upstream SUB per unique filter), so a hundred dashboards on the same filter look like one to the worker.
