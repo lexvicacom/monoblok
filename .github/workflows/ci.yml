@@ -2,8 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - 'feature/**'
+      - 'fix/**'
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.edn'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.edn'
 
 concurrency:
   group: ci-${{ github.ref }}
