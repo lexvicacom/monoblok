@@ -48,7 +48,9 @@ journalctl -u monoblok -f
 Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
 
 
-## Patchbay
+## Core features
+
+### patchbay
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
 
@@ -88,7 +90,7 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
 
-### Patchbay with Claude Code
+#### Claude Code
 
 [docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
 
@@ -102,7 +104,7 @@ Once loaded, describe the stream you have and the stream you want.
   <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
 </p>
 
-## `$LVC.*`: last-value-cache stream
+### `$LVC.*`: last-value-cache stream
 
 Every subject has an implicit last-value cache. Subscribing to `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value first (if any), then every subsequent publish. Wildcards work. `PUB $LVC.*` is rejected.
 
@@ -114,17 +116,6 @@ PUB foo.bar 13      ; -> subscriber receives 13
 ```
 
 On by default; `--no-lvc` disables (~2–4% overhead when enabled).
-
-### Snapshots
-
-Warm-start from disk so restarts don't lose the cache or the state inside gates and windows.
-
-```
-monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
-```
-
-`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
-whose filter no longer matches at its recorded position is skipped with a warning.
 
 ## NATS support
 
@@ -173,6 +164,17 @@ Build-out before build-across: start with one monoblok and reach for the mixer w
 
 Note: the mixer's own parse loop (every byte gets parsed twice, once at the mixer and once at the worker) tends to cap before the workers do. Sustained-load measurements have the mixer pinned at one core while workers sit at ~50% each, and adding more client connections doesn't move throughput. This may be have been a Bad Idea all along.
 
+### Snapshots
+
+Warm-start from disk so restarts don't lose the cache or the state inside gates and windows.
+
+```
+monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
+```
+
+`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
+whose filter no longer matches at its recorded position is skipped with a warning.
+
 ## Observability
 
 Every accepted/closed connection logs at info level. Two always-on warn thresholds fire if something's off:
@@ -202,13 +204,7 @@ trace: sensors.temp 42.5
 total [3ms]
 ```
 
-## Architecture
 
-Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
-
-Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's serial through monoblok. Adding a second thread would mean atomics or locks. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. 
-
-Mixer mode reuses that same single-loop model per worker. The mixer-to-worker hop runs over inherited socketpairs rather than TCP or AF_UNIX, which simplifies things since the processes share a host.
 
 ## Tests
 
@@ -216,6 +212,14 @@ Mixer mode reuses that same single-loop model per worker. The mixer-to-worker ho
 zig build test              # unit tests
 bash scripts/smoke.sh       # end-to-end over raw TCP
 ```
+
+## Architecture
+
+Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
+
+Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's serial through monoblok. Adding a second thread would mean atomics or locks. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. 
+
+Mixer mode reuses that same single-loop model per worker. The mixer-to-worker hop runs over inherited socketpairs rather than TCP or AF_UNIX, which simplifies things since the processes share a host.
 
 ## Benchmarks
 
