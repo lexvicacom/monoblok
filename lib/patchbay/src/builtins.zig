@@ -7,6 +7,7 @@ const subject_mod = @import("subject.zig");
 const state = @import("state.zig");
 const eval = @import("eval.zig");
 const sexpr = @import("sexpr.zig");
+const kernel = @import("kernel.zig");
 
 const Value = state.Value;
 const Context = eval.Context;
@@ -264,17 +265,18 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
 
     const key = try state.keyForOp(ctx.arena, "transition", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    if (!slot.found_existing) {
-        slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
-        rule.publishes_suppressed += 1;
-        return .nil;
+    const prev = slot.found_existing and slot.value_ptr.number != 0;
+    var k: kernel.Transition = .{ .last = prev, .seen = slot.found_existing };
+    const edge = k.update(now);
+    slot.value_ptr.* = .{ .number = if (k.last) 1 else 0 };
+    switch (edge) {
+        .rising => return ctx.eval_fn(ctx, args[1]),
+        .falling => return ctx.eval_fn(ctx, args[2]),
+        .none => {
+            rule.publishes_suppressed += 1;
+            return .nil;
+        },
     }
-    const prev = slot.value_ptr.number != 0;
-    slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
-    if (!prev and now) return ctx.eval_fn(ctx, args[1]);
-    if (prev and !now) return ctx.eval_fn(ctx, args[2]);
-    rule.publishes_suppressed += 1;
-    return .nil;
 }
 
 // --- Side-effecting publish ops -----------------------------------------
@@ -648,17 +650,18 @@ fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
 
     const key = try state.keyForOp(ctx.arena, "deadband", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    if (!slot.found_existing) {
-        slot.value_ptr.* = .{ .number = x };
-        return .{ .number = x };
-    }
-    const last = slot.value_ptr.number;
-    if (@abs(x - last) < delta) {
+    var k: kernel.Deadband = .{
+        .threshold = delta,
+        .last = if (slot.found_existing) slot.value_ptr.number else 0,
+        .seen = slot.found_existing,
+    };
+    const out = k.update(x);
+    slot.value_ptr.* = .{ .number = k.last };
+    if (out == null) {
         rule.publishes_suppressed += 1;
         return .nil;
     }
-    slot.value_ptr.* = .{ .number = x };
-    return .{ .number = x };
+    return .{ .number = out.? };
 }
 
 /// `(changed? X)`. Boolean version of `squelch`; first sight returns true.
@@ -679,13 +682,13 @@ fn callDelta(ctx: *Context, args: []const Value) EvalError!Value {
     const x = try state.asNumber(args[0]);
     const key = try state.keyForOp(ctx.arena, "delta", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    if (!slot.found_existing) {
-        slot.value_ptr.* = .{ .number = x };
-        return .{ .number = 0 };
-    }
-    const last = slot.value_ptr.number;
-    slot.value_ptr.* = .{ .number = x };
-    return .{ .number = x - last };
+    var k: kernel.Delta = .{
+        .last = if (slot.found_existing) slot.value_ptr.number else 0,
+        .seen = slot.found_existing,
+    };
+    const out = k.update(x);
+    slot.value_ptr.* = .{ .number = k.last };
+    return .{ .number = out };
 }
 
 /// `(hold-off MS X)`. Passes X on first sight and on any call arriving
@@ -700,16 +703,17 @@ fn callHoldOff(ctx: *Context, args: []const Value) EvalError!Value {
 
     const key = try state.keyForOp(ctx.arena, "hold-off", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    if (!slot.found_existing) {
-        slot.value_ptr.* = .{ .number = now };
-        return args[1];
-    }
-    const last = slot.value_ptr.number;
-    if (now - last < ms) {
+    var k: kernel.HoldOff = .{
+        .interval_ms = ms,
+        .last_ms = if (slot.found_existing) slot.value_ptr.number else 0,
+        .seen = slot.found_existing,
+    };
+    const passed = k.update(now);
+    slot.value_ptr.* = .{ .number = k.last_ms };
+    if (!passed) {
         rule.publishes_suppressed += 1;
         return .nil;
     }
-    slot.value_ptr.* = .{ .number = now };
     return args[1];
 }
 
@@ -728,16 +732,20 @@ fn callEdge(ctx: *Context, args: []const Value, kind: EdgeKind) EvalError!Value 
     };
     const key = try state.keyForOp(ctx.arena, op_name, ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    if (!slot.found_existing) {
-        slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
-        rule.publishes_suppressed += 1;
-        return .nil;
-    }
-    const prev = slot.value_ptr.number != 0;
-    slot.value_ptr.* = .{ .number = if (now) 1 else 0 };
+    const prev = slot.found_existing and slot.value_ptr.number != 0;
     const fired = switch (kind) {
-        .rising => !prev and now,
-        .falling => prev and !now,
+        .rising => blk: {
+            var k: kernel.RisingEdge = .{ .last = prev, .seen = slot.found_existing };
+            const f = k.update(now);
+            slot.value_ptr.* = .{ .number = if (k.last) 1 else 0 };
+            break :blk f;
+        },
+        .falling => blk: {
+            var k: kernel.FallingEdge = .{ .last = prev, .seen = slot.found_existing };
+            const f = k.update(now);
+            slot.value_ptr.* = .{ .number = if (k.last) 1 else 0 };
+            break :blk f;
+        },
     };
     if (!fired) rule.publishes_suppressed += 1;
     return if (fired) args[0] else .nil;
