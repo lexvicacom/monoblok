@@ -23,7 +23,9 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 ### patchbay
 
-patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
+patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is a library used by the monoblok server and one day [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
+
+Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
 
 ```edn
 (on "sensors.*"
@@ -60,10 +62,7 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
-
-#### Claude Code
-
-[docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
+A nice way to learn it is with Claude. [docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ./CLAUDE.md
@@ -90,12 +89,12 @@ On by default; `--no-lvc` disables (~2–4% overhead when enabled).
 
 ## NATS support
 
-### As a server
+### Server
 
 Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers (mostly).
 Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
 
-### Outbound NATS bridge
+### Export NATS bridge
 
 <p align="center">
   <img src="bridge.png" alt="bridge" width="720">
@@ -117,6 +116,8 @@ Zero or one `(bridge ...)` form in the patchbay file configures it:
 A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.zig.
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./docs/patchbay-cheatsheet.md).
+
+In the roadmap is microcontroller interop with monoblok and/or NATS itself. The current thinking is `publish!` forms on an MCU join a ring buffer that gets flushed remotely when there is a connection. Naturally memory constraints are a big thing here.
 
 ## Mixer mode (experimental)
 
