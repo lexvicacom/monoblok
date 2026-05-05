@@ -67,11 +67,11 @@ the same state (that's a feature of the demo, not a bug).
 
 ## `$LVC.*` (last-value cache)
 
-Independent of any patchbay rule, monoblok caches the **last value
-seen** on every subject. Subscribing to `$LVC.<subject>` gets you
-that cached value immediately, then live updates, even if you
-subscribed long after the publisher disconnected. No JetStream, no
-persistence, just "what was the most recent value."
+The demo patchbay opts `demo.>` into last-value caching with
+`(lvc "demo.>")`. Subscribing to `$LVC.<subject>` gets you that cached
+value immediately, then live updates, even if you subscribed long after
+the publisher disconnected. No JetStream, no persistence, just "what was
+the most recent value."
 
 ```
 # Replay the current value of a single subject, then stream updates.

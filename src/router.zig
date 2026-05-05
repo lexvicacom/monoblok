@@ -111,12 +111,36 @@ pub const Router = struct {
     /// dot). Owned keys; lazily inserted on first publish to a group.
     qg_rr: std.StringHashMapUnmanaged(u64) = .empty,
 
+    /// Null means legacy/global LVC when `lvc_enabled` is true. A non-null
+    /// slice means only subjects matching one configured `(lvc ...)` filter
+    /// participate in cache writes and live `$LVC.*` delivery.
+    lvc_filters: ?[]const LvcFilter = null,
+    lvc_literal_filters: std.StringHashMapUnmanaged(void) = .empty,
+    lvc_wildcard_buckets: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(*const LvcFilter)) = .empty,
+    lvc_wildcard_global: std.ArrayListUnmanaged(*const LvcFilter) = .empty,
+
     pub const LiteralBucket = struct {
         subs: std.ArrayListUnmanaged(*Subscription) = .empty,
     };
 
     pub const WildcardBucket = struct {
         subs: std.ArrayListUnmanaged(*Subscription) = .empty,
+    };
+
+    pub const LvcFilter = struct {
+        filter: []const u8,
+        tokens: []const []const u8,
+        is_literal: bool,
+        first_token: []const u8,
+
+        pub fn init(arena: Allocator, filter: []const u8) !LvcFilter {
+            return .{
+                .filter = filter,
+                .tokens = try splitTokens(arena, filter),
+                .is_literal = rules_mod.isLiteralFilter(filter),
+                .first_token = firstToken(filter),
+            };
+        }
     };
 
     /// Returns the first dot-separated token of `s`, or all of `s` if no dot.
@@ -166,6 +190,39 @@ pub const Router = struct {
         var qg_it = self.qg_rr.iterator();
         while (qg_it.next()) |e| self.gpa.free(e.key_ptr.*);
         self.qg_rr.deinit(self.gpa);
+        var lf_it = self.lvc_literal_filters.iterator();
+        while (lf_it.next()) |e| self.gpa.free(e.key_ptr.*);
+        self.lvc_literal_filters.deinit(self.gpa);
+        var lwb_it = self.lvc_wildcard_buckets.iterator();
+        while (lwb_it.next()) |e| {
+            e.value_ptr.deinit(self.gpa);
+            self.gpa.free(e.key_ptr.*);
+        }
+        self.lvc_wildcard_buckets.deinit(self.gpa);
+        self.lvc_wildcard_global.deinit(self.gpa);
+    }
+
+    pub fn configureLvc(self: *Router, filters: []const LvcFilter) !void {
+        self.lvc_enabled = filters.len != 0;
+        self.lvc_filters = filters;
+        for (filters) |*filter| {
+            if (filter.is_literal) {
+                const gop = try self.lvc_literal_filters.getOrPut(self.gpa, filter.filter);
+                if (!gop.found_existing) {
+                    gop.key_ptr.* = try self.gpa.dupe(u8, filter.filter);
+                    gop.value_ptr.* = {};
+                }
+            } else if (isWildcardToken(filter.first_token)) {
+                try self.lvc_wildcard_global.append(self.gpa, filter);
+            } else {
+                const gop = try self.lvc_wildcard_buckets.getOrPut(self.gpa, filter.first_token);
+                if (!gop.found_existing) {
+                    gop.key_ptr.* = try self.gpa.dupe(u8, filter.first_token);
+                    gop.value_ptr.* = .empty;
+                }
+                try gop.value_ptr.append(self.gpa, filter);
+            }
+        }
     }
 
     fn freeSub(self: *Router, s: *Subscription) void {
@@ -608,7 +665,7 @@ pub const Router = struct {
         no_responders: bool,
     ) !void {
         // $STATS.* is excluded from the LVC (tick-driven, stale by design).
-        if (self.lvc_enabled and !std.mem.startsWith(u8, subject, stats_prefix)) {
+        if (self.lvcShouldStore(subject)) {
             try self.storeLast(subject, payload);
         }
 
@@ -765,12 +822,12 @@ pub const Router = struct {
         kicks: *std.ArrayListUnmanaged(*Conn),
         to_drop: *std.ArrayListUnmanaged(*Subscription),
     ) !void {
-        _ = self;
         if (s.conn.isClosed()) {
             try to_drop.append(scratch, s);
             return;
         }
         if (s.is_lvc) {
+            if (!self.lvcSubjectEnabled(subject)) return;
             // LVC replays carry no reply-to: cached values are stale by the time
             // they're delivered, and the original requestor is long gone.
             const out_subject = std.fmt.allocPrint(scratch, "{s}{s}", .{ lvc_prefix, subject }) catch return;
@@ -787,7 +844,43 @@ pub const Router = struct {
 
     /// Public wrapper so `snapshot.zig` can populate the LVC at load time.
     pub fn storeLastPublic(self: *Router, subject: []const u8, payload: []const u8) !void {
+        if (!self.lvcShouldStore(subject)) return;
         return self.storeLast(subject, payload);
+    }
+
+    fn lvcShouldStore(self: *Router, subject: []const u8) bool {
+        // $STATS.* is excluded from the LVC (tick-driven, stale by design).
+        return !std.mem.startsWith(u8, subject, stats_prefix) and self.lvcSubjectEnabled(subject);
+    }
+
+    fn lvcSubjectEnabled(self: *Router, subject: []const u8) bool {
+        if (!self.lvc_enabled) return false;
+        const filters = self.lvc_filters orelse return true;
+        if (filters.len == 0) return false;
+
+        if (self.lvc_literal_filters.contains(subject)) return true;
+
+        const have_wildcard_buckets = self.lvc_wildcard_buckets.count() != 0;
+        const have_wildcard_global = self.lvc_wildcard_global.items.len != 0;
+        if (!have_wildcard_buckets and !have_wildcard_global) return false;
+
+        var subject_tokens_buf: [subject_mod.max_tokens][]const u8 = undefined;
+        const subject_tokens = splitInto(subject, &subject_tokens_buf);
+
+        if (have_wildcard_buckets) {
+            const subj_first = firstToken(subject);
+            if (self.lvc_wildcard_buckets.getPtr(subj_first)) |bucket| {
+                for (bucket.items) |filter| {
+                    if (subject_mod.matchesTokens(filter.tokens, subject_tokens)) return true;
+                }
+            }
+        }
+        if (have_wildcard_global) {
+            for (self.lvc_wildcard_global.items) |filter| {
+                if (subject_mod.matchesTokens(filter.tokens, subject_tokens)) return true;
+            }
+        }
+        return false;
     }
 
     fn storeLast(self: *Router, subject: []const u8, payload: []const u8) !void {
@@ -1214,6 +1307,34 @@ test "router: LVC replay does not carry reply subject" {
 
     // 3-token form, no reply field.
     try testing.expect(std.mem.indexOf(u8, sub.out.items, "MSG $LVC.foo 11 6\r\ncached\r\n") != null);
+}
+
+test "router: configured LVC filters gate cache and live stream" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const filters = [_]Router.LvcFilter{
+        try Router.LvcFilter.init(arena, "hot.>"),
+    };
+    var router: Router = .init(testing.allocator, true);
+    defer router.deinit();
+    try router.configureLvc(&filters);
+
+    try router.publish("hot.one", null, "cached");
+    try router.publish("cold.one", null, "hidden");
+
+    const sub = try makeConn(testing.allocator, 1);
+    defer sub.deinit();
+    try router.subscribe(sub, "$LVC.>", "8", null);
+    try testing.expect(std.mem.indexOf(u8, sub.out.items, "MSG $LVC.hot.one 8 6\r\ncached\r\n") != null);
+    try testing.expect(std.mem.indexOf(u8, sub.out.items, "cold.one") == null);
+
+    sub.out.clearRetainingCapacity();
+    try router.publish("cold.two", null, "live-hidden");
+    try router.publish("hot.two", null, "live");
+    try testing.expect(std.mem.indexOf(u8, sub.out.items, "cold.two") == null);
+    try testing.expect(std.mem.indexOf(u8, sub.out.items, "MSG $LVC.hot.two 8 4\r\nlive\r\n") != null);
 }
 
 test "router: no-responders without reply does nothing" {

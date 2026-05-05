@@ -7,6 +7,7 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 | form | meaning |
 |------|---------|
 | `(on FILTER [:reentrant true] BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. `:reentrant true` (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8. |
+| `(lvc FILTER ...)` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings. |
 | `(bridge :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. See bridge keywords below. |
 
 ## Bound symbols

@@ -149,7 +149,7 @@ Un-banged spellings (`publish`, `publish-to`, `publish-to!`,
 subject (no wildcards, no `$LVC.*`), coerces `VALUE` to its canonical
 string form (numbers stringified, booleans → `"true"` / `"false"`,
 strings passed through), and enqueues a fan-out. Returns `nil`.
-Publishes from rules participate in normal delivery + LVC caching. By
+Publishes from rules participate in normal delivery + configured LVC caching. By
 default they are not fed back through rule evaluation; opt in per rule
 with `:reentrant true` (see "Re-entry" below).
 

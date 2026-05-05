@@ -2,10 +2,9 @@
 # Bench monoblok and nats-server on the current host. Same workload is
 # driven against both, one at a time (not concurrently).
 #
-# Monoblok runs with --no-lvc here so the comparison measures core routing
-# throughput on both sides. nats-server has no last-value cache, so leaving
-# monoblok's LVC on would be measuring an extra feature, not the routing
-# path itself. For LVC-on numbers see bench.sh.
+# Monoblok runs with no (lvc ...) config here so the comparison measures core
+# routing throughput on both sides. nats-server has no last-value cache;
+# configured LVC numbers belong in a separate benchmark.
 #
 # Honours NATS_URL (same env var the nats CLI reads) for the address;
 # defaults to nats://127.0.0.1:4222. Both servers bind to the same port
@@ -130,11 +129,8 @@ $HAS_NATS_SERVER && echo "$(nats-server --version 2>&1 | head -1)"
 echo
 
 # --- monoblok -----------------------------------------------------------------
-# --no-lvc keeps this comparison apples-to-apples with nats-server, which has
-# no last-value cache. Monoblok's default is LVC-on (every PUB pays one
-# hashmap upsert + payload copy); running with it on here would measure
-# "monoblok plus a feature nats-server doesn't have" rather than core
-# routing throughput. For real-world numbers with LVC on, see bench.sh.
+# --no-lvc keeps this comparison apples-to-apples with nats-server if the
+# benchmark patchbay grows an (lvc ...) form later.
 "$MB_BIN" --port $PORT --no-lvc > /tmp/mb.log 2>&1 &
 MB_PID=$!
 sleep 0.3
