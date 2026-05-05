@@ -1,6 +1,6 @@
-//! Per-slot clock registry. Replaces the periodic `eval.tickClocks` walker
-//! with one xev.Timer per active time-windowed slot, scheduled at the
-//! slot's exact next deadline (computed by the kernel).
+//! Per-slot clock registry: one xev.Timer per active time-windowed slot,
+//! scheduled at the slot's exact next deadline (computed by the kernel).
+//! No periodic walker; deadlines are precise to the ms.
 //!
 //! Lifecycle:
 //!   - The patchbay calls `ctx.notifyClockSlot(rule, slot_key)` whenever a
@@ -263,9 +263,9 @@ fn computeDeadline(rule: *Rule, slot_key: []const u8) ?i64 {
     };
 }
 
-/// Subject extraction for the bar-emit path. Mirrors
-/// `state.parseBarSubject` but kept local so the clock module doesn't
-/// reach across to patchbay internals it doesn't otherwise need.
+/// Strip the `"bar/m:"` prefix from a slot key to recover the bar's
+/// emission subject. Slot keys are produced by `state.keyForWindow`, so
+/// the prefix shape is the contract between that and us.
 fn subjectFromBarKey(key: []const u8) ?[]const u8 {
     const prefix = "bar/m:";
     if (!std.mem.startsWith(u8, key, prefix)) return null;

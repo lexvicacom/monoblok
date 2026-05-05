@@ -254,8 +254,10 @@ pub fn encodeForState(arena: Allocator, v: Value) StateError![]const u8 {
 ///
 /// On-the-wire shape: `"<op_name>/<kind>:<subject>"` (e.g. `"squelch/n:foo"`,
 /// `"moving-avg/t:foo.bar"`, `"bar/m:MARKET.AAPL"`). Construct via
-/// `keyForOp` / `keyForWindow`; introspect via `parseBarSubject`. Don't
-/// build keys ad-hoc with `allocPrint`; the format lives here.
+/// `keyForOp` / `keyForWindow`. Hosts that need to extract the subject
+/// from a slot key (e.g. the clock registry) do their own prefix-strip
+/// against the known op_name. Don't build keys ad-hoc with `allocPrint`;
+/// the format lives here.
 pub const KeyKind = enum { none, ticks, time_ms };
 
 fn kindByte(k: KeyKind) u8 {
@@ -282,16 +284,6 @@ pub fn keyForWindow(
 
 fn keyFor(arena: Allocator, op_name: []const u8, kind: KeyKind, subject: []const u8) Allocator.Error![]const u8 {
     return std.fmt.allocPrint(arena, "{s}/{c}:{s}", .{ op_name, kindByte(kind), subject });
-}
-
-/// Reverse of `keyForWindow(op="bar", kind=.time_ms, subject)`. Returns the
-/// subject for time-bar slots, null for everything else. Used by the
-/// patchbay clock walker to address a bar's emission subject without
-/// carrying it on the slot.
-pub fn parseBarSubject(key: []const u8) ?[]const u8 {
-    const prefix = "bar/m:";
-    if (!std.mem.startsWith(u8, key, prefix)) return null;
-    return key[prefix.len..];
 }
 
 pub const StateSlot = struct {

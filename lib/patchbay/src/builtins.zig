@@ -1130,8 +1130,9 @@ fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
 /// `(bar WINDOW PAYLOAD)`. WINDOW is `N` (close every N samples) or
 /// `:ms N` (close every N ms of wall-clock time, aligned to
 /// `floor(now/N)*N`). Emits `<subject>.bar.{open,high,low,close}` on
-/// close. Returns nil. Time bars also close from the server-side walker
-/// when the window elapses without a new tick (see `tickClocks`).
+/// close. Returns nil. Time bars also close when the host's clock hook
+/// fires the per-slot timer at `Bar.nextDeadlineMs`, so a quiet feed
+/// still flushes its bar at the window boundary.
 fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const win = try takeWindow(args, 0);
