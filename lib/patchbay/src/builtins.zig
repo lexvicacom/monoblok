@@ -586,7 +586,7 @@ fn callQuantize(args: []const Value) EvalError!Value {
     const step = try state.asNumber(args[0]);
     const x = try state.asNumber(args[1]);
     if (step == 0) return error.TypeMismatch;
-    return .{ .number = @round(x / step) * step };
+    return .{ .number = kernel.quantize(step, x) };
 }
 
 /// `(clamp LO HI X)`, X clipped to [LO, HI]. Value-last for threading.
@@ -596,7 +596,7 @@ fn callClamp(args: []const Value) EvalError!Value {
     const hi = try state.asNumber(args[1]);
     const x = try state.asNumber(args[2]);
     if (lo > hi) return error.TypeMismatch;
-    return .{ .number = std.math.clamp(x, lo, hi) };
+    return .{ .number = kernel.clamp(lo, hi, x) };
 }
 
 const MinMaxKind = enum { min, max };
@@ -632,9 +632,7 @@ fn callSign(args: []const Value) EvalError!Value {
 fn callSquelch(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const encoded = try state.encodeForState(ctx.arena, args[0]);
-    const key = try state.keyForOp(ctx.arena, "squelch", ctx.subject);
-    const changed = try state.stateEqualsOrStore(ctx.gpa, rule, key, encoded);
+    const changed = try squelchChanged(ctx, rule, "squelch", args[0]);
     if (!changed) rule.publishes_suppressed += 1;
     return if (changed) args[0] else .nil;
 }
@@ -668,11 +666,64 @@ fn callDeadband(ctx: *Context, args: []const Value) EvalError!Value {
 fn callChanged(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    const encoded = try state.encodeForState(ctx.arena, args[0]);
-    const key = try state.keyForOp(ctx.arena, "changed?", ctx.subject);
-    const changed = try state.stateEqualsOrStore(ctx.gpa, rule, key, encoded);
+    const changed = try squelchChanged(ctx, rule, "changed?", args[0]);
     if (!changed) rule.publishes_suppressed += 1;
     return .{ .boolean = changed };
+}
+
+/// Shared transition for `squelch` / `changed?`. Numeric input + numeric (or
+/// fresh) slot uses the kernel f64 fast path stored in `.number`. Anything
+/// else (non-numeric input, or slot already in `.bytes` from a prior
+/// non-numeric call) falls back to the canonical-bytes path so `1 == 1.0`
+/// across types. A type flip flushes the slot to the new variant.
+fn squelchChanged(
+    ctx: *Context,
+    rule: *state.Rule,
+    op_name: []const u8,
+    v: Value,
+) EvalError!bool {
+    const key = try state.keyForOp(ctx.arena, op_name, ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+
+    if (v == .number) {
+        const fresh = !slot.found_existing or slot.value_ptr.* == .empty;
+        const numeric_slot = fresh or slot.value_ptr.* == .number;
+        if (numeric_slot) {
+            var k: kernel.Squelch = .{
+                .last = if (fresh) 0 else slot.value_ptr.number,
+                .seen = !fresh,
+            };
+            const out = k.update(v.number);
+            slot.value_ptr.* = .{ .number = k.last };
+            return out != null;
+        }
+        // Slot is .bytes from a prior non-numeric call; flush to .number
+        // and treat the type flip as a change.
+        slot.value_ptr.deinit(ctx.gpa);
+        slot.value_ptr.* = .{ .number = v.number };
+        return true;
+    }
+
+    const encoded = try state.encodeForState(ctx.arena, v);
+    if (!slot.found_existing or slot.value_ptr.* == .empty) {
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.appendSlice(ctx.gpa, encoded);
+        slot.value_ptr.* = .{ .bytes = buf };
+        return true;
+    }
+    if (slot.value_ptr.* != .bytes) {
+        // Slot was numeric; non-numeric input is a change. Flip variant.
+        slot.value_ptr.* = .empty;
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.appendSlice(ctx.gpa, encoded);
+        slot.value_ptr.* = .{ .bytes = buf };
+        return true;
+    }
+    const prev = &slot.value_ptr.bytes;
+    if (std.mem.eql(u8, prev.items, encoded)) return false;
+    prev.clearRetainingCapacity();
+    try prev.appendSlice(ctx.gpa, encoded);
+    return true;
 }
 
 /// `(delta X)`. X minus the last X. First sight returns 0.
@@ -1100,30 +1151,14 @@ fn updateTickBar(
     x: f64,
 ) EvalError!Value {
     if (!slot.found_existing or slot.value_ptr.* == .empty) {
-        slot.value_ptr.* = .{ .ohlc = .{
-            .open = x, .high = x, .low = x, .count = 1, .cap = cap,
-        } };
-    } else {
-        const bar = &slot.value_ptr.ohlc;
-        if (bar.count == 0) {
-            bar.open = x;
-            bar.high = x;
-            bar.low = x;
-            bar.count = 1;
-        } else {
-            if (x > bar.high) bar.high = x;
-            if (x < bar.low) bar.low = x;
-            bar.count += 1;
-        }
+        slot.value_ptr.* = .{ .ohlc = .{ .cap = cap } };
     }
-
     const bar = &slot.value_ptr.ohlc;
-    if (bar.count < bar.cap) {
+    if (bar.tickUpdate(x)) |c| {
+        try emitBarFields(ctx, c.open, c.high, c.low, c.close);
+    } else {
         rule.publishes_suppressed += 1;
-        return .nil;
     }
-    try emitBarFields(ctx, bar.open, bar.high, bar.low, x);
-    bar.count = 0;
     return .nil;
 }
 
@@ -1134,62 +1169,15 @@ fn updateTimeBar(
     window_ms: u64,
     x: f64,
 ) EvalError!Value {
-    const window_ms_i: i64 = @intCast(window_ms);
-    const aligned = @divFloor(ctx.now_ms, window_ms_i) * window_ms_i;
-
     if (!slot.found_existing or slot.value_ptr.* == .empty) {
-        slot.value_ptr.* = .{ .ohlc = .{
-            .open = x, .high = x, .low = x,
-            .count = 1, .cap = 0,
-            .window_ms = window_ms,
-            .window_start_ms = aligned,
-            .last_close = x,
-        } };
-        rule.publishes_suppressed += 1;
-        return .nil;
+        slot.value_ptr.* = .{ .ohlc = .{ .window_ms = window_ms } };
     }
-
     const bar = &slot.value_ptr.ohlc;
-    if (bar.count == 0) {
-        bar.open = x;
-        bar.high = x;
-        bar.low = x;
-        bar.count = 1;
-        bar.window_ms = window_ms;
-        bar.window_start_ms = aligned;
-        bar.last_close = x;
+    if (bar.timeUpdate(ctx.now_ms, x)) |c| {
+        try emitBarFields(ctx, c.open, c.high, c.low, c.close);
+    } else {
         rule.publishes_suppressed += 1;
-        return .nil;
     }
-
-    // Close the previous window if this tick crossed its boundary, then
-    // start a fresh one with this sample. The latest sample in the closed
-    // window is whatever was last seen *before* the boundary, which is
-    // what `bar.high`/`bar.low` already reflect, but we don't carry an
-    // explicit prev-close, so we reuse `bar.high`'s sample slot
-    // accounting: we just emit open/high/low and use bar's last seen as
-    // close. For wall-clock bars, "close" = the most recent sample value
-    // accepted into this bar before the boundary crossed. That's not
-    // tracked separately, so instead we treat it as: when the new tick
-    // crosses the boundary, the previous bar closes at `bar.high or low`?
-    // No: emit close = the prior sample's value. We track it via a new
-    // field on the in-flight bar.
-    if (bar.window_start_ms != aligned) {
-        try emitBarFields(ctx, bar.open, bar.high, bar.low, bar.last_close);
-        bar.open = x;
-        bar.high = x;
-        bar.low = x;
-        bar.count = 1;
-        bar.window_start_ms = aligned;
-        bar.last_close = x;
-        rule.publishes_suppressed += 1;
-        return .nil;
-    }
-    if (x > bar.high) bar.high = x;
-    if (x < bar.low) bar.low = x;
-    bar.count += 1;
-    bar.last_close = x;
-    rule.publishes_suppressed += 1;
     return .nil;
 }
 
@@ -1216,18 +1204,20 @@ fn emitBarFields(ctx: *Context, open: f64, high: f64, low: f64, close: f64) Eval
 fn callCount(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len > 1) return error.ArityMismatch;
     const rule = ctx.current_rule orelse return error.TypeMismatch;
-    if (args.len == 1 and !args[0].isTruthy()) {
-        rule.publishes_suppressed += 1;
-        return .nil;
-    }
+    const inc = args.len == 0 or args[0].isTruthy();
 
     const key = try state.keyForOp(ctx.arena, "count", ctx.subject);
     const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
-    const next: f64 = if (!slot.found_existing or slot.value_ptr.* == .empty)
-        1
+    const prev: u64 = if (!slot.found_existing or slot.value_ptr.* == .empty)
+        0
     else
-        slot.value_ptr.number + 1;
-    slot.value_ptr.* = .{ .number = next };
+        @intFromFloat(slot.value_ptr.number);
+    var k: kernel.Count = .{ .n = prev };
+    const next = k.update(inc) orelse {
+        rule.publishes_suppressed += 1;
+        return .nil;
+    };
+    slot.value_ptr.* = .{ .number = @floatFromInt(next) };
 
     const subj = try std.fmt.allocPrint(ctx.arena, "{s}.count", .{ctx.subject});
     const out = try std.fmt.allocPrint(ctx.arena, "{d}", .{next});
