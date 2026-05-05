@@ -8,6 +8,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sexpr = @import("sexpr.zig");
+const kernel = @import("kernel.zig");
 
 pub const Value = sexpr.Value;
 
@@ -59,28 +60,10 @@ pub const StateEntry = union(enum) {
     }
 };
 
-/// In-progress OHLC bar. For tick bars, `cap` is sample count and
-/// `window_start_ms` is unused (0). For time bars, `window_ms` is the
-/// duration and `window_start_ms` is the aligned boundary
-/// (`floor(first_now / window_ms) * window_ms`); `cap` is unused (0).
-/// At least one of `cap` / `window_ms` is non-zero; the non-zero one
-/// picks the close condition.
-pub const Ohlc = struct {
-    open: f64,
-    high: f64,
-    low: f64,
-    count: u32,
-    /// Tick mode: tick count to close on. 0 in time mode.
-    cap: u32,
-    /// Time mode: window duration in ms. 0 in tick mode.
-    window_ms: u64 = 0,
-    /// Time mode: aligned start of the in-progress window. 0 in tick mode.
-    window_start_ms: i64 = 0,
-    /// Time mode: most recent sample seen, used as `close` when the
-    /// window elapses. Tick mode uses the closing sample directly. 0 in
-    /// tick mode (unused).
-    last_close: f64 = 0,
-};
+/// Transition logic + field layout live in `kernel.zig` (`Bar`); the host
+/// stores instances by value and snapshots them. `cap != 0` => tick mode,
+/// `window_ms != 0` => time mode.
+pub const Ohlc = kernel.Bar;
 
 /// Fixed-capacity ring of f64 samples with running sum and monotonic
 /// deques for O(1)-amortised max/min. Deque entries are logical counter

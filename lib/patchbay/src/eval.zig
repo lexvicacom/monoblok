@@ -210,16 +210,11 @@ pub fn tickClocks(
             const key = slot.key_ptr.*;
             switch (slot.value_ptr.*) {
                 .ohlc => |*bar| {
-                    if (bar.window_ms == 0) continue; // tick bar
-                    if (bar.count == 0) continue;     // empty bar, nothing to close
-                    const window_ms_i: i64 = @intCast(bar.window_ms);
-                    if (now_ms - bar.window_start_ms < window_ms_i) continue;
-                    const subject = state.parseBarSubject(key) orelse continue;
-                    try emitBar(arena, publisher, subject, bar.open, bar.high, bar.low, bar.last_close);
-                    rule.publishes_emitted += 4;
-                    // Reset; the next PUB starts a fresh window.
-                    bar.count = 0;
-                    bar.window_start_ms = 0;
+                    if (bar.timeTick(now_ms)) |c| {
+                        const subject = state.parseBarSubject(key) orelse continue;
+                        try emitBar(arena, publisher, subject, c.open, c.high, c.low, c.close);
+                        rule.publishes_emitted += 4;
+                    }
                 },
                 .time_ring => |*ring| ring.evict(now_ms),
                 else => {},
