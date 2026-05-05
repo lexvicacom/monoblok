@@ -876,6 +876,7 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
             }
             const ring = &slot.value_ptr.time_ring;
             try ring.push(ctx.gpa, x, ctx.now_ms);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
             return .{ .number = switch (kind) {
                 .avg => ring.mean(),
                 .sum => ring.sum(),
@@ -946,6 +947,7 @@ fn pushIntoWindow(
                 slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
             }
             try slot.value_ptr.time_ring.push(ctx.gpa, x, ctx.now_ms);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
         },
     }
     return slot.value_ptr;
@@ -1038,6 +1040,7 @@ fn callStdVar(ctx: *Context, args: []const Value, kind: StdVarKind) EvalError!Va
                 slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(win.spec.n) };
             }
             try slot.value_ptr.time_ring.push(ctx.gpa, x, ctx.now_ms);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
         },
     }
     const buf = try collectWindow(ctx.arena, slot.value_ptr.*);
@@ -1110,6 +1113,7 @@ fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
             if (now_passing) {
                 try ring.push(ctx.gpa, 1.0, ctx.now_ms);
             }
+            ctx.notifyClockSlot(rule, slot.key_ptr);
             break :blk now_passing;
         },
     };
@@ -1139,7 +1143,11 @@ fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
 
     switch (win.spec.kind) {
         .ticks => return updateTickBar(ctx, rule, slot, @intCast(win.spec.n), x),
-        .time_ms => return updateTimeBar(ctx, rule, slot, win.spec.n, x),
+        .time_ms => {
+            const out = try updateTimeBar(ctx, rule, slot, win.spec.n, x);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
+            return out;
+        },
     }
 }
 

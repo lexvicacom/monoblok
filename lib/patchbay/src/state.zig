@@ -193,6 +193,14 @@ pub const TimeRing = struct {
         try self.samples.append(gpa, .{ .value = value, .ts_ms = ts_ms });
     }
 
+    /// Wall-clock ms at which `evict` would drop the oldest sample. Null
+    /// when the ring is empty (no eviction pending). The host schedules a
+    /// one-shot timer for this moment and re-queries after each fire.
+    pub fn nextDeadlineMs(self: TimeRing) ?i64 {
+        if (self.samples.items.len == 0) return null;
+        return self.samples.items[0].ts_ms + @as(i64, @intCast(self.window_ms));
+    }
+
     pub fn sum(self: TimeRing) f64 {
         var s: f64 = 0;
         for (self.samples.items) |x| s += x.value;
@@ -288,6 +296,11 @@ pub fn parseBarSubject(key: []const u8) ?[]const u8 {
 
 pub const StateSlot = struct {
     value_ptr: *StateEntry,
+    /// Stable, gpa-owned key string the rule's hashmap holds. Safe for the
+    /// host to keep across publishes (lives until the slot is removed or
+    /// the rule is deinit'd). Use this rather than the arena-owned key the
+    /// caller built — the latter is reset between PUBs.
+    key_ptr: []const u8,
     found_existing: bool,
 };
 
@@ -296,12 +309,12 @@ pub const StateSlot = struct {
 pub fn getOrPutStateSlot(gpa: Allocator, rule: *Rule, key: []const u8) Allocator.Error!StateSlot {
     const gop = try rule.state.getOrPutAdapted(gpa, key, std.hash_map.StringContext{});
     if (gop.found_existing) {
-        return .{ .value_ptr = gop.value_ptr, .found_existing = true };
+        return .{ .value_ptr = gop.value_ptr, .key_ptr = gop.key_ptr.*, .found_existing = true };
     }
     const owned_key = try gpa.dupe(u8, key);
     gop.key_ptr.* = owned_key;
     gop.value_ptr.* = .empty;
-    return .{ .value_ptr = gop.value_ptr, .found_existing = false };
+    return .{ .value_ptr = gop.value_ptr, .key_ptr = owned_key, .found_existing = false };
 }
 
 /// Look up or create a bytes-typed state slot. Returns true iff the slot
@@ -354,4 +367,27 @@ pub fn valueEql(a: Value, b: Value) bool {
         .string => |s| std.mem.eql(u8, s, b.string),
         .list, .vector => false, // collections aren't comparable as whole values
     };
+}
+
+test "TimeRing.nextDeadlineMs tracks the oldest sample" {
+    const gpa = std.testing.allocator;
+    var r = TimeRing.init(1000);
+    defer r.deinit(gpa);
+
+    try std.testing.expectEqual(@as(?i64, null), r.nextDeadlineMs());
+
+    try r.push(gpa, 1.0, 100);
+    try std.testing.expectEqual(@as(?i64, 1100), r.nextDeadlineMs());
+
+    try r.push(gpa, 2.0, 500);
+    try std.testing.expectEqual(@as(?i64, 1100), r.nextDeadlineMs());
+
+    // Push at 1200 evicts the ts=100 entry (cutoff=200), so the new oldest
+    // is ts=500 and the deadline shifts to 1500.
+    try r.push(gpa, 3.0, 1200);
+    try std.testing.expectEqual(@as(?i64, 1500), r.nextDeadlineMs());
+
+    // Drain via evict-only (no push). After cutoff > 1200, ring is empty.
+    r.evict(2300);
+    try std.testing.expectEqual(@as(?i64, null), r.nextDeadlineMs());
 }

@@ -96,6 +96,24 @@ pub const Context = struct {
     reentry_ctx: ?*anyopaque = null,
     reentry_fn: ?*const fn (reentry_ctx: ?*anyopaque, parent: *Context, subject: []const u8, payload: []const u8) anyerror!void = null,
 
+    /// Optional clock-deadline hook. Called by time-windowed stateful ops
+    /// (`bar :ms`, `moving-* :ms`, `rate`, `throttle :ms`, etc.) right
+    /// after a slot is created or mutated. The host keeps a per-slot
+    /// timer registry and (re)schedules a one-shot timer at the slot's
+    /// `nextDeadlineMs`, replacing the periodic walker.
+    ///
+    /// `slot_key` is the same key the slot lives under in `rule.state`
+    /// (so the host can look it up to read the deadline). The patchbay
+    /// library does not know what the host does with this; setting the
+    /// hook to null is fine, in which case the host falls back to the
+    /// periodic `tickClocks` path.
+    clock_hook_ctx: ?*anyopaque = null,
+    clock_hook_fn: ?*const fn (ctx: ?*anyopaque, rule: *Rule, slot_key: []const u8) void = null,
+
+    pub fn notifyClockSlot(ctx: *Context, rule: *Rule, slot_key: []const u8) void {
+        if (ctx.clock_hook_fn) |f| f(ctx.clock_hook_ctx, rule, slot_key);
+    }
+
     /// Single emission point used by every side-effecting op. Bumps
     /// counters, records the trace entry, and (when the emitting rule is
     /// `:reentrant true`, under the depth cap) invokes the re-entry hook.

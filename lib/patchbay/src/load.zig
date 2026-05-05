@@ -80,7 +80,10 @@ pub const ValidateFailure = struct {
 /// Fire one synthetic publish per rule against a no-op publisher. Catches
 /// typos, arity bugs, and type errors on any branch the synthetic input
 /// reaches; input-gated branches stay dark. Synthetic subject = filter
-/// with `*`/`>` replaced by `"x"`; payload = `"1"`. Mutates `rule.state`.
+/// with `*`/`>` replaced by `"x"`; payload = `"1"`. Resets each rule's
+/// state map after probing so the synthetic publish leaves no fingerprint
+/// (an open `bar` slot from validate would otherwise emit a Close{1,1,1,1}
+/// on the first real PUB whose aligned window differed).
 pub fn validate(
     arena: Allocator,
     gpa: Allocator,
@@ -118,6 +121,17 @@ pub fn validate(
             });
         };
         _ = msg_arena_state.reset(.retain_capacity);
+        // Drop any state slots the probe materialised; rule.state reverts
+        // to `.empty` so the runtime starts from a clean slate.
+        var sit = rule.state.iterator();
+        while (sit.next()) |se| {
+            gpa.free(se.key_ptr.*);
+            se.value_ptr.deinit(gpa);
+        }
+        rule.state.deinit(gpa);
+        rule.state = .empty;
+        rule.publishes_emitted = 0;
+        rule.publishes_suppressed = 0;
     }
 
     return try failures.toOwnedSlice(arena);
