@@ -5,18 +5,27 @@
 //! run; `write_in_flight` is forced true so `maybeKickWrite` short-circuits
 //! before touching any fd.
 //!
-//! Two paths exercised independently:
+//! Three paths exercised independently:
 //!   forward  - ClientConn.processRx parsing N synthetic PUBs and forwarding
 //!              raw bytes into a fake Worker's outbound buffer.
 //!   return   - Worker.processUpstream parsing N synthetic MSGs from the
 //!              worker fd and per-subscriber writeMsg formatting into client
 //!              outbound buffers. Subscribers-per-filter is a knob so the
 //!              writeMsg-scales-with-subscribers hypothesis is testable.
+//!   kick     - same dispatch path as `return` but with a real socketpair
+//!              under the ClientConn and the libxev loop actually running.
+//!              Reports ns/op for two policies on the same workload:
+//!                early - maybeKickWrite after every MSG (production)
+//!                late  - one explicit kick after the whole batch
+//!              The delta isolates how much per-MSG kick-write churn costs
+//!              vs the cost the formatter already pays. Single-subscriber
+//!              only; multi-sub kick churn is just N copies of single-sub.
 //!
 //! Run with: `zig build bench-mixer -- [PATH] [N] [PUBS]`
-//!   PATH    one of `forward` or `return`. Default `forward`.
+//!   PATH    one of `forward`, `return`, `kick`. Default `forward`.
 //!   N       forward: ignored (always 1024 distinct subjects).
 //!           return:  subscribers per filter (default 1).
+//!           kick:    ignored (always 1 subscriber).
 //!   PUBS    publishes / messages to drive (default 1_000_000).
 
 const std = @import("std");
@@ -32,7 +41,9 @@ const ClientConn = mixer_mod.ClientConn;
 const FilterEntry = mixer_mod.FilterEntry;
 const Subscriber = mixer_mod.Subscriber;
 
-const Path = enum { forward, @"return" };
+const Path = enum { forward, @"return", kick };
+
+extern "c" fn socketpair(domain: c_int, ty: c_int, protocol: c_int, sv: *[2]c_int) c_int;
 
 fn monoNs() i128 {
     var ts: std.posix.timespec = undefined;
@@ -43,6 +54,7 @@ fn monoNs() i128 {
 fn parsePath(s: []const u8) ?Path {
     if (std.mem.eql(u8, s, "forward")) return .forward;
     if (std.mem.eql(u8, s, "return")) return .@"return";
+    if (std.mem.eql(u8, s, "kick")) return .kick;
     return null;
 }
 
@@ -138,6 +150,7 @@ pub fn main(init: std.process.Init) !void {
     switch (path) {
         .forward => try benchForward(gpa, &mixer, &loop, pubs),
         .@"return" => try benchReturn(gpa, &mixer, &loop, n, pubs),
+        .kick => try benchKick(gpa, &mixer, &loop, pubs),
     }
 }
 
@@ -234,6 +247,253 @@ fn benchReturn(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, subs_per_
 
     std.debug.print("subs/filter={d} ", .{subs_per_filter});
     report("return", msgs, elapsed_ns, batch.len, bytes_out, subs_per_filter);
+}
+
+/// Real-loop drain harness. Owns a socketpair: `client_fd` is wrapped as the
+/// ClientConn's xev.TCP (writes go out here); `drain_fd` is read in a libxev
+/// completion that just discards bytes and counts them. The bench stops the
+/// loop once `drained_target` bytes have been read.
+const Drain = struct {
+    fd: std.posix.fd_t,
+    tcp: xev.TCP,
+    completion: xev.Completion = undefined,
+    buf: [64 * 1024]u8 = undefined,
+    drained: usize = 0,
+    target: usize = 0,
+    loop: *xev.Loop,
+
+    fn start(self: *Drain) void {
+        self.tcp.read(self.loop, &self.completion, .{ .slice = &self.buf }, Drain, self, onRead);
+    }
+
+    fn onRead(
+        self_opt: ?*Drain,
+        loop: *xev.Loop,
+        _: *xev.Completion,
+        _: xev.TCP,
+        buf: xev.ReadBuffer,
+        r: xev.ReadError!usize,
+    ) xev.CallbackAction {
+        const self = self_opt.?;
+        const n = r catch {
+            loop.stop();
+            return .disarm;
+        };
+        if (n == 0) {
+            loop.stop();
+            return .disarm;
+        }
+        _ = buf;
+        self.drained += n;
+        if (self.drained >= self.target) {
+            loop.stop();
+            return .disarm;
+        }
+        return .rearm;
+    }
+};
+
+fn benchKick(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, msgs: usize) !void {
+    // Pre-register one filter "ns0.*" with one subscriber (a real ClientConn
+    // backed by a socketpair). Drive `msgs` MSGs through Worker.processUpstream
+    // twice: once with kicks fired per-MSG (production), once with kicks
+    // suppressed and a single explicit flush at the end. Both runs include
+    // the time to fully drain bytes off the socket (loop.run until target).
+    //
+    // Each run gets its own fresh xev.Loop. Reusing one loop across runs is
+    // fragile: the first run's completions can still be referenced after
+    // loop.stop(), and macOS kqueue + .until_done don't always play well
+    // with mid-flight teardown.
+    _ = loop;
+    const w = &mixer.workers[0];
+
+    const entry = try gpa.create(FilterEntry);
+    entry.* = .{
+        .filter = try gpa.dupe(u8, "ns0.*"),
+        .internal_sid = try gpa.dupe(u8, "1"),
+    };
+    try w.filter_by_str.put(gpa, entry.filter, entry);
+    try w.filter_by_sid.put(gpa, entry.internal_sid, entry);
+    // FilterEntry storage (filter/internal_sid bufs and the entry itself) is
+    // freed by main's worker defer block via the filter_by_str iterator.
+
+    const batch = try buildMsgBatch(gpa, msgs, "1");
+    defer gpa.free(batch);
+
+    // Expected output bytes per run: one MSG per input MSG (single subscriber,
+    // client_sid "1" same length as internal_sid so the formatted line is the
+    // same byte count as the input MSG).
+    var expected_out: usize = 0;
+    {
+        var i: usize = 0;
+        while (i < msgs) : (i += 1) {
+            // "MSG ns0.k<n> 1 5\r\nhello\r\n"
+            const subj_len = std.fmt.count("ns0.k{d}", .{i % 1024});
+            expected_out += 4 + subj_len + 1 + 1 + 1 + 1 + 2 + 5 + 2;
+        }
+    }
+
+    // --- early-kick run ---
+    try kickRun(gpa, w, entry, msgs, batch, expected_out, .early);
+    // --- late-kick run ---
+    try kickRun(gpa, w, entry, msgs, batch, expected_out, .late);
+}
+
+const KickPolicy = enum { early, late };
+
+fn kickRun(
+    gpa: std.mem.Allocator,
+    w: *Worker,
+    entry: *FilterEntry,
+    msgs: usize,
+    batch: []const u8,
+    expected_out: usize,
+    policy: KickPolicy,
+) !void {
+    var loop = try xev.Loop.init(.{});
+    defer loop.deinit();
+
+    const SOCK_STREAM: c_int = std.posix.SOCK.STREAM;
+    const AF_UNIX: c_int = std.posix.AF.UNIX;
+
+    var sv: [2]c_int = .{ -1, -1 };
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, &sv) != 0) return error.SocketpairFailed;
+    for (sv) |fd| {
+        const fl = std.c.fcntl(fd, std.posix.F.GETFL, @as(c_int, 0));
+        if (fl >= 0) {
+            const nonblock_bit: c_int = @bitCast(std.posix.O{ .NONBLOCK = true });
+            _ = std.c.fcntl(fd, std.posix.F.SETFL, @as(c_int, fl | nonblock_bit));
+        }
+    }
+
+    var client: ClientConn = .{
+        .mixer = w.mixer,
+        .id = 1,
+        .tcp = xev.TCP.initFd(sv[0]),
+    };
+    // early: kicks fire per-MSG (write_in_flight=false enables maybeKickWrite).
+    // late:  kicks suppressed via write_in_flight=true; flipped to false at end.
+    client.write_in_flight = (policy == .late);
+    defer {
+        client.rx.deinit(gpa);
+        client.out.deinit(gpa);
+        client.in_flight.deinit(gpa);
+        var it = client.subs.iterator();
+        while (it.next()) |e| gpa.free(e.key_ptr.*);
+        client.subs.deinit(gpa);
+        _ = std.c.close(sv[0]);
+    }
+
+    entry.subscribers.clearRetainingCapacity();
+    const sid_owned = try gpa.dupe(u8, "1");
+    try entry.subscribers.append(gpa, .{ .client = &client, .client_sid = sid_owned });
+    defer {
+        for (entry.subscribers.items) |s| gpa.free(s.client_sid);
+        entry.subscribers.clearRetainingCapacity();
+    }
+
+    var drain: Drain = .{
+        .fd = sv[1],
+        .tcp = xev.TCP.initFd(sv[1]),
+        .target = expected_out,
+        .loop = &loop,
+    };
+    defer _ = std.c.close(sv[1]);
+    drain.start();
+
+    w.rx.clearRetainingCapacity();
+    try w.rx.appendSlice(gpa, batch);
+
+    const start = monoNs();
+    try processUpstreamForReal(w, &loop);
+    if (policy == .late) {
+        client.write_in_flight = false;
+        kickClient(&client, &loop);
+    }
+    try loop.run(.until_done);
+    const elapsed_ns = monoNs() - start;
+
+    const label = if (policy == .early) "early" else "late ";
+    std.debug.print("policy={s} msgs={d} drained={d}/{d} ", .{ label, msgs, drain.drained, drain.target });
+    report("kick", msgs, elapsed_ns, batch.len, drain.drained, 1);
+}
+
+/// Mirror of ClientConn.maybeKickWrite (private). Same logic; we need a
+/// public-ish entry point for the explicit late flush.
+fn kickClient(c: *ClientConn, loop: *xev.Loop) void {
+    if (c.closing or c.write_in_flight) return;
+    if (c.out.items.len == 0) return;
+    std.mem.swap(std.ArrayList(u8), &c.out, &c.in_flight);
+    c.write_in_flight = true;
+    c.tcp.write(loop, &c.write_completion, .{ .slice = c.in_flight.items }, ClientConn, c, ClientConn_onWrite);
+}
+
+/// We need ClientConn.onWrite to drive the write completion, but it's private.
+/// Re-implement the same behavior inline. If the production onWrite changes
+/// shape, this drifts; the kick bench will still measure something sensible
+/// (drain target gates correctness), but compare numbers against the same
+/// commit.
+fn ClientConn_onWrite(
+    self_opt: ?*ClientConn,
+    loop: *xev.Loop,
+    _: *xev.Completion,
+    _: xev.TCP,
+    buf: xev.WriteBuffer,
+    r: xev.WriteError!usize,
+) xev.CallbackAction {
+    const self = self_opt.?;
+    const written = r catch {
+        self.write_in_flight = false;
+        return .disarm;
+    };
+    const total = buf.slice.len;
+    if (written < total) {
+        self.tcp.write(loop, &self.write_completion, .{ .slice = buf.slice[written..] }, ClientConn, self, ClientConn_onWrite);
+        return .disarm;
+    }
+    self.write_in_flight = false;
+    self.in_flight.clearRetainingCapacity();
+    kickClient(self, loop);
+    return .disarm;
+}
+
+/// Like processUpstreamFor but uses the production maybeKickWrite path
+/// (real writes hit the socket as we go). Sid-translation, formatter,
+/// kick-per-MSG — all live.
+fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
+    const gpa = w.mixer.gpa;
+    var cursor: usize = 0;
+    while (cursor < w.rx.items.len) {
+        const slice = w.rx.items[cursor..];
+        const result = proto.parseServerOp(slice) catch |err| switch (err) {
+            error.NeedMoreData => break,
+            else => return err,
+        };
+        switch (result.op) {
+            .msg => |m| {
+                const entry = w.filter_by_sid.get(m.sid) orelse {
+                    cursor += result.consumed;
+                    continue;
+                };
+                for (entry.subscribers.items) |sub| {
+                    if (sub.client.closing) continue;
+                    if (m.headers) |h| {
+                        try proto.writeHmsg(gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, h, m.payload);
+                    } else {
+                        try proto.writeMsg(gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
+                    }
+                    kickClient(sub.client, loop);
+                }
+            },
+            else => {},
+        }
+        cursor += result.consumed;
+    }
+    if (cursor > 0) {
+        const rest = w.rx.items.len - cursor;
+        std.mem.copyForwards(u8, w.rx.items[0..rest], w.rx.items[cursor..]);
+        w.rx.items.len = rest;
+    }
 }
 
 fn report(label: []const u8, ops: usize, elapsed_ns: i128, bytes_in: usize, bytes_out: usize, subs: usize) void {

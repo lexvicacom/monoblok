@@ -69,9 +69,9 @@ pub const Context = struct {
     /// detect rule-amplification blow-ups.
     rule_publishes: u32 = 0,
     /// Ingress monotonic time (ms), stamped once per PUB. Used by
-    /// `hold-off`, time-window aggregates, the `bar!` time form, and the
-    /// clock walker. Monotonic so deltas are stable across wall-clock
-    /// adjustments; not suitable for date math.
+    /// `hold-off`, time-window aggregates, and the `bar!` time form.
+    /// Monotonic so deltas are stable across wall-clock adjustments;
+    /// not suitable for date math.
     now_ms: i64 = 0,
     /// Ingress wall-clock time (ms since 1970-01-01 UTC), stamped once
     /// per PUB. Used by `date-now` / `hour-now` to format human dates.
@@ -95,6 +95,24 @@ pub const Context = struct {
     /// the child Context with `depth + 1`.
     reentry_ctx: ?*anyopaque = null,
     reentry_fn: ?*const fn (reentry_ctx: ?*anyopaque, parent: *Context, subject: []const u8, payload: []const u8) anyerror!void = null,
+
+    /// Optional clock-deadline hook. Called by time-windowed stateful ops
+    /// (`bar :ms`, `moving-* :ms`, `rate`, `throttle :ms`, etc.) right
+    /// after a slot is created or mutated. The host keeps a per-slot
+    /// timer registry and (re)schedules a one-shot timer at the slot's
+    /// `nextDeadlineMs`.
+    ///
+    /// `slot_key` is the same key the slot lives under in `rule.state`,
+    /// so the host can look it up to read the deadline. Setting the
+    /// hook to null is fine if the host doesn't need exact deadlines
+    /// (time-bar closes will only fire when a subsequent PUB rolls the
+    /// window).
+    clock_hook_ctx: ?*anyopaque = null,
+    clock_hook_fn: ?*const fn (ctx: ?*anyopaque, rule: *Rule, slot_key: []const u8) void = null,
+
+    pub fn notifyClockSlot(ctx: *Context, rule: *Rule, slot_key: []const u8) void {
+        if (ctx.clock_hook_fn) |f| f(ctx.clock_hook_ctx, rule, slot_key);
+    }
 
     /// Single emission point used by every side-effecting op. Bumps
     /// counters, records the trace entry, and (when the emitting rule is
@@ -162,11 +180,10 @@ pub const RuleSet = struct {
 };
 
 /// Returns true if any rule body contains a `:ms` keyword (the time-window
-/// sentinel). Used by the server at load time to decide whether to arm the
-/// periodic clock walker; if no rule can produce time-bar or time-ring
-/// state, the walker has nothing to do and the timer is pure overhead.
-/// Over-arms harmlessly if `:ms` appears in some unrelated keyword slot,
-/// since the walker only does work for slots that actually exist.
+/// sentinel). The host uses this at load time to decide whether to build a
+/// clock registry; if no rule can produce time-bar or time-ring state, the
+/// registry has nothing to manage. Over-reports harmlessly if `:ms` appears
+/// in some unrelated keyword slot.
 pub fn rulesUseTimeWindows(rules: []const Rule) bool {
     for (rules) |r| if (valueHasMsKeyword(r.body)) return true;
     return false;
@@ -181,68 +198,6 @@ fn valueHasMsKeyword(v: Value) bool {
         },
         else => false,
     };
-}
-
-/// Walk every rule's state and:
-///   - close any time-windowed `bar` whose aligned window has fully
-///     elapsed (`now_ms >= window_start + window_ms`); emit its
-///     open/high/low/close to `<subject>.bar.{...}` and reset to empty
-///   - evict samples older than the window from every `time_ring` slot
-///
-/// Called by the server on a periodic timer (~500ms is plenty). Safe to
-/// call any time on the loop thread; per-slot state is shared with the
-/// PUB-driven path but we never publish into a window that the next PUB
-/// would have closed itself, since both run serially.
-///
-/// `arena` is scratch (subject + payload formatting); reset / discard
-/// after the call returns. `publisher` is the same fan-out target the
-/// PUB path uses, so emitted bar closes flow through fan-out and the
-/// LVC like any other publish.
-pub fn tickClocks(
-    arena: Allocator,
-    rules: []Rule,
-    now_ms: i64,
-    publisher: Publisher,
-) !void {
-    for (rules) |*rule| {
-        var it = rule.state.iterator();
-        while (it.next()) |slot| {
-            const key = slot.key_ptr.*;
-            switch (slot.value_ptr.*) {
-                .ohlc => |*bar| {
-                    if (bar.timeTick(now_ms)) |c| {
-                        const subject = state.parseBarSubject(key) orelse continue;
-                        try emitBar(arena, publisher, subject, c.open, c.high, c.low, c.close);
-                        rule.publishes_emitted += 4;
-                    }
-                },
-                .time_ring => |*ring| ring.evict(now_ms),
-                else => {},
-            }
-        }
-    }
-}
-
-fn emitBar(
-    arena: Allocator,
-    publisher: Publisher,
-    subject: []const u8,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-) !void {
-    const fields = [_]struct { name: []const u8, val: f64 }{
-        .{ .name = "open", .val = open },
-        .{ .name = "high", .val = high },
-        .{ .name = "low", .val = low },
-        .{ .name = "close", .val = close },
-    };
-    for (fields) |f| {
-        const subj = try std.fmt.allocPrint(arena, "{s}.bar.{s}", .{ subject, f.name });
-        const out = try std.fmt.allocPrint(arena, "{d}", .{f.val});
-        try publisher.publish(subj, out);
-    }
 }
 
 /// Build a `RuleSet` from `[]Rule`. Index entries live in `arena`, which

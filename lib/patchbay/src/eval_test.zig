@@ -8,6 +8,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const eval = @import("eval.zig");
+const state = @import("state.zig");
 const Context = eval.Context;
 const Publisher = eval.Publisher;
 const loadRules = eval.loadRules;
@@ -1476,7 +1477,12 @@ test "bar with window-ms closes on the next tick after the boundary" {
     try testing.expectEqualStrings("11", tp.buf.items[3].payload);
 }
 
-test "tickClocks closes a stalled time bar" {
+test "(bar! :ms ...) materialises a time-bar slot the host can fire" {
+    // Coverage split: the kernel's `Bar.timeTick` / `nextDeadlineMs` are
+    // tested in kernel.zig; this test confirms the eval path materialises
+    // an `.ohlc` slot keyed on `bar/m:<subject>` with the right window
+    // and a fresh-but-non-empty Bar after one PUB. The host's clock
+    // registry (`src/clock.zig`) does the actual deadline scheduling.
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1488,7 +1494,6 @@ test "tickClocks closes a stalled time bar" {
     defer deinitRules(loaded, testing.allocator);
 
     var tp: TestPublisher = .{ .alloc = arena };
-    // Open a bar in window [1000,2000) and never push another tick.
     var ctx: Context = .{
         .subject = "MARKET.AAPL",
         .payload = "10",
@@ -1498,19 +1503,59 @@ test "tickClocks closes a stalled time bar" {
         .now_ms = 1500,
     };
     try run(loaded, &ctx);
+    // First sample never emits inline.
     try testing.expectEqual(@as(usize, 0), tp.buf.items.len);
 
-    // Walker fires at t=2500: window [1000,2000) is fully past, close it.
-    try eval.tickClocks(arena, loaded, 2500, tp.publisher());
-    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
-    try testing.expectEqualStrings("MARKET.AAPL.bar.open", tp.buf.items[0].subject);
-    try testing.expectEqualStrings("10", tp.buf.items[0].payload);
-    try testing.expectEqualStrings("MARKET.AAPL.bar.close", tp.buf.items[3].subject);
-    try testing.expectEqualStrings("10", tp.buf.items[3].payload);
+    const slot = loaded[0].state.get("bar/m:MARKET.AAPL").?;
+    const bar = slot.ohlc;
+    try testing.expectEqual(@as(u64, 1000), bar.window_ms);
+    try testing.expectEqual(@as(u32, 1), bar.count);
+    try testing.expectEqual(@as(i64, 1000), bar.window_start_ms);
+    try testing.expectEqual(@as(?i64, 2000), bar.nextDeadlineMs());
+}
 
-    // A second walker tick on an empty bar must not re-emit.
-    try eval.tickClocks(arena, loaded, 9000, tp.publisher());
-    try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
+test "(moving-avg :ms ...) materialises a time-ring slot" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const loaded = try loadRules(arena,
+        \\(on "x"
+        \\  (-> payload-float
+        \\      (moving-avg :ms 1000)
+        \\      (publish! "avg")))
+    );
+    defer deinitRules(loaded, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "x",
+        .payload = "10",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .now_ms = 0,
+    };
+    try run(loaded, &ctx);
+
+    const slot_ptr = loaded[0].state.getPtr("moving-avg/m:x").?;
+    const ring = &slot_ptr.time_ring;
+    try testing.expectEqual(@as(u64, 1000), ring.window_ms);
+    try testing.expectEqual(@as(usize, 1), ring.len());
+    try testing.expectEqual(@as(?i64, 1000), ring.nextDeadlineMs());
+
+    // The host evicts via TimeRing.evict directly (called by the clock
+    // registry on a per-slot timer); after eviction the next push lands
+    // a fresh sample without the stale one in the average.
+    ring.evict(5000);
+    try testing.expectEqual(@as(usize, 0), ring.len());
+
+    ctx.payload = "30";
+    ctx.now_ms = 5100;
+    try run(loaded, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("avg", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("30", tp.buf.items[1].payload);
 }
 
 test "rate over a 1s window reports events per second" {
@@ -1763,42 +1808,6 @@ test "throttle passes at most MAX per window-ms" {
     };
     try run(rules, &ctx);
     try testing.expectEqual(@as(usize, 4), tp.buf.items.len);
-}
-
-test "tickClocks evicts old samples from time-ring moving-avg" {
-    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const loaded = try loadRules(arena,
-        \\(on "x"
-        \\  (-> payload-float
-        \\      (moving-avg :ms 1000)
-        \\      (publish! "avg")))
-    );
-    defer deinitRules(loaded, testing.allocator);
-
-    var tp: TestPublisher = .{ .alloc = arena };
-    var ctx: Context = .{
-        .subject = "x",
-        .payload = "10",
-        .publisher = tp.publisher(),
-        .arena = arena,
-        .gpa = testing.allocator,
-        .now_ms = 0,
-    };
-    try run(loaded, &ctx);
-    // Walker at t=5000 should evict the t=0 sample. We can't observe the
-    // ring directly through the public API, so push a fresh sample after
-    // the walker and verify the new average doesn't include the old one.
-    try eval.tickClocks(arena, loaded, 5000, tp.publisher());
-
-    ctx.payload = "30";
-    ctx.now_ms = 5100;
-    try run(loaded, &ctx);
-    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
-    try testing.expectEqualStrings("avg", tp.buf.items[1].subject);
-    try testing.expectEqualStrings("30", tp.buf.items[1].payload);
 }
 
 // --- Re-entry: patchbay-emitted publishes match downstream rules ---------
