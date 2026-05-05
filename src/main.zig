@@ -14,6 +14,7 @@ pub const snapshot = @import("snapshot.zig");
 pub const bridge = @import("bridge.zig");
 pub const mixer = @import("mixer.zig");
 pub const mixer_config = @import("mixer_config.zig");
+pub const lvc_config = @import("lvc_config.zig");
 
 const manifest = @import("manifest");
 
@@ -50,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
     var port: u16 = 4222;
     var unix_socket_path: ?[]const u8 = null;
     var patchbay_path: ?[]const u8 = null;
-    var lvc_enabled = true;
+    var lvc_allowed = true;
     var stats_enabled = false;
     var trace_enabled = false;
     var snapshot_path: ?[]const u8 = null;
@@ -85,7 +86,7 @@ pub fn main(init: std.process.Init) !void {
                 if (patchbay_path != null) fatal("patchbay path specified twice");
                 patchbay_path = it.next() orelse fatal("--patchbay requires a path");
             },
-            .no_lvc => lvc_enabled = false,
+            .no_lvc => lvc_allowed = false,
             .stats => stats_enabled = true,
             .trace => trace_enabled = true,
             .snapshot => snapshot_path = it.next() orelse fatal("--snapshot requires a path"),
@@ -157,6 +158,10 @@ pub fn main(init: std.process.Init) !void {
         }
         fatal("patchbay validation failed");
     }
+    const lvc_filters = if (patchbay_src) |src|
+        try lvc_config.loadFilters(arena, src)
+    else
+        &.{};
     if (validate_only) {
         std.debug.print("{s}: ok ({d} rule{s})\n", .{
             patchbay_path.?, loaded_rules.len, if (loaded_rules.len == 1) "" else "s",
@@ -166,7 +171,13 @@ pub fn main(init: std.process.Init) !void {
     const ruleset = try rules.buildRuleSet(arena, loaded_rules);
     std.log.info("loaded {d} patchbay form(s)", .{loaded_rules.len});
     std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
+    const lvc_enabled = lvc_allowed and lvc_filters.len != 0;
     std.log.info("lvc: {s}", .{if (lvc_enabled) "enabled" else "disabled"});
+    if (!lvc_allowed and lvc_filters.len != 0) {
+        std.log.warn("--no-lvc set: ignoring {d} configured LVC filter(s)", .{lvc_filters.len});
+    } else if (lvc_enabled) {
+        std.log.info("lvc: configured {d} filter(s)", .{lvc_filters.len});
+    }
     if (trace_enabled) {
         std.log.warn("--trace enabled: every patchbay evaluation will be printed to stderr (noisy and slow, do not run in production)", .{});
     }
@@ -180,12 +191,13 @@ pub fn main(init: std.process.Init) !void {
 
     var r = router.Router.init(gpa, lvc_enabled);
     defer r.deinit();
+    if (lvc_enabled) try r.configureLvc(lvc_filters);
 
     // Warm-start the LVC before accepting connections so the first
     // `SUB $LVC.*` sees the restored state.
     if (snapshot_path) |sp| {
         if (!lvc_enabled) {
-            std.log.warn("snapshot: --snapshot ignored because --no-lvc is set", .{});
+            std.log.warn("snapshot: --snapshot ignored because LVC is disabled or not configured", .{});
         } else if (readFile(fsio, arena, sp)) |bytes| {
             snapshot.loadInto(gpa, bytes, &r, loaded_rules) catch |err| {
                 std.log.warn("snapshot: load failed ({s}): {s}", .{ sp, @errorName(err) });
@@ -446,8 +458,8 @@ fn printUsage() void {
         \\                   0600 and unlinked on graceful shutdown.
         \\  --patchbay FILE  Explicit form of the positional argument.
         \\                   --rules is a backwards-compatible alias.
-        \\  --no-lvc         Disable the last-value cache and $LVC.* live
-        \\                   streams. LVC is on by default; overhead ~2-4%.
+        \\  --no-lvc         Disable configured (lvc ...) filters and $LVC.*
+        \\                   live streams. Without (lvc ...), LVC is off.
         \\  --stats          Log a running summary every 10k PUBs: max
         \\                   rule-publishes-per-input and max per-conn
         \\                   outbound hwm. Useful for spotting headroom
@@ -500,4 +512,5 @@ test {
     _ = snapshot;
     _ = bridge;
     _ = mixer_config;
+    _ = lvc_config;
 }

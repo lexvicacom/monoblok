@@ -47,8 +47,9 @@ you genuinely want a multi-stage pipeline (e.g. `json-demux!` head rule
 emitting scalars that downstream rules condition); otherwise leave it
 off.
 
-There is also an optional `(bridge ...)` top-level form for forwarding
-local publishes to a remote NATS cluster. It is export-only.
+There are also top-level config forms: `(lvc "filter" ...)` opts matching
+subjects into `$LVC.*` last-value streams, and optional `(bridge ...)`
+forwards local publishes to a remote NATS cluster. The bridge is export-only.
 
 ## Grammar (s-expressions)
 
@@ -59,7 +60,7 @@ bare, `nil` / `true` / `false` are literals. Truthiness: only `nil` and
 Unlike Clojure, there is no quote form. Whether a `(...)` is a call
 depends on context, not on a leading `'`. Inside an `(on ...)` body,
 every list dispatches on its head symbol (`hold-off`, `publish`, `+`,
-etc.) - unknown heads error. Inside the `(bridge ...)` and `(mixer
+etc.) - unknown heads error. Inside the `(lvc ...)`, `(bridge ...)`, and `(mixer
 ...)` forms, after a keyword like `:servers`, `:export`, or
 `:workers`, a list is a literal sequence of elements (e.g. servers to
 try when connecting). Same parser, different consumer. The mixer is
@@ -279,7 +280,7 @@ recommended form.
 
 Before returning a patchbay file, verify:
 
-1. Every top-level form is `(on ...)` or a single optional `(bridge ...)`.
+1. Every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(bridge ...)`.
 2. Every `publish!` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
 3. Every numeric op is fed a numeric value (`payload-float` / `payload-int` / arithmetic result), not raw `payload`.
 4. `N` in `moving-*` is a literal integer and consistent per call site.

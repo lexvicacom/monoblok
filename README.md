@@ -2,7 +2,7 @@
 
 monoblok is a tiny messaging broker with built-in _processing_. It speaks enough of the [NATS](https://nats.io) protocol to be useful. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented in every consumer.
 
-Last-value streams on `$LVC.*` give late subscribers the current value per subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+Opt-in last-value streams on `$LVC.*` give late subscribers the current value per configured subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 [tinyblok](https://github.com/lexvicacom/tinyblok) runs the patchbay DSL on ESP32 chips.
 
@@ -80,7 +80,11 @@ Once loaded, describe the stream you have and the stream you want.
 
 ### `$LVC.*`: last-value-cache stream
 
-Every subject has an implicit last-value cache. Subscribing to `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value first (if any), then every subsequent publish. Wildcards work. `PUB $LVC.*` is rejected.
+Top-level `(lvc ...)` forms opt subjects into the last-value cache. Subscribing to `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value first (if any), then every subsequent opted-in publish. Wildcards work. `PUB $LVC.*` is rejected.
+
+```edn
+(lvc "sensors.>" "alerts.>")
+```
 
 ```
 PUB foo.bar 11      ; cache = 11
@@ -89,7 +93,7 @@ SUB $LVC.foo.bar    ; -> immediately receives 12
 PUB foo.bar 13      ; -> subscriber receives 13
 ```
 
-On by default; `--no-lvc` disables (~2–4% overhead when enabled).
+Absent `(lvc ...)`, LVC is off and the publish path does no cache work. `--no-lvc` disables configured LVC filters.
 
 ## NATS support
 
