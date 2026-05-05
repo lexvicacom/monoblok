@@ -564,6 +564,12 @@ A subscriber to `MARKET.AAPL.bar.>` then sees a clean burst of four
 messages per closed bar, in `open / high / low / close` order, with no
 intermediate per-tick noise.
 
+If another rule in the same patchbay should consume those derived bar
+subjects, mark the bar-building rule `:reentrant true`. The emitted
+subjects have two extra tokens (`MARKET.AAPL.bar.close`), so they do
+not match the original `MARKET.*` filter and will not feed back into
+the bar builder.
+
 Volume isn't reported. For tick bars it's always exactly N; for time
 bars, pair the rule with `(count!)` if you want the per-bar tick count.
 

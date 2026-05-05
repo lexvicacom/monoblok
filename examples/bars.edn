@@ -15,6 +15,10 @@
 ; from the server's clock walker if a window elapses without a new tick.
 
 ; Tick bars: every 60 trades, regardless of how long that takes.
+; :reentrant is only needed because the rule below consumes the derived
+; MARKET.<SYM>.bar.close stream in the same patchbay. The bar subjects
+; do not match MARKET.*, so this does not feed the bar builder back into
+; itself.
 (on "MARKET.*" :reentrant true
   (bar! 60 payload-float))
 
