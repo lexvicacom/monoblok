@@ -132,10 +132,7 @@ fn parseUnsub(rest: []const u8) ParseError!ClientOp {
     const sid = it.next() orelse return error.InvalidArgs;
     const max_str = it.next();
     if (it.next() != null) return error.InvalidArgs;
-    const max_msgs = if (max_str) |m|
-        std.fmt.parseInt(u64, m, 10) catch return error.InvalidArgs
-    else
-        null;
+    const max_msgs = if (max_str) |m| try parseUnsigned(u64, m) else null;
     return .{ .unsub = .{ .sid = sid, .max_msgs = max_msgs } };
 }
 
@@ -154,7 +151,7 @@ fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Parse
         }
         break :blk a;
     };
-    const nbytes = std.fmt.parseInt(usize, nbytes_str, 10) catch return error.InvalidArgs;
+    const nbytes = try parseUnsigned(usize, nbytes_str);
     if (nbytes > max_payload) return error.PayloadTooLarge;
 
     // Need payload bytes + trailing CRLF (or at least LF; we're lenient).
@@ -198,8 +195,8 @@ fn parseHpub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Pars
         hdr_str = a;
         total_str = b;
     }
-    const hdr_len = std.fmt.parseInt(usize, hdr_str, 10) catch return error.InvalidArgs;
-    const total_len = std.fmt.parseInt(usize, total_str, 10) catch return error.InvalidArgs;
+    const hdr_len = try parseUnsigned(usize, hdr_str);
+    const total_len = try parseUnsigned(usize, total_str);
     if (hdr_len > total_len) return error.InvalidArgs;
     if (total_len > max_payload) return error.PayloadTooLarge;
 
@@ -295,7 +292,7 @@ fn parseMsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Serve
         }
         break :blk a;
     };
-    const nbytes = std.fmt.parseInt(usize, nbytes_str, 10) catch return error.InvalidArgs;
+    const nbytes = try parseUnsigned(usize, nbytes_str);
     if (nbytes > max_payload) return error.PayloadTooLarge;
 
     const after_header = buf[line_end..];
@@ -337,8 +334,8 @@ fn parseHmsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Serv
         hdr_str = a;
         total_str = b;
     }
-    const hdr_len = std.fmt.parseInt(usize, hdr_str, 10) catch return error.InvalidArgs;
-    const total_len = std.fmt.parseInt(usize, total_str, 10) catch return error.InvalidArgs;
+    const hdr_len = try parseUnsigned(usize, hdr_str);
+    const total_len = try parseUnsigned(usize, total_str);
     if (hdr_len > total_len) return error.InvalidArgs;
     if (total_len > max_payload) return error.PayloadTooLarge;
 
@@ -414,6 +411,18 @@ fn eqIgnoreCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| if (std.ascii.toUpper(x) != std.ascii.toUpper(y)) return false;
     return true;
+}
+
+fn parseUnsigned(comptime T: type, s: []const u8) ParseError!T {
+    if (s.len == 0) return error.InvalidArgs;
+    var n: T = 0;
+    for (s) |c| {
+        if (c < '0' or c > '9') return error.InvalidArgs;
+        const digit: T = @intCast(c - '0');
+        n = std.math.mul(T, n, 10) catch return error.InvalidArgs;
+        n = std.math.add(T, n, digit) catch return error.InvalidArgs;
+    }
+    return n;
 }
 
 // --- Server-to-client writers -------------------------------------------
@@ -526,14 +535,25 @@ pub fn writeHmsg(
     payload: []const u8,
 ) !void {
     const total = headers.len + payload.len;
+    const reply_len = if (reply) |r| r.len + 1 else 0;
+    const need = 5 + subject.len + 1 + sid.len + 1 + reply_len + 20 + 1 + 20 + 2 + total + 2;
+    try out.ensureUnusedCapacity(gpa, need);
+    out.appendSliceAssumeCapacity("HMSG ");
+    out.appendSliceAssumeCapacity(subject);
+    out.appendAssumeCapacity(' ');
+    out.appendSliceAssumeCapacity(sid);
+    out.appendAssumeCapacity(' ');
     if (reply) |r| {
-        try out.print(gpa, "HMSG {s} {s} {s} {d} {d}\r\n", .{ subject, sid, r, headers.len, total });
-    } else {
-        try out.print(gpa, "HMSG {s} {s} {d} {d}\r\n", .{ subject, sid, headers.len, total });
+        out.appendSliceAssumeCapacity(r);
+        out.appendAssumeCapacity(' ');
     }
-    try out.appendSlice(gpa, headers);
-    try out.appendSlice(gpa, payload);
-    try out.appendSlice(gpa, "\r\n");
+    appendUnsignedDecimal(out, headers.len);
+    out.appendAssumeCapacity(' ');
+    appendUnsignedDecimal(out, total);
+    out.appendSliceAssumeCapacity("\r\n");
+    out.appendSliceAssumeCapacity(headers);
+    out.appendSliceAssumeCapacity(payload);
+    out.appendSliceAssumeCapacity("\r\n");
 }
 
 // --- Tests ---------------------------------------------------------------
