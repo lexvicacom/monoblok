@@ -360,7 +360,7 @@ pub const Server = struct {
 
     pub fn waitSnapshotIdle(self: *Server) void {
         while (self.snapshot_in_flight.load(.acquire)) {
-            std.time.sleep(std.time.ns_per_ms);
+            std.Thread.yield() catch {};
         }
     }
 
