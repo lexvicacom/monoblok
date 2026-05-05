@@ -80,7 +80,12 @@ pub const Ring = struct {
     min_deque: std.ArrayList(u64) = .empty,
 
     pub fn init(gpa: Allocator, cap: usize) !Ring {
-        return .{ .buf = try gpa.alloc(f64, cap) };
+        var r: Ring = .{ .buf = try gpa.alloc(f64, cap) };
+        errdefer gpa.free(r.buf);
+        errdefer r.max_deque.deinit(gpa);
+        try r.max_deque.ensureTotalCapacity(gpa, cap);
+        try r.min_deque.ensureTotalCapacity(gpa, cap);
+        return r;
     }
 
     pub fn deinit(self: *Ring, gpa: Allocator) void {
@@ -96,6 +101,7 @@ pub const Ring = struct {
 
     /// Push `x`, evicting the oldest sample if the ring is full.
     pub fn push(self: *Ring, gpa: Allocator, x: f64) !void {
+        _ = gpa;
         const cap = self.buf.len;
         const idx = self.counter;
         if (self.counter >= cap) {
@@ -117,7 +123,7 @@ pub const Ring = struct {
                 _ = self.max_deque.pop();
             } else break;
         }
-        try self.max_deque.append(gpa, idx);
+        self.max_deque.appendAssumeCapacity(idx);
 
         while (self.min_deque.items.len > 0) {
             const tail = self.min_deque.items[self.min_deque.items.len - 1];
@@ -125,7 +131,7 @@ pub const Ring = struct {
                 _ = self.min_deque.pop();
             } else break;
         }
-        try self.min_deque.append(gpa, idx);
+        self.min_deque.appendAssumeCapacity(idx);
 
         self.counter += 1;
     }
@@ -303,6 +309,7 @@ pub fn getOrPutStateSlot(gpa: Allocator, rule: *Rule, key: []const u8) Allocator
     if (gop.found_existing) {
         return .{ .value_ptr = gop.value_ptr, .key_ptr = gop.key_ptr.*, .found_existing = true };
     }
+    errdefer _ = rule.state.remove(key);
     const owned_key = try gpa.dupe(u8, key);
     gop.key_ptr.* = owned_key;
     gop.value_ptr.* = .empty;
