@@ -876,6 +876,7 @@ fn callMoving(ctx: *Context, args: []const Value, kind: MovingKind) EvalError!Va
             }
             const ring = &slot.value_ptr.time_ring;
             try ring.push(ctx.gpa, x, ctx.now_ms);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
             return .{ .number = switch (kind) {
                 .avg => ring.mean(),
                 .sum => ring.sum(),
@@ -946,6 +947,7 @@ fn pushIntoWindow(
                 slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(window.n) };
             }
             try slot.value_ptr.time_ring.push(ctx.gpa, x, ctx.now_ms);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
         },
     }
     return slot.value_ptr;
@@ -1038,6 +1040,7 @@ fn callStdVar(ctx: *Context, args: []const Value, kind: StdVarKind) EvalError!Va
                 slot.value_ptr.* = .{ .time_ring = state.TimeRing.init(win.spec.n) };
             }
             try slot.value_ptr.time_ring.push(ctx.gpa, x, ctx.now_ms);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
         },
     }
     const buf = try collectWindow(ctx.arena, slot.value_ptr.*);
@@ -1110,6 +1113,7 @@ fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
             if (now_passing) {
                 try ring.push(ctx.gpa, 1.0, ctx.now_ms);
             }
+            ctx.notifyClockSlot(rule, slot.key_ptr);
             break :blk now_passing;
         },
     };
@@ -1126,8 +1130,9 @@ fn callThrottle(ctx: *Context, args: []const Value) EvalError!Value {
 /// `(bar WINDOW PAYLOAD)`. WINDOW is `N` (close every N samples) or
 /// `:ms N` (close every N ms of wall-clock time, aligned to
 /// `floor(now/N)*N`). Emits `<subject>.bar.{open,high,low,close}` on
-/// close. Returns nil. Time bars also close from the server-side walker
-/// when the window elapses without a new tick (see `tickClocks`).
+/// close. Returns nil. Time bars also close when the host's clock hook
+/// fires the per-slot timer at `Bar.nextDeadlineMs`, so a quiet feed
+/// still flushes its bar at the window boundary.
 fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
     const rule = ctx.current_rule orelse return error.TypeMismatch;
     const win = try takeWindow(args, 0);
@@ -1139,7 +1144,11 @@ fn callBar(ctx: *Context, args: []const Value) EvalError!Value {
 
     switch (win.spec.kind) {
         .ticks => return updateTickBar(ctx, rule, slot, @intCast(win.spec.n), x),
-        .time_ms => return updateTimeBar(ctx, rule, slot, win.spec.n, x),
+        .time_ms => {
+            const out = try updateTimeBar(ctx, rule, slot, win.spec.n, x);
+            ctx.notifyClockSlot(rule, slot.key_ptr);
+            return out;
+        },
     }
 }
 

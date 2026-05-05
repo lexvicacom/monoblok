@@ -14,6 +14,7 @@ const patchbay = @import("patchbay");
 const rules_mod = patchbay.eval;
 const subject_mod = patchbay.subject;
 const snapshot_mod = @import("snapshot.zig");
+const clock_mod = @import("clock.zig");
 
 const rx_initial = 32 * 1024;
 const rx_max = proto.max_control_line + proto.max_payload + 64;
@@ -45,16 +46,6 @@ const stats_prefix = "$STATS.";
 /// Default wall-clock tick for `$STATS.*` publishes. Override via
 /// `Server.stats_tick_ms` (CLI flag `--stats-tick-ms`).
 pub const default_stats_tick_ms: u64 = 60_000;
-
-/// Default wall-clock tick for the patchbay clock walker. The walker runs
-/// `eval.tickClocks` over every rule's state to close any time-windowed
-/// `bar` whose window elapsed without a closing PUB, and to evict stale
-/// samples from `:ms`-windowed `moving-*` rings. 2s is a reasonable
-/// idle-CPU vs latency tradeoff: time-bar closes land within ~half-tick
-/// of their boundary, and the walker only does real work for `time_ring`
-/// / time-bar slots. Override via `Server.clock_tick_ms` (CLI flag
-/// `--clock-tick-ms`).
-pub const default_clock_tick_ms: u64 = 2_000;
 
 /// Shared-layout view of `bridge.Stats`. Server reads via `*const BridgeStats`
 /// so it doesn't need to import bridge.zig directly.
@@ -122,17 +113,11 @@ pub const Server = struct {
     /// Doubly-linked list of live conns, walked on each ping tick.
     conns_head: ?*Conn = null,
 
-    /// Periodic patchbay clock walker; timer re-arms from its callback.
-    /// Only armed if at least one rule body uses a `:ms` window. Without
-    /// time-windowed ops the walker has nothing to do, so we skip it
-    /// entirely (decided at `listen` time via `rulesUseTimeWindows`).
-    clock_enabled: bool = false,
-    clock_timer: xev.Timer = undefined,
-    clock_completion: xev.Completion = undefined,
-    clock_tick_ms: u64 = default_clock_tick_ms,
-    /// Reset on each clock tick. Walker emits + ring eviction allocate
-    /// here.
-    clock_arena: std.heap.ArenaAllocator = undefined,
+    /// Per-slot clock registry (replaces the periodic walker). Built at
+    /// `listen` time iff at least one rule body uses a `:ms` window. The
+    /// registry installs a Context hook so time-windowed builtins
+    /// (re)schedule a one-shot timer at each slot's exact next deadline.
+    clock_registry: ?*clock_mod.Registry = null,
 
     /// LVC snapshot config. `snapshot_every_ms > 0` enables periodic dumps;
     /// `snapshot_io` is required when dumping.
@@ -187,15 +172,16 @@ pub const Server = struct {
             self.ping_timer.run(self.loop, &self.ping_completion, tick, Server, self, onPingTick);
         }
 
-        self.clock_enabled = rules_mod.rulesUseTimeWindows(self.rules.rules);
-        if (self.clock_enabled) {
-            self.clock_arena = .init(self.gpa);
-            self.clock_timer = try xev.Timer.init();
-            self.clock_timer.run(self.loop, &self.clock_completion, self.clock_tick_ms, Server, self, onClockTick);
-            std.log.info(
-                "patchbay clock walker enabled, tick={d}ms (tune with --clock-tick-ms)",
-                .{self.clock_tick_ms},
+        if (rules_mod.rulesUseTimeWindows(self.rules.rules)) {
+            const reg = try self.gpa.create(clock_mod.Registry);
+            reg.* = try clock_mod.Registry.init(
+                self.gpa,
+                self.loop,
+                self.rules.rules,
+                router_mod.rulesPublisher(self.router),
             );
+            self.clock_registry = reg;
+            std.log.info("patchbay clock registry enabled (per-slot deadlines)", .{});
         }
 
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
@@ -317,9 +303,10 @@ pub const Server = struct {
     pub fn deinit(self: *Server) void {
         self.stats_timer.deinit();
         if (self.ping_interval_ms > 0 and self.mode != .worker) self.ping_timer.deinit();
-        if (self.clock_enabled) {
-            self.clock_timer.deinit();
-            self.clock_arena.deinit();
+        if (self.clock_registry) |reg| {
+            reg.deinit();
+            self.gpa.destroy(reg);
+            self.clock_registry = null;
         }
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {
             self.snapshot_timer.deinit();
@@ -421,26 +408,6 @@ pub const Server = struct {
 
         const tick = @max(self.ping_interval_ms / 2, 1);
         self.ping_timer.run(loop, &self.ping_completion, tick, Server, self, onPingTick);
-        return .disarm;
-    }
-
-    fn onClockTick(
-        self_opt: ?*Server,
-        loop: *xev.Loop,
-        _: *xev.Completion,
-        r: xev.Timer.RunError!void,
-    ) xev.CallbackAction {
-        _ = r catch {};
-        const self = self_opt.?;
-
-        _ = self.clock_arena.reset(.retain_capacity);
-        const arena = self.clock_arena.allocator();
-        const publisher = router_mod.rulesPublisher(self.router);
-        rules_mod.tickClocks(arena, self.rules.rules, self.loop.now(), publisher) catch |err| {
-            std.log.warn("patchbay clock tick failed: {s}", .{@errorName(err)});
-        };
-
-        self.clock_timer.run(loop, &self.clock_completion, self.clock_tick_ms, Server, self, onClockTick);
         return .disarm;
     }
 
@@ -855,6 +822,8 @@ const Conn = struct {
                     .trace = self.server.trace_enabled,
                     .reentry_ctx = self.server,
                     .reentry_fn = ruleReentry,
+                    .clock_hook_ctx = self.server.clock_registry,
+                    .clock_hook_fn = if (self.server.clock_registry != null) clock_mod.hookFn else null,
                 };
                 self.server.rules.run(&ctx) catch |err| {
                     std.log.warn("rule error: {s}", .{@errorName(err)});
@@ -1034,6 +1003,8 @@ fn ruleReentry(
         .max_depth = parent.max_depth,
         .reentry_ctx = parent.reentry_ctx,
         .reentry_fn = parent.reentry_fn,
+        .clock_hook_ctx = parent.clock_hook_ctx,
+        .clock_hook_fn = parent.clock_hook_fn,
     };
     try self.rules.run(&child);
 }

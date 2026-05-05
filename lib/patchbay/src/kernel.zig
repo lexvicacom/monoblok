@@ -265,6 +265,16 @@ pub const Bar = struct {
         self.window_start_ms = 0;
         return out;
     }
+
+    /// Wall-clock ms at which `timeTick` would emit a close. Returns null
+    /// in tick mode and when the bar is empty (no open sample yet, so no
+    /// window to close). Used by the host to schedule a one-shot timer
+    /// instead of polling on a periodic walker.
+    pub fn nextDeadlineMs(self: *const Bar) ?i64 {
+        if (self.window_ms == 0) return null;
+        if (self.count == 0) return null;
+        return self.window_start_ms + @as(i64, @intCast(self.window_ms));
+    }
 };
 
 /// Tick-window moving average over N samples. Emits running mean every
@@ -564,5 +574,30 @@ test {
         try std.testing.expectEqual(@as(f64, 20), c.close);
         try std.testing.expect(b.timeTick(1200) == null);
         try std.testing.expect(b.timeUpdate(1300, 5) == null);
+    }
+
+    // nextDeadlineMs: tick-mode bars never have a wall-clock deadline.
+    {
+        var b: Bar = .{ .cap = 3 };
+        try std.testing.expectEqual(@as(?i64, null), b.nextDeadlineMs());
+        _ = b.tickUpdate(1);
+        try std.testing.expectEqual(@as(?i64, null), b.nextDeadlineMs());
+    }
+
+    // nextDeadlineMs: time-mode reports the aligned window's end-time.
+    // First sample at ts=100 with window 1000ms aligns the bar to [0,1000),
+    // so the deadline is 1000. After the bar rolls past 1000, the next
+    // sample re-anchors to a new aligned window and the deadline tracks.
+    {
+        var b: Bar = .{ .window_ms = 1000 };
+        try std.testing.expectEqual(@as(?i64, null), b.nextDeadlineMs());
+        _ = b.timeUpdate(100, 10);
+        try std.testing.expectEqual(@as(?i64, 1000), b.nextDeadlineMs());
+        _ = b.timeUpdate(500, 20);
+        try std.testing.expectEqual(@as(?i64, 1000), b.nextDeadlineMs());
+        _ = b.timeTick(1500);
+        try std.testing.expectEqual(@as(?i64, null), b.nextDeadlineMs());
+        _ = b.timeUpdate(1600, 30);
+        try std.testing.expectEqual(@as(?i64, 2000), b.nextDeadlineMs());
     }
 }
