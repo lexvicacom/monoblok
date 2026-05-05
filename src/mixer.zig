@@ -367,16 +367,32 @@ pub const Worker = struct {
         entry.* = .{ .filter = filter_owned, .internal_sid = internal_sid, .internal_sid_num = sid_num };
 
         const sid_owned = try gpa.dupe(u8, client_sid);
-        errdefer gpa.free(sid_owned);
+        var entry_owns_subs = false;
+        errdefer if (!entry_owns_subs) gpa.free(sid_owned);
         try entry.subscribers.append(gpa, .{ .client = client, .client_sid = sid_owned });
+        entry_owns_subs = true;
+        errdefer if (entry_owns_subs) {
+            for (entry.subscribers.items) |s| gpa.free(s.client_sid);
+            entry.subscribers.deinit(gpa);
+        };
 
         try self.filter_by_str.put(gpa, entry.filter, entry);
+        var filter_registered = true;
+        errdefer if (filter_registered) {
+            _ = self.filter_by_str.remove(entry.filter);
+        };
+
         try self.registerSidEntry(gpa, sid_num, entry);
+        var sid_registered = true;
+        errdefer if (sid_registered) self.unregisterSidEntry(sid_num);
 
         // Send SUB upstream.
         var buf: [proto.max_control_line]u8 = undefined;
         const line = try std.fmt.bufPrint(&buf, "SUB {s} {s}\r\n", .{ entry.filter, entry.internal_sid });
         try self.out.appendSlice(gpa, line);
+        filter_registered = false;
+        sid_registered = false;
+        entry_owns_subs = false;
         self.maybeKickWrite(loop);
         return entry;
     }
@@ -389,6 +405,11 @@ pub const Worker = struct {
             @memset(self.entries_by_sid.items[old_len..], null);
         }
         self.entries_by_sid.items[idx] = entry;
+    }
+
+    fn unregisterSidEntry(self: *Worker, sid: u64) void {
+        const idx: usize = @intCast(sid);
+        if (idx < self.entries_by_sid.items.len) self.entries_by_sid.items[idx] = null;
     }
 
     fn entryForSid(self: *Worker, sid: []const u8) ?*FilterEntry {
@@ -424,8 +445,7 @@ pub const Worker = struct {
         self.maybeKickWrite(loop);
 
         _ = self.filter_by_str.remove(entry.filter);
-        const sid_idx: usize = @intCast(entry.internal_sid_num);
-        if (sid_idx < self.entries_by_sid.items.len) self.entries_by_sid.items[sid_idx] = null;
+        self.unregisterSidEntry(entry.internal_sid_num);
         entry.subscribers.deinit(gpa);
         gpa.free(entry.filter);
         gpa.free(entry.internal_sid);
@@ -651,10 +671,13 @@ pub const ClientConn = struct {
 
         const worker = self.mixer.workerFor(s.subject);
         const entry = try worker.addSubscriber(loop, self, s.subject, s.sid);
+        var worker_registered = true;
+        errdefer if (worker_registered) worker.removeSubscriber(loop, entry, self, s.sid);
 
         const sid_owned = try gpa.dupe(u8, s.sid);
         errdefer gpa.free(sid_owned);
         try self.subs.put(gpa, sid_owned, .{ .entry = entry, .worker = worker });
+        worker_registered = false;
     }
 
     fn handleUnsub(self: *ClientConn, loop: *xev.Loop, u: proto.ClientOp.Unsub) !void {
