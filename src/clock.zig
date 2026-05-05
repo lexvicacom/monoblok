@@ -101,6 +101,7 @@ pub const Registry = struct {
         };
         cs.* = .{
             .registry = self,
+            .gpa = self.gpa,
             .rule_idx = rule_idx,
             .slot_key = key_owned,
             .timer = xev.Timer.init() catch {
@@ -140,6 +141,7 @@ pub const Registry = struct {
 /// during deinit, with the same restriction).
 pub const ClockSlot = struct {
     registry: *Registry,
+    gpa: Allocator,
     rule_idx: u32,
     /// gpa-owned, freed in onCancelDone.
     slot_key: []u8,
@@ -244,7 +246,7 @@ pub const ClockSlot = struct {
     }
 
     fn free(self: *ClockSlot) void {
-        const gpa = self.registry.gpa;
+        const gpa = self.gpa;
         self.timer.deinit();
         gpa.free(self.slot_key);
         gpa.destroy(self);

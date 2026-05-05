@@ -130,6 +130,9 @@ pub fn main(init: std.process.Init) !void {
         mixer.workers[idx] = .{ .mixer = &mixer, .cfg_idx = idx, .shard = w.shard };
         // Force kicks to short-circuit: pretend a write is always in flight.
         mixer.workers[idx].write_in_flight = true;
+        if (!std.mem.eql(u8, w.shard, "*")) {
+            try mixer.worker_by_shard.put(gpa, w.shard, &mixer.workers[idx]);
+        }
     }
     defer for (mixer.workers) |*w| {
         w.rx.deinit(gpa);
@@ -144,8 +147,9 @@ pub fn main(init: std.process.Init) !void {
             gpa.destroy(e.value_ptr.*);
         }
         w.filter_by_str.deinit(gpa);
-        w.filter_by_sid.deinit(gpa);
+        w.entries_by_sid.deinit(gpa);
     };
+    defer mixer.worker_by_shard.deinit(gpa);
 
     switch (path) {
         .forward => try benchForward(gpa, &mixer, &loop, pubs),
@@ -190,7 +194,7 @@ fn benchForward(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, pubs: us
     var bytes_out: usize = 0;
     for (mixer.workers) |*w| bytes_out += w.out.items.len;
 
-    report("forward", pubs, elapsed_ns, batch.len, bytes_out, 0);
+    report("forward", pubs, elapsed_ns, batch.len, bytes_out, batch.len);
 }
 
 fn benchReturn(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, subs_per_filter: usize, msgs: usize) !void {
@@ -204,9 +208,10 @@ fn benchReturn(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, subs_per_
     entry.* = .{
         .filter = try gpa.dupe(u8, "ns0.*"),
         .internal_sid = try gpa.dupe(u8, "1"),
+        .internal_sid_num = 1,
     };
     try w.filter_by_str.put(gpa, entry.filter, entry);
-    try w.filter_by_sid.put(gpa, entry.internal_sid, entry);
+    try registerBenchSid(gpa, w, entry);
 
     const clients = try gpa.alloc(ClientConn, subs_per_filter);
     defer gpa.free(clients);
@@ -244,9 +249,10 @@ fn benchReturn(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, subs_per_
 
     var bytes_out: usize = 0;
     for (clients) |*c| bytes_out += c.out.items.len;
+    const expected_out = expectedMsgFanoutBytes(msgs, entry.subscribers.items);
 
     std.debug.print("subs/filter={d} ", .{subs_per_filter});
-    report("return", msgs, elapsed_ns, batch.len, bytes_out, subs_per_filter);
+    report("return", msgs, elapsed_ns, batch.len, bytes_out, expected_out);
 }
 
 /// Real-loop drain harness. Owns a socketpair: `client_fd` is wrapped as the
@@ -311,9 +317,10 @@ fn benchKick(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, msgs: usize
     entry.* = .{
         .filter = try gpa.dupe(u8, "ns0.*"),
         .internal_sid = try gpa.dupe(u8, "1"),
+        .internal_sid_num = 1,
     };
     try w.filter_by_str.put(gpa, entry.filter, entry);
-    try w.filter_by_sid.put(gpa, entry.internal_sid, entry);
+    try registerBenchSid(gpa, w, entry);
     // FilterEntry storage (filter/internal_sid bufs and the entry itself) is
     // freed by main's worker defer block via the filter_by_str iterator.
 
@@ -328,8 +335,7 @@ fn benchKick(gpa: std.mem.Allocator, mixer: *Mixer, loop: *xev.Loop, msgs: usize
         var i: usize = 0;
         while (i < msgs) : (i += 1) {
             // "MSG ns0.k<n> 1 5\r\nhello\r\n"
-            const subj_len = std.fmt.count("ns0.k{d}", .{i % 1024});
-            expected_out += 4 + subj_len + 1 + 1 + 1 + 1 + 2 + 5 + 2;
+            expected_out += msgWireLen(i, "1", "hello".len);
         }
     }
 
@@ -415,7 +421,7 @@ fn kickRun(
 
     const label = if (policy == .early) "early" else "late ";
     std.debug.print("policy={s} msgs={d} drained={d}/{d} ", .{ label, msgs, drain.drained, drain.target });
-    report("kick", msgs, elapsed_ns, batch.len, drain.drained, 1);
+    report("kick", msgs, elapsed_ns, batch.len, drain.drained, expected_out);
 }
 
 /// Mirror of ClientConn.maybeKickWrite (private). Same logic; we need a
@@ -462,6 +468,8 @@ fn ClientConn_onWrite(
 /// kick-per-MSG — all live.
 fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
     const gpa = w.mixer.gpa;
+    var kicks: KickQueueBench = .{};
+
     var cursor: usize = 0;
     while (cursor < w.rx.items.len) {
         const slice = w.rx.items[cursor..];
@@ -471,10 +479,19 @@ fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
         };
         switch (result.op) {
             .msg => |m| {
-                const entry = w.filter_by_sid.get(m.sid) orelse {
+                const entry = benchEntryForSid(w, m.sid) orelse {
                     cursor += result.consumed;
                     continue;
                 };
+                if (m.headers == null and m.reply == null and entry.subscribers.items.len == 1) {
+                    const sub = entry.subscribers.items[0];
+                    if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
+                        try sub.client.out.appendSlice(gpa, slice[0..result.consumed]);
+                        kicks.push(sub.client);
+                        cursor += result.consumed;
+                        continue;
+                    }
+                }
                 for (entry.subscribers.items) |sub| {
                     if (sub.client.closing) continue;
                     if (m.headers) |h| {
@@ -482,7 +499,7 @@ fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
                     } else {
                         try proto.writeMsg(gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
                     }
-                    kickClient(sub.client, loop);
+                    kicks.push(sub.client);
                 }
             },
             else => {},
@@ -494,13 +511,13 @@ fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
         std.mem.copyForwards(u8, w.rx.items[0..rest], w.rx.items[cursor..]);
         w.rx.items.len = rest;
     }
+    kicks.flush(loop);
 }
 
-fn report(label: []const u8, ops: usize, elapsed_ns: i128, bytes_in: usize, bytes_out: usize, subs: usize) void {
+fn report(label: []const u8, ops: usize, elapsed_ns: i128, bytes_in: usize, bytes_out: usize, expected_out: usize) void {
     const elapsed_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
     const rate: f64 = @as(f64, @floatFromInt(ops)) / elapsed_s;
     const ns_per_op: f64 = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(ops));
-    const expected_out = if (subs == 0) bytes_in else bytes_in * subs;
     std.debug.print(
         "path={s} ops={d} | {d:.3}s = {d:.0} ops/s ({d:.1} ns/op, in={d}B out={d}B exp={d}B)\n",
         .{ label, ops, elapsed_s, rate, ns_per_op, bytes_in, bytes_out, expected_out },
@@ -550,10 +567,18 @@ fn processUpstreamFor(w: *Worker, loop: *xev.Loop) !void {
         };
         switch (result.op) {
             .msg => |m| {
-                const entry = w.filter_by_sid.get(m.sid) orelse {
+                const entry = benchEntryForSid(w, m.sid) orelse {
                     cursor += result.consumed;
                     continue;
                 };
+                if (m.headers == null and m.reply == null and entry.subscribers.items.len == 1) {
+                    const sub = entry.subscribers.items[0];
+                    if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
+                        try sub.client.out.appendSlice(gpa, slice[0..result.consumed]);
+                        cursor += result.consumed;
+                        continue;
+                    }
+                }
                 for (entry.subscribers.items) |sub| {
                     if (sub.client.closing) continue;
                     if (m.headers) |h| {
@@ -572,4 +597,72 @@ fn processUpstreamFor(w: *Worker, loop: *xev.Loop) !void {
         std.mem.copyForwards(u8, w.rx.items[0..rest], w.rx.items[cursor..]);
         w.rx.items.len = rest;
     }
+}
+
+const KickQueueBench = struct {
+    head: ?*ClientConn = null,
+    tail: ?*ClientConn = null,
+
+    fn push(self: *KickQueueBench, c: *ClientConn) void {
+        if (c.kick_queued) return;
+        c.kick_queued = true;
+        c.kick_next = null;
+        if (self.tail) |tail| {
+            tail.kick_next = c;
+        } else {
+            self.head = c;
+        }
+        self.tail = c;
+    }
+
+    fn flush(self: *KickQueueBench, loop: *xev.Loop) void {
+        var cur = self.head;
+        while (cur) |c| {
+            const next = c.kick_next;
+            c.kick_next = null;
+            c.kick_queued = false;
+            kickClient(c, loop);
+            cur = next;
+        }
+        self.head = null;
+        self.tail = null;
+    }
+};
+
+fn registerBenchSid(gpa: std.mem.Allocator, w: *Worker, entry: *FilterEntry) !void {
+    const idx: usize = @intCast(entry.internal_sid_num);
+    if (w.entries_by_sid.items.len <= idx) {
+        const old_len = w.entries_by_sid.items.len;
+        try w.entries_by_sid.resize(gpa, idx + 1);
+        @memset(w.entries_by_sid.items[old_len..], null);
+    }
+    w.entries_by_sid.items[idx] = entry;
+}
+
+fn benchEntryForSid(w: *Worker, sid: []const u8) ?*FilterEntry {
+    var n: usize = 0;
+    for (sid) |c| {
+        if (c < '0' or c > '9') return null;
+        n = std.math.mul(usize, n, 10) catch return null;
+        n = std.math.add(usize, n, @as(usize, @intCast(c - '0'))) catch return null;
+    }
+    if (n == 0 or n >= w.entries_by_sid.items.len) return null;
+    return w.entries_by_sid.items[n];
+}
+
+fn msgWireLen(i: usize, sid: []const u8, payload_len: usize) usize {
+    return 4 +
+        std.fmt.count("ns0.k{d}", .{i % 1024}) + 1 +
+        sid.len + 1 +
+        std.fmt.count("{d}", .{payload_len}) + 2 +
+        payload_len + 2;
+}
+
+fn expectedMsgFanoutBytes(msgs: usize, subs: []const Subscriber) usize {
+    var total: usize = 0;
+    var i: usize = 0;
+    while (i < msgs) : (i += 1) {
+        for (subs) |sub| total += msgWireLen(i, sub.client_sid, "hello".len);
+    }
+    return total;
 }
