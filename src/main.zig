@@ -306,6 +306,7 @@ pub fn main(init: std.process.Init) !void {
     // callback so the loop thread isn't blocked on disk I/O while still
     // technically running.
     if (srv.snapshot_path != null) {
+        srv.waitSnapshotIdle();
         std.log.info("shutdown: writing final snapshot...", .{});
         srv.snapshotSync() catch |err| {
             std.log.warn("shutdown: snapshot failed: {s}", .{@errorName(err)});

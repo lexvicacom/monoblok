@@ -29,6 +29,7 @@ pub const Mixer = struct {
     accept_completion: xev.Completion = undefined,
 
     workers: []Worker = &.{},
+    worker_by_shard: std.StringHashMapUnmanaged(*Worker) = .empty,
 
     next_conn_id: u64 = 1,
 
@@ -50,6 +51,7 @@ pub const Mixer = struct {
         for (self.cfg.workers, 0..) |w, idx| {
             self.workers[idx] = .{ .mixer = self, .cfg_idx = idx, .shard = w.shard };
         }
+        try self.buildShardIndex();
         for (self.workers) |*w| try w.spawn(self.gpa, &self.cfg.workers[w.cfg_idx]);
         for (self.workers) |*w| w.startUpstreamRead(self.loop);
 
@@ -66,6 +68,7 @@ pub const Mixer = struct {
 
     pub fn deinit(self: *Mixer) void {
         for (self.workers) |*w| w.shutdown();
+        self.worker_by_shard.deinit(self.gpa);
         self.gpa.free(self.workers);
     }
 
@@ -85,10 +88,20 @@ pub const Mixer = struct {
     pub fn workerFor(self: *Mixer, subject: []const u8) *Worker {
         const dot = std.mem.indexOfScalar(u8, subject, '.') orelse subject.len;
         const tok = subject[0..dot];
+        if (self.worker_by_shard.count() != 0) {
+            return self.worker_by_shard.get(tok) orelse &self.workers[self.cfg.catch_all];
+        }
         for (self.workers) |*w| {
             if (std.mem.eql(u8, w.shard, tok)) return w;
         }
         return &self.workers[self.cfg.catch_all];
+    }
+
+    fn buildShardIndex(self: *Mixer) !void {
+        for (self.workers) |*w| {
+            if (std.mem.eql(u8, w.shard, "*")) continue;
+            try self.worker_by_shard.put(self.gpa, w.shard, w);
+        }
     }
 
     fn onAccept(self_opt: ?*Mixer, loop: *xev.Loop, _: *xev.Completion, r: xev.AcceptError!xev.TCP) xev.CallbackAction {
@@ -113,6 +126,7 @@ pub const FilterEntry = struct {
     filter: []u8,
     /// Internal sid sent to the worker (decimal of an i64 counter, owned).
     internal_sid: []u8,
+    internal_sid_num: u64,
     subscribers: std.ArrayList(Subscriber) = .empty,
 };
 
@@ -142,7 +156,9 @@ pub const Worker = struct {
 
     /// Coalesce table: each unique filter has one entry, one upstream SUB.
     filter_by_str: std.StringHashMapUnmanaged(*FilterEntry) = .empty,
-    filter_by_sid: std.StringHashMapUnmanaged(*FilterEntry) = .empty,
+    /// Dense internal-sid index. Mixer-minted sids start at 1, so slot 0 stays
+    /// unused and `entries_by_sid[n]` is the filter entry for worker sid `n`.
+    entries_by_sid: std.ArrayList(?*FilterEntry) = .empty,
     next_internal_sid: u64 = 1,
 
     closing: bool = false,
@@ -270,6 +286,8 @@ pub const Worker = struct {
 
     fn processUpstream(self: *Worker, loop: *xev.Loop) !void {
         _ = loop;
+        var kicks: KickQueue = .{};
+
         var cursor: usize = 0;
         while (cursor < self.rx.items.len) {
             const slice = self.rx.items[cursor..];
@@ -281,7 +299,7 @@ pub const Worker = struct {
                 .info => {},
                 .pong, .ping, .ok => {},
                 .err => |e| std.log.warn("mixer: worker shard={s} -ERR {s}", .{ self.shard, e }),
-                .msg => |m| try self.dispatchMsg(m),
+                .msg => |m| try self.dispatchMsg(m, slice[0..result.consumed], &kicks),
             }
             cursor += result.consumed;
         }
@@ -290,13 +308,24 @@ pub const Worker = struct {
             std.mem.copyForwards(u8, self.rx.items[0..rest], self.rx.items[cursor..]);
             self.rx.items.len = rest;
         }
+        kicks.flush(self.mixer.loop);
     }
 
-    fn dispatchMsg(self: *Worker, m: proto.ServerOp.Msg) !void {
-        const entry = self.filter_by_sid.get(m.sid) orelse {
+    fn dispatchMsg(self: *Worker, m: proto.ServerOp.Msg, wire: []const u8, kicks: *KickQueue) !void {
+        const entry = self.entryForSid(m.sid) orelse {
             std.log.warn("mixer: MSG with unknown sid {s} from shard={s}", .{ m.sid, self.shard });
             return;
         };
+
+        if (m.headers == null and m.reply == null and entry.subscribers.items.len == 1) {
+            const sub = entry.subscribers.items[0];
+            if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
+                try sub.client.out.appendSlice(self.mixer.gpa, wire);
+                kicks.push(sub.client);
+                return;
+            }
+        }
+
         for (entry.subscribers.items) |sub| {
             if (sub.client.closing) continue;
             if (m.headers) |h| {
@@ -304,7 +333,7 @@ pub const Worker = struct {
             } else {
                 try proto.writeMsg(self.mixer.gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
             }
-            sub.client.maybeKickWrite(self.mixer.loop);
+            kicks.push(sub.client);
         }
     }
 
@@ -326,29 +355,72 @@ pub const Worker = struct {
         const filter_owned = try gpa.dupe(u8, filter);
         errdefer gpa.free(filter_owned);
 
+        const sid_num = self.next_internal_sid;
+        self.next_internal_sid += 1;
         const internal_sid = blk: {
             var buf: [24]u8 = undefined;
-            const s = try std.fmt.bufPrint(&buf, "{d}", .{self.next_internal_sid});
-            self.next_internal_sid += 1;
+            const s = try std.fmt.bufPrint(&buf, "{d}", .{sid_num});
             break :blk try gpa.dupe(u8, s);
         };
         errdefer gpa.free(internal_sid);
 
-        entry.* = .{ .filter = filter_owned, .internal_sid = internal_sid };
+        entry.* = .{ .filter = filter_owned, .internal_sid = internal_sid, .internal_sid_num = sid_num };
 
         const sid_owned = try gpa.dupe(u8, client_sid);
-        errdefer gpa.free(sid_owned);
+        var entry_owns_subs = false;
+        errdefer if (!entry_owns_subs) gpa.free(sid_owned);
         try entry.subscribers.append(gpa, .{ .client = client, .client_sid = sid_owned });
+        entry_owns_subs = true;
+        errdefer if (entry_owns_subs) {
+            for (entry.subscribers.items) |s| gpa.free(s.client_sid);
+            entry.subscribers.deinit(gpa);
+        };
 
         try self.filter_by_str.put(gpa, entry.filter, entry);
-        try self.filter_by_sid.put(gpa, entry.internal_sid, entry);
+        var filter_registered = true;
+        errdefer if (filter_registered) {
+            _ = self.filter_by_str.remove(entry.filter);
+        };
+
+        try self.registerSidEntry(gpa, sid_num, entry);
+        var sid_registered = true;
+        errdefer if (sid_registered) self.unregisterSidEntry(sid_num);
 
         // Send SUB upstream.
         var buf: [proto.max_control_line]u8 = undefined;
         const line = try std.fmt.bufPrint(&buf, "SUB {s} {s}\r\n", .{ entry.filter, entry.internal_sid });
         try self.out.appendSlice(gpa, line);
+        filter_registered = false;
+        sid_registered = false;
+        entry_owns_subs = false;
         self.maybeKickWrite(loop);
         return entry;
+    }
+
+    fn registerSidEntry(self: *Worker, gpa: Allocator, sid: u64, entry: *FilterEntry) !void {
+        const idx: usize = @intCast(sid);
+        if (self.entries_by_sid.items.len <= idx) {
+            const old_len = self.entries_by_sid.items.len;
+            try self.entries_by_sid.resize(gpa, idx + 1);
+            @memset(self.entries_by_sid.items[old_len..], null);
+        }
+        self.entries_by_sid.items[idx] = entry;
+    }
+
+    fn unregisterSidEntry(self: *Worker, sid: u64) void {
+        const idx: usize = @intCast(sid);
+        if (idx < self.entries_by_sid.items.len) self.entries_by_sid.items[idx] = null;
+    }
+
+    fn entryForSid(self: *Worker, sid: []const u8) ?*FilterEntry {
+        var n: usize = 0;
+        for (sid) |c| {
+            if (c < '0' or c > '9') return null;
+            n = std.math.mul(usize, n, 10) catch return null;
+            n = std.math.add(usize, n, @as(usize, @intCast(c - '0'))) catch return null;
+        }
+        if (n == 0 or n >= self.entries_by_sid.items.len) return null;
+        return self.entries_by_sid.items[n];
     }
 
     /// Remove one subscriber from `entry`. If the list empties, send UNSUB
@@ -373,7 +445,7 @@ pub const Worker = struct {
         self.maybeKickWrite(loop);
 
         _ = self.filter_by_str.remove(entry.filter);
-        _ = self.filter_by_sid.remove(entry.internal_sid);
+        self.unregisterSidEntry(entry.internal_sid_num);
         entry.subscribers.deinit(gpa);
         gpa.free(entry.filter);
         gpa.free(entry.internal_sid);
@@ -443,7 +515,7 @@ pub const Worker = struct {
             gpa.destroy(entry);
         }
         self.filter_by_str.deinit(gpa);
-        self.filter_by_sid.deinit(gpa);
+        self.entries_by_sid.deinit(gpa);
 
         if (self.fd >= 0) _ = std.c.close(self.fd);
     }
@@ -467,12 +539,16 @@ pub const ClientConn = struct {
     write_in_flight: bool = false,
     out: std.ArrayList(u8) = .empty,
     in_flight: std.ArrayList(u8) = .empty,
+    kick_queued: bool = false,
+    kick_next: ?*ClientConn = null,
 
     /// client_sid -> (worker, FilterEntry). Owns its keys.
     subs: std.StringHashMapUnmanaged(ClientSub) = .empty,
 
     close_completion: xev.Completion = undefined,
     closing: bool = false,
+    close_cleanup_done: bool = false,
+    close_started: bool = false,
 
     fn init(mixer: *Mixer, tcp: xev.TCP) !*ClientConn {
         const self = try mixer.gpa.create(ClientConn);
@@ -539,6 +615,10 @@ pub const ClientConn = struct {
             self.beginClose(loop);
             return .disarm;
         };
+        if (self.closing) {
+            self.beginClose(loop);
+            return .disarm;
+        }
         self.maybeKickWrite(loop);
         return if (self.closing) .disarm else .rearm;
     }
@@ -597,10 +677,13 @@ pub const ClientConn = struct {
 
         const worker = self.mixer.workerFor(s.subject);
         const entry = try worker.addSubscriber(loop, self, s.subject, s.sid);
+        var worker_registered = true;
+        errdefer if (worker_registered) worker.removeSubscriber(loop, entry, self, s.sid);
 
         const sid_owned = try gpa.dupe(u8, s.sid);
         errdefer gpa.free(sid_owned);
         try self.subs.put(gpa, sid_owned, .{ .entry = entry, .worker = worker });
+        worker_registered = false;
     }
 
     fn handleUnsub(self: *ClientConn, loop: *xev.Loop, u: proto.ClientOp.Unsub) !void {
@@ -635,21 +718,35 @@ pub const ClientConn = struct {
             return .disarm;
         };
         const total = buf.slice.len;
+        if (self.closing) {
+            self.write_in_flight = false;
+            self.in_flight.clearRetainingCapacity();
+            self.beginClose(loop);
+            return .disarm;
+        }
         if (written < total) {
             self.tcp.write(loop, &self.write_completion, .{ .slice = buf.slice[written..] }, ClientConn, self, onWrite);
             return .disarm;
         }
         self.write_in_flight = false;
         self.in_flight.clearRetainingCapacity();
+        if (self.closing) {
+            self.beginClose(loop);
+            return .disarm;
+        }
         self.maybeKickWrite(loop);
         return .disarm;
     }
 
     fn beginClose(self: *ClientConn, loop: *xev.Loop) void {
-        if (self.closing) return;
-        std.log.info("mixer client {d} closed", .{self.id});
         self.closing = true;
-        self.cleanupSubs(loop);
+        if (!self.close_cleanup_done) {
+            std.log.info("mixer client {d} closed", .{self.id});
+            self.cleanupSubs(loop);
+            self.close_cleanup_done = true;
+        }
+        if (self.close_started or self.write_in_flight) return;
+        self.close_started = true;
         self.tcp.close(loop, &self.close_completion, ClientConn, self, onClose);
     }
 
@@ -663,6 +760,36 @@ pub const ClientConn = struct {
         const self = self_opt.?;
         self.deinit();
         return .disarm;
+    }
+};
+
+const KickQueue = struct {
+    head: ?*ClientConn = null,
+    tail: ?*ClientConn = null,
+
+    fn push(self: *KickQueue, c: *ClientConn) void {
+        if (c.kick_queued) return;
+        c.kick_queued = true;
+        c.kick_next = null;
+        if (self.tail) |tail| {
+            tail.kick_next = c;
+        } else {
+            self.head = c;
+        }
+        self.tail = c;
+    }
+
+    fn flush(self: *KickQueue, loop: *xev.Loop) void {
+        var cur = self.head;
+        while (cur) |c| {
+            const next = c.kick_next;
+            c.kick_next = null;
+            c.kick_queued = false;
+            c.maybeKickWrite(loop);
+            cur = next;
+        }
+        self.head = null;
+        self.tail = null;
     }
 };
 

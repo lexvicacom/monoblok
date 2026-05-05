@@ -364,12 +364,16 @@ pub const Router = struct {
     }
 
     pub fn removeAllFor(self: *Router, conn: *Conn) void {
-        // Best-effort: a scratch-alloc failure leaves stale subs, but the
-        // conn is going away anyway.
         const mode = scanModeRemoveAll(conn);
-        self.scanLiteralAndPrune(mode) catch {};
-        self.scanWildcardBucketsAndPrune(mode) catch {};
+        // Close cleanup must not allocate: stale subscriptions contain raw
+        // Conn pointers, so leaving them behind would make later fan-out touch
+        // freed connection state. Prune empty buckets with a non-allocating
+        // repeated scan after the stale subscriptions are gone.
+        self.scanLiteralNoPrune(mode);
+        self.scanWildcardBucketsNoPrune(mode);
         self.scanGlobalList(&self.wildcard_global, mode);
+        self.pruneEmptyLiteralBuckets();
+        self.pruneEmptyWildcardBuckets();
     }
 
     /// Apply `mode` to every sub in a flat list. No bucket bookkeeping.
@@ -464,6 +468,32 @@ pub const Router = struct {
         }
     }
 
+    fn scanLiteralNoPrune(self: *Router, mode: ScanMode) void {
+        var lit_it = self.literal_subs.iterator();
+        while (lit_it.next()) |e| {
+            scanBucketNoPrune(self, &e.value_ptr.subs, mode);
+        }
+    }
+
+    fn pruneEmptyLiteralBuckets(self: *Router) void {
+        while (true) {
+            var empty_key: ?[]const u8 = null;
+            var it = self.literal_subs.iterator();
+            while (it.next()) |e| {
+                if (e.value_ptr.subs.items.len == 0) {
+                    empty_key = e.key_ptr.*;
+                    break;
+                }
+            }
+            const key = empty_key orelse return;
+            if (self.literal_subs.fetchRemove(key)) |kv| {
+                var bucket_copy = kv.value;
+                bucket_copy.subs.deinit(self.gpa);
+                self.gpa.free(kv.key);
+            }
+        }
+    }
+
     /// Mirror of `scanLiteralAndPrune` for the first-token-bucketed wildcard map.
     fn scanWildcardBucketsAndPrune(self: *Router, mode: ScanMode) !void {
         var arena_state: std.heap.ArenaAllocator = .init(self.gpa);
@@ -498,6 +528,51 @@ pub const Router = struct {
                 var bucket_copy = kv.value;
                 bucket_copy.subs.deinit(self.gpa);
                 self.gpa.free(kv.key);
+            }
+        }
+    }
+
+    fn scanWildcardBucketsNoPrune(self: *Router, mode: ScanMode) void {
+        var wb_it = self.wildcard_buckets.iterator();
+        while (wb_it.next()) |e| {
+            scanBucketNoPrune(self, &e.value_ptr.subs, mode);
+        }
+    }
+
+    fn pruneEmptyWildcardBuckets(self: *Router) void {
+        while (true) {
+            var empty_key: ?[]const u8 = null;
+            var it = self.wildcard_buckets.iterator();
+            while (it.next()) |e| {
+                if (e.value_ptr.subs.items.len == 0) {
+                    empty_key = e.key_ptr.*;
+                    break;
+                }
+            }
+            const key = empty_key orelse return;
+            if (self.wildcard_buckets.fetchRemove(key)) |kv| {
+                var bucket_copy = kv.value;
+                bucket_copy.subs.deinit(self.gpa);
+                self.gpa.free(kv.key);
+            }
+        }
+    }
+
+    fn scanBucketNoPrune(self: *Router, subs: *std.ArrayListUnmanaged(*Subscription), mode: ScanMode) void {
+        var i: usize = 0;
+        while (i < subs.items.len) {
+            const s = subs.items[i];
+            const r = mode.classify(s);
+            switch (r.action) {
+                .keep => i += 1,
+                .set_max => {
+                    s.max_msgs = r.max_msgs;
+                    i += 1;
+                },
+                .drop => {
+                    _ = subs.swapRemove(i);
+                    self.freeSub(s);
+                },
             }
         }
     }
