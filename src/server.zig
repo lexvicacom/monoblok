@@ -301,6 +301,7 @@ pub const Server = struct {
     }
 
     pub fn deinit(self: *Server) void {
+        self.waitSnapshotIdle();
         self.stats_timer.deinit();
         if (self.ping_interval_ms > 0 and self.mode != .worker) self.ping_timer.deinit();
         if (self.clock_registry) |reg| {
@@ -355,6 +356,12 @@ pub const Server = struct {
             "shutdown: snapshot written ({d} lvc / {d} rule-state entries) to {s}",
             .{ snap.lvc.len, snap.rule_state.len, path },
         );
+    }
+
+    pub fn waitSnapshotIdle(self: *Server) void {
+        while (self.snapshot_in_flight.load(.acquire)) {
+            std.time.sleep(std.time.ns_per_ms);
+        }
     }
 
     fn onStatsTick(
@@ -487,7 +494,9 @@ pub const Server = struct {
             snap: snapshot_mod.Snapshot,
 
             fn run(job: *@This()) void {
-                snapshot_mod.writeFileAtomic(job.server.gpa, job.io, job.path, job.snap) catch |err| {
+                const server = job.server;
+                const gpa = server.gpa;
+                snapshot_mod.writeFileAtomic(gpa, job.io, job.path, job.snap) catch |err| {
                     std.log.warn("snapshot: write failed: {s}", .{@errorName(err)});
                 };
                 std.log.info(
@@ -496,11 +505,10 @@ pub const Server = struct {
                 );
 
                 const ap = job.arena_ptr;
-                const gpa = job.server.gpa;
-                job.server.snapshot_in_flight.store(false, .release);
                 ap.deinit();
                 gpa.destroy(ap);
                 gpa.destroy(job);
+                server.snapshot_in_flight.store(false, .release);
             }
         };
 
@@ -612,12 +620,12 @@ const Conn = struct {
         errdefer gpa.destroy(self);
 
         const rconn = try gpa.create(router_mod.Conn);
-        errdefer gpa.destroy(rconn);
 
         const id = server.next_conn_id;
         server.next_conn_id += 1;
 
         rconn.* = .{ .id = id, .gpa = gpa };
+        errdefer rconn.deinit();
 
         self.* = .{
             .server = server,
@@ -627,14 +635,10 @@ const Conn = struct {
             .last_recv_ms = server.loop.now(),
             .connect_ms = server.loop.now(),
         };
+        errdefer self.msg_arena.deinit();
 
         rconn.kick_ctx = self;
         rconn.kick_fn = onKick;
-
-        // Link into the server's conn list (head insert).
-        self.next = server.conns_head;
-        if (server.conns_head) |h| h.prev = self;
-        server.conns_head = self;
 
         // Seed INFO.
         try proto.writeInfo(
@@ -646,6 +650,12 @@ const Conn = struct {
             server.listen_port,
             server.mode,
         );
+
+        // Link into the server's conn list (head insert) only after all
+        // fallible initialization has completed.
+        self.next = server.conns_head;
+        if (server.conns_head) |h| h.prev = self;
+        server.conns_head = self;
 
         return self;
     }
