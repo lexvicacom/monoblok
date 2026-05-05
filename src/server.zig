@@ -596,6 +596,8 @@ const Conn = struct {
 
     close_completion: xev.Completion = undefined,
     closing: bool = false,
+    close_cleanup_done: bool = false,
+    close_started: bool = false,
     shutdown_requested: bool = false,
 
     // Reset between messages to bound per-rule allocation lifetime.
@@ -728,6 +730,10 @@ const Conn = struct {
             self.beginClose(loop);
             return .disarm;
         };
+        if (self.closing) {
+            self.beginClose(loop);
+            return .disarm;
+        }
 
         self.maybeKickWrite(loop);
         return if (self.closing) .disarm else .rearm;
@@ -928,6 +934,12 @@ const Conn = struct {
         };
 
         const total = buf.slice.len;
+        if (self.closing) {
+            self.write_in_flight = false;
+            self.in_flight_buf.clearRetainingCapacity();
+            self.beginClose(loop);
+            return .disarm;
+        }
         if (written < total) {
             // Resubmit the remainder. `buf.slice[written..]` stays valid
             // because `maybeKickWrite` won't touch `in_flight_buf` while
@@ -945,16 +957,24 @@ const Conn = struct {
 
         self.write_in_flight = false;
         self.in_flight_buf.clearRetainingCapacity();
+        if (self.closing) {
+            self.beginClose(loop);
+            return .disarm;
+        }
         self.maybeKickWrite(loop);
         return .disarm;
     }
 
     fn beginClose(self: *Conn, loop: *xev.Loop) void {
-        if (self.closing) return;
-        std.log.info("conn {d} closed", .{self.router_conn.id});
         self.closing = true;
-        self.router_conn.markClosed();
-        self.server.router.removeAllFor(self.router_conn);
+        if (!self.close_cleanup_done) {
+            std.log.info("conn {d} closed", .{self.router_conn.id});
+            self.router_conn.markClosed();
+            self.server.router.removeAllFor(self.router_conn);
+            self.close_cleanup_done = true;
+        }
+        if (self.close_started or self.write_in_flight) return;
+        self.close_started = true;
         self.tcp.close(loop, &self.close_completion, Conn, self, onClose);
     }
 

@@ -547,6 +547,8 @@ pub const ClientConn = struct {
 
     close_completion: xev.Completion = undefined,
     closing: bool = false,
+    close_cleanup_done: bool = false,
+    close_started: bool = false,
 
     fn init(mixer: *Mixer, tcp: xev.TCP) !*ClientConn {
         const self = try mixer.gpa.create(ClientConn);
@@ -613,6 +615,10 @@ pub const ClientConn = struct {
             self.beginClose(loop);
             return .disarm;
         };
+        if (self.closing) {
+            self.beginClose(loop);
+            return .disarm;
+        }
         self.maybeKickWrite(loop);
         return if (self.closing) .disarm else .rearm;
     }
@@ -712,21 +718,35 @@ pub const ClientConn = struct {
             return .disarm;
         };
         const total = buf.slice.len;
+        if (self.closing) {
+            self.write_in_flight = false;
+            self.in_flight.clearRetainingCapacity();
+            self.beginClose(loop);
+            return .disarm;
+        }
         if (written < total) {
             self.tcp.write(loop, &self.write_completion, .{ .slice = buf.slice[written..] }, ClientConn, self, onWrite);
             return .disarm;
         }
         self.write_in_flight = false;
         self.in_flight.clearRetainingCapacity();
+        if (self.closing) {
+            self.beginClose(loop);
+            return .disarm;
+        }
         self.maybeKickWrite(loop);
         return .disarm;
     }
 
     fn beginClose(self: *ClientConn, loop: *xev.Loop) void {
-        if (self.closing) return;
-        std.log.info("mixer client {d} closed", .{self.id});
         self.closing = true;
-        self.cleanupSubs(loop);
+        if (!self.close_cleanup_done) {
+            std.log.info("mixer client {d} closed", .{self.id});
+            self.cleanupSubs(loop);
+            self.close_cleanup_done = true;
+        }
+        if (self.close_started or self.write_in_flight) return;
+        self.close_started = true;
         self.tcp.close(loop, &self.close_completion, ClientConn, self, onClose);
     }
 
