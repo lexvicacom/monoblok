@@ -514,7 +514,6 @@ fn printBanner(mode: []const u8) void {
         \\   |_|  |_| \___/ |_|\_| \___/ |___/ |____| \___/ |_|\_\
         \\
         \\   monoblok {s} - {s} mode
-        \\   patchbay-conditioned pub/sub, one loop, no fuss
         \\
         \\
     , .{ manifest.version, mode });
