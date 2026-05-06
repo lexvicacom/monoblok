@@ -353,6 +353,10 @@ A window is either a tick count or a wall-clock duration:
 | `N`      | last N samples (fixed-cap ring)        |
 | `:ms N`  | last N ms of wall-clock time           |
 
+Rule of thumb: `!` marks forms that emit or otherwise have an effect,
+`:ms N` marks wall-clock windows that may use the host clock, and bare
+`N` marks tick/sample windows.
+
 Wall-clock time is the ingress timestamp stamped once per inbound PUB
 (same source `hold-off` reads). For windows that elapse without a new
 PUB, the server arms one timer per active time-windowed slot and fires

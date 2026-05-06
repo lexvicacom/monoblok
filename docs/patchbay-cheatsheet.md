@@ -34,6 +34,10 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 
 Trailing `!` marks forms that emit (terminal effect, return nil). Scan a rule and the bangs are the lines that put bytes on the wire; everything else is pure. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) still work as aliases for now. `publish!` and `publish-to!` are now identical (the args-flipped distinction is gone): both take `SUBJECT VALUE`, both coerce numbers, both no-op on nil VALUE.
 
+Rule of thumb: `!` emits or has an effect, `:ms N` is a wall-clock
+window that may use the host clock, and bare `N` is a tick/sample
+window.
+
 | form | effect |
 |------|--------|
 | `(publish! SUBJECT VALUE)` | emit a publish; no-op if VALUE is nil; numbers coerced canonically |
