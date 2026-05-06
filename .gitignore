@@ -8,3 +8,4 @@ zig-pkg
 perf.data*
 *.prof
 .claude/settings.local.json
+AGENTS.md

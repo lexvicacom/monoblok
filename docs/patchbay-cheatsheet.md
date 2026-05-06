@@ -1,6 +1,6 @@
 # patchbay cheatsheet
 
-For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistant, see [`claude-patchbay.md`](./claude-patchbay.md).
+For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistant, see [`AGENTS_PATCHBAY.md`](./AGENTS_PATCHBAY.md), or [`CLAUDE_PATCHBAY.md`](./CLAUDE_PATCHBAY.md) for Claude-specific setup.
 
 ## Top-level forms
 

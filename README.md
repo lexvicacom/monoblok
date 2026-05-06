@@ -4,9 +4,7 @@ monoblok is a tiny messaging broker with built-in _processing_. It speaks enough
 
 >The suggested topology is to run monoblok as a _conditioning twig_: it cleans and shapes local streams, then exports the results directly to a NATS cluster, or through a real NATS leaf, via the bridge. [tinyblok](https://github.com/lexvicacom/tinyblok) can sit even further out, running the same patchbay DSL on ESP32 chips. **Conditioning at the edge, analysis in the cloud.**
 
-For smaller scenarios, NATS is optional: run monoblok itself in the cloud and point clients straight at it and benefit from further conditioning and processing. Absolutely reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
-
-Any monoblok process is a NATS core broker, so you can arrange things as you like. Your subscribers directly connected to your single monoblok will only see conditioned streams.
+For smaller scenarios, NATS is optional: every monoblok process is a NATS core broker, so you can run one directly in the cloud and point clients straight at it. Absolutely reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
 
 You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
@@ -29,7 +27,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 ### patchbay
 
-patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is a library used by the monoblok server and one day [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
+patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
 Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
 
@@ -70,13 +68,13 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
-A nice way to learn it is with Claude. [docs/claude-patchbay.md](./docs/claude-patchbay.md) is a self-contained system prompt that teaches Claude the DSL. Append it to your project's `CLAUDE.md` so Claude Code picks it up automatically when editing `.edn` rule files:
+A nice way to learn it is with an LLM that has the DSL loaded as project context. [docs/AGENTS_PATCHBAY.md](./docs/AGENTS_PATCHBAY.md) is a self-contained, agent-neutral prompt for Codex and other coding agents; append it to your project's `AGENTS.md` so compatible tools pick it up automatically when editing `.edn` rule files:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ./CLAUDE.md
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
 ```
 
-Once loaded, describe the stream you have and the stream you want.
+[docs/CLAUDE_PATCHBAY.md](./docs/CLAUDE_PATCHBAY.md) is the Claude-specific version for `CLAUDE.md`. Once loaded, describe the stream you have and the stream you want.
 
 <p align="center">
   <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
@@ -103,7 +101,7 @@ Absent `(lvc ...)`, LVC is off and the publish path does no cache work. `--no-lv
 
 ### Server
 
-Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers (mostly).
+Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers.
 Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
 
 ### Export NATS bridge
@@ -131,6 +129,17 @@ Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-chea
 
 In the roadmap is microcontroller interop with monoblok and/or NATS itself. The current thinking is `publish!` forms on an MCU join a ring buffer that gets flushed remotely when there is a connection. Naturally memory constraints are a big thing here.
 
+## Snapshots
+
+Warm-start from disk so restarts don't lose the cache or the state inside gates and windows.
+
+```
+monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
+```
+
+`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
+whose filter no longer matches at its recorded position is skipped with a warning.
+
 ## Mixer mode (experimental)
 
 `monoblok --mixer cfg.edn` runs a stateless front-end that spawns N worker processes (each a normal monoblok) and forwards each publish to the worker owning its first subject token. Clients connect to just one NATS endpoint. Subscriptions coalesce across clients (one upstream SUB per unique filter), so a hundred dashboards on the same filter look like one to the worker.
@@ -147,17 +156,6 @@ In the roadmap is microcontroller interop with monoblok and/or NATS itself. The 
 Build-out before build-across: start with one monoblok and reach for the mixer when one core actually isn't enough. See [docs/mixer.md](./docs/mixer.md) for the sharding rule, SUB constraints, supervisor policy, and what's out of scope in v1. Runnable example: [`examples/mixer.py`](./examples/mixer.py).
 
 Note: mixer mode is experimental. The mixer runs single-threaded like the workers, so its own throughput on one core is the system-wide cap on inbound publishes. In microbenches the mixer's per-PUB cost (parse, shard by first token, forward bytes) is roughly an order of magnitude cheaper than a worker running a real patchbay (squelch, deadband, moving averages, JSON demux), so one mixer comfortably feeds many worker cores' worth of signal-conditioning load. The ratio collapses if your patchbay does almost nothing per PUB, in which case the mixer can saturate before the workers do — but a near-null patchbay is also a deployment that probably doesn't need the patchbay tier at all.
-
-### Snapshots
-
-Warm-start from disk so restarts don't lose the cache or the state inside gates and windows.
-
-```
-monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
-```
-
-`--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
-whose filter no longer matches at its recorded position is skipped with a warning.
 
 ## Observability
 
