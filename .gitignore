@@ -4,7 +4,7 @@ dist
 .zig-cache
 zig-pkg
 *.core
-core.*
+/core.*
 perf.data*
 *.prof
 .claude/settings.local.json
