@@ -9,7 +9,7 @@
 
 ; Opt in to last-value-cache streams for all subjects. Narrow this to the
 ; subject families you actually want retained in production.
-(lvc ">")
+(lvc [">"])
 
 ; Fan high temperature readings out to a dedicated sub-subject.
 (on "sensors.*"

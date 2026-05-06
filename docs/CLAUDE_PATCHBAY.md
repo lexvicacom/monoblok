@@ -50,7 +50,7 @@ you genuinely want a multi-stage pipeline (e.g. `json-demux!` head rule
 emitting scalars that downstream rules condition); otherwise leave it
 off.
 
-There are also top-level config forms: `(lvc "filter" ...)` opts matching
+There are also top-level config forms: `(lvc ["filter" ...])` opts matching
 subjects into `$LVC.*` last-value streams, and optional `(bridge ...)`
 forwards local publishes to a remote NATS cluster. The bridge is export-only.
 
@@ -208,7 +208,9 @@ Other keywords: `:user` / `:password`, `:token`, `:tls-ca`, `:tls-cert`
 `:export` is a vector of subject filters; matched publishes are
 forwarded as-is. Nothing flows back. Both `:servers` and `:export`
 also accept the legacy `(...)` list syntax, but `[...]` is the
-recommended form.
+recommended form. LVC follows the same recommendation:
+`(lvc ["sensors.>" "alerts.>"])`, with legacy `(lvc "sensors.>")`
+still accepted.
 
 ## Worked examples
 

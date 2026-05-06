@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENT
 Top-level `(lvc ...)` forms opt subjects into the last-value cache. Subscribing to `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value first (if any), then every subsequent opted-in publish. Wildcards work. `PUB $LVC.*` is rejected.
 
 ```edn
-(lvc "sensors.>" "alerts.>")
+(lvc ["sensors.>" "alerts.>"])
 ```
 
 ```

@@ -32,9 +32,10 @@ on where it appears:
 
 - Inside an `(on FILTER BODY)` body, every list dispatches on its head
   symbol (`hold-off`, `publish`, `+`, etc.). Unknown heads error.
-- Inside the top-level `(bridge ...)` and `(mixer ...)` forms, after a
-  keyword like `:servers`, `:export`, or `:workers`, a list is read as
-  a literal sequence of values. `(:servers ("nats://a:4222"
+- Inside top-level config forms, sequences are data. In `(lvc ...)`, a
+  single vector or list is read as the filter set. Inside `(bridge ...)`
+  and `(mixer ...)`, after a keyword like `:servers`, `:export`, or
+  `:workers`, a list is read as a literal sequence of values. `(:servers ("nats://a:4222"
   "nats://b:4222") ...)` is a two-element list of strings, not a call
   to `nats://a:4222`. Same underlying parser, different consumer. See
   [`mixer.md`](./mixer.md) for the mixer config form.
