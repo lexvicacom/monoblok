@@ -206,7 +206,7 @@ pub fn main(init: std.process.Init) !void {
             for (loaded_rules) |*rule| rs_total += rule.state.count();
             std.log.info(
                 "snapshot: loaded {d} lvc / {d} rule-state entries from {s}",
-                .{ r.last_value.count(), rs_total, sp },
+                .{ r.lvc.count(), rs_total, sp },
             );
         } else |err| switch (err) {
             error.FileNotFound => std.log.info("snapshot: {s} not found, starting empty", .{sp}),
