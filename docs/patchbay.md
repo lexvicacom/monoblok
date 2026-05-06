@@ -196,10 +196,23 @@ options are a load error.
 
 ## Threading with `->`
 
-`(-> X f1 f2 ...)` threads `X` as the **last** argument of each `fN`.
-A bare symbol `f` is treated as the call `(f)`. Last-arg threading
-fits this dialect because every stateful/transform op takes the value
-last:
+`(-> X f1 f2 ...)` starts with `X`, calls `f1`, feeds that result into
+`f2`, and so on. At each step, the current value is inserted as the
+**last** argument of the form. A bare symbol `f` is treated as the call
+`(f)`. Last-arg threading fits this dialect because every
+stateful/transform op takes the value last:
+
+The simplest case:
+
+```edn
+(-> x f1 f2)
+```
+
+means:
+
+```edn
+(f2 (f1 x))
+```
 
 > If you know Clojure: monoblok's `->` is deliberately **thread-last**.
 > Clojure's `->` threads into the first argument, while Clojure's `->>`

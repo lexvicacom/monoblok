@@ -164,7 +164,18 @@ Running counters (side-effecting, per (rule, subject)):
 ## The `->` pipeline idiom
 
 Because every transform / gate takes its value last, `->` reads
-top-to-bottom as a data pipeline:
+top-to-bottom as a data pipeline: each step receives the previous
+step's result as its final argument.
+
+```edn
+(-> x f1 f2)
+```
+
+means:
+
+```edn
+(f2 (f1 x))
+```
 
 ```edn
 (-> payload-float
