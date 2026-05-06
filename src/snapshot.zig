@@ -174,6 +174,7 @@ fn writeRuleState(gpa: Allocator, out: *std.ArrayList(u8), e: RuleStateEntry) !v
                 try writeI64(gpa, out, s.ts_ms);
             }
         },
+        .clocked => try out.append(gpa, variant_empty),
     }
 }
 
@@ -380,6 +381,7 @@ pub fn collect(
     for (rules, 0..) |*rule, idx| {
         var sit = rule.state.iterator();
         while (sit.next()) |se| {
+            if (se.value_ptr.* == .clocked) continue;
             try rs.append(arena, .{
                 .rule_idx = @intCast(idx),
                 .filter = try arena.dupe(u8, rule.filter),
@@ -427,6 +429,7 @@ fn dupStateEntry(arena: Allocator, src: rules_mod.StateEntry) !rules_mod.StateEn
             } };
         },
         .ohlc => |b| .{ .ohlc = b },
+        .clocked => .empty,
     };
 }
 

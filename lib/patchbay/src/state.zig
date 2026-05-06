@@ -49,14 +49,53 @@ pub const StateEntry = union(enum) {
     ring: Ring,
     time_ring: TimeRing,
     ohlc: Ohlc,
+    clocked: Clocked,
 
     pub fn deinit(self: *StateEntry, gpa: Allocator) void {
         switch (self.*) {
             .bytes => |*b| b.deinit(gpa),
             .ring => |*r| r.deinit(gpa),
             .time_ring => |*r| r.deinit(gpa),
+            .clocked => |*c| c.deinit(gpa),
             else => {},
         }
+    }
+};
+
+pub const ClockedKind = enum { on_silence, debounce, sample, aggregate };
+pub const AggregateKind = enum { avg, sum, min, max, count, rate };
+
+/// Host-clocked patchbay state. `body` points into the loaded rule arena
+/// and is therefore not snapshot-persisted; these slots are rebuilt as
+/// matching messages arrive after a restart.
+pub const Clocked = struct {
+    kind: ClockedKind,
+    deadline_ms: ?i64 = null,
+    period_ms: u64,
+    aggregate_kind: AggregateKind = .avg,
+    body: []const Value = &.{},
+    subject: std.ArrayList(u8) = .empty,
+    payload: std.ArrayList(u8) = .empty,
+    samples: TimeRing = TimeRing.init(1),
+
+    pub fn deinit(self: *Clocked, gpa: Allocator) void {
+        self.subject.deinit(gpa);
+        self.payload.deinit(gpa);
+        self.samples.deinit(gpa);
+    }
+
+    pub fn nextDeadlineMs(self: Clocked) ?i64 {
+        return self.deadline_ms;
+    }
+
+    pub fn setSubject(self: *Clocked, gpa: Allocator, subject: []const u8) !void {
+        self.subject.clearRetainingCapacity();
+        try self.subject.appendSlice(gpa, subject);
+    }
+
+    pub fn setPayload(self: *Clocked, gpa: Allocator, payload: []const u8) !void {
+        self.payload.clearRetainingCapacity();
+        try self.payload.appendSlice(gpa, payload);
     }
 };
 

@@ -10,12 +10,14 @@
 //!                (monoblok's bridge config, for example)
 
 pub const eval = @import("eval.zig");
+pub const builtins = @import("builtins.zig");
 pub const subject = @import("subject.zig");
 pub const sexpr = @import("sexpr.zig");
 pub const kernel = @import("kernel.zig");
 
 test {
     _ = eval;
+    _ = builtins;
     _ = subject;
     _ = sexpr;
     _ = kernel;

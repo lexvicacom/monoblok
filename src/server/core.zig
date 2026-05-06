@@ -166,7 +166,15 @@ pub const Server = struct {
                 router_mod.rulesPublisher(self.router),
             );
             self.clock_registry = reg;
-            std.log.info("patchbay clock registry enabled (per-slot deadlines)", .{});
+            const resumed = reg.armExisting();
+            if (resumed.armed > 0) {
+                std.log.info(
+                    "patchbay clock registry enabled (per-slot deadlines, resumed {d} slot(s), {d} due now)",
+                    .{ resumed.armed, resumed.due_now },
+                );
+            } else {
+                std.log.info("patchbay clock registry enabled (per-slot deadlines)", .{});
+            }
         }
 
         if (self.snapshot_path != null and self.snapshot_every_ms > 0) {

@@ -59,6 +59,7 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 | [`ticker.edn`](./examples/ticker.edn)             | market data: round, squelch, big-jump alerts, bridge            |
 | [`bars.edn`](./examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
 | [`latency-stats.edn`](./examples/latency-stats.edn) | live p50/p95/p99/stddev over a sliding window                 |
+| [`clocked.edn`](./examples/clocked.edn)             | silence detection, debounce, sampling, and clocked aggregates |
 | [`json-frames.edn`](./examples/json-frames.edn)   | `json-demux!` a JSON-emitting device into scalar sub-subjects   |
 | [`rental-car.edn`](./examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
 | [`bridge.edn`](./examples/bridge.edn)             | forward selected subjects to a real NATS server                 |

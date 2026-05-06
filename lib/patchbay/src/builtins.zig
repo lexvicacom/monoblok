@@ -15,7 +15,7 @@ const EvalError = eval.EvalError;
 const WindowKind = sexpr.WindowKind;
 const WindowSpec = sexpr.WindowSpec;
 
-const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread, transition };
+const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread, transition, on_silence };
 
 const special_form_map = std.StaticStringMap(SpecialForm).initComptime(.{
     .{ "if", .@"if" },
@@ -25,6 +25,7 @@ const special_form_map = std.StaticStringMap(SpecialForm).initComptime(.{
     .{ "do", .do },
     .{ "->", .thread },
     .{ "transition", .transition },
+    .{ "on-silence", .on_silence },
 });
 
 const Op = enum {
@@ -39,6 +40,7 @@ const Op = enum {
     rate, percentile, median, stddev, variance, throttle,
     rising_edge, falling_edge,
     json_get, json_demux,
+    debounce, sample, aggregate,
     bar,
     count,
     print,
@@ -99,6 +101,9 @@ const op_map = std.StaticStringMap(Op).initComptime(.{
     .{ "rising-edge", .rising_edge },
     .{ "falling-edge", .falling_edge },
     .{ "json-get", .json_get },
+    .{ "debounce!", .debounce },
+    .{ "sample!", .sample },
+    .{ "aggregate!", .aggregate },
     .{ "json-demux!", .json_demux },
     // TODO: remove `json-demux` alias once existing patchbays migrate to `json-demux!`.
     .{ "json-demux", .json_demux },
@@ -127,6 +132,7 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .do => evalDo(ctx, args),
         .thread => evalThread(ctx, args),
         .transition => evalTransition(ctx, args),
+        .on_silence => evalOnSilence(ctx, args),
     };
 
     const tag = op_map.get(op) orelse return error.UnknownSymbol;
@@ -185,6 +191,9 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .rising_edge => callEdge(ctx, evaled, .rising),
         .falling_edge => callEdge(ctx, evaled, .falling),
         .json_get => callJsonGet(ctx, evaled),
+        .debounce => callDebounce(ctx, evaled),
+        .sample => callSample(ctx, evaled),
+        .aggregate => callAggregate(ctx, evaled),
         .json_demux => callJsonDemux(ctx, evaled),
         .bar => callBar(ctx, evaled),
         .count => callCount(ctx, evaled),
@@ -279,6 +288,98 @@ fn evalTransition(ctx: *Context, args: []const Value) EvalError!Value {
     }
 }
 
+/// `(on-silence :ms N BODY...)`. Each matching message arms/resets a
+/// per-subject deadline. If no further message arrives before the deadline,
+/// the host clock evaluates BODY with the last subject/payload in scope.
+fn evalOnSilence(ctx: *Context, args: []const Value) EvalError!Value {
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const win = try takeWindow(args, 0);
+    if (win.spec.kind != .time_ms) return error.TypeMismatch;
+    if (args.len <= win.consumed) return error.ArityMismatch;
+
+    const key = try state.keyForOp(ctx.arena, "on-silence", ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+    const c = try ensureClocked(ctx, slot.value_ptr, .on_silence, win.spec.n);
+    c.period_ms = win.spec.n;
+    c.deadline_ms = ctx.now_ms + @as(i64, @intCast(win.spec.n));
+    c.body = args[win.consumed..];
+    try c.setSubject(ctx.gpa, ctx.subject);
+    try c.setPayload(ctx.gpa, ctx.payload);
+    ctx.notifyClockSlot(rule, slot.key_ptr);
+    return .nil;
+}
+
+fn ensureClocked(
+    ctx: *Context,
+    entry: *state.StateEntry,
+    kind: state.ClockedKind,
+    period_ms: u64,
+) EvalError!*state.Clocked {
+    if (entry.* != .clocked or entry.clocked.kind != kind) {
+        entry.deinit(ctx.gpa);
+        entry.* = .{ .clocked = .{ .kind = kind, .period_ms = period_ms } };
+    }
+    return &entry.clocked;
+}
+
+/// Called by the host clock registry when a `.clocked` state slot reaches
+/// its deadline. Runs on the same loop thread as normal evaluation.
+pub fn fireClocked(ctx: *Context, rule: *state.Rule, entry: *state.StateEntry, now_ms: i64) EvalError!void {
+    if (entry.* != .clocked) return;
+    const c = &entry.clocked;
+    const deadline = c.deadline_ms orelse return;
+    if (deadline > now_ms) return;
+
+    ctx.current_rule = rule;
+    ctx.subject = c.subject.items;
+    ctx.payload = c.payload.items;
+    ctx.now_ms = now_ms;
+
+    switch (c.kind) {
+        .on_silence => {
+            c.deadline_ms = null;
+            for (c.body) |form| _ = try ctx.eval_fn(ctx, form);
+        },
+        .debounce => {
+            c.deadline_ms = null;
+            if (c.subject.items.len > 0) {
+                subject_mod.validatePublish(c.subject.items) catch return error.InvalidSubject;
+                try ctx.emit(c.subject.items, c.payload.items);
+            }
+        },
+        .sample => {
+            if (c.subject.items.len > 0) {
+                subject_mod.validatePublish(c.subject.items) catch return error.InvalidSubject;
+                try ctx.emit(c.subject.items, c.payload.items);
+            }
+            c.deadline_ms = now_ms + @as(i64, @intCast(c.period_ms));
+        },
+        .aggregate => {
+            c.samples.evict(now_ms);
+            if (c.samples.len() > 0) {
+                const value = clockedAggregateValue(c.*);
+                const out = try std.fmt.allocPrint(ctx.arena, "{d}", .{value});
+                subject_mod.validatePublish(c.subject.items) catch return error.InvalidSubject;
+                try ctx.emit(c.subject.items, out);
+                c.deadline_ms = now_ms + @as(i64, @intCast(c.period_ms));
+            } else {
+                c.deadline_ms = null;
+            }
+        },
+    }
+}
+
+fn clockedAggregateValue(c: state.Clocked) f64 {
+    return switch (c.aggregate_kind) {
+        .avg => c.samples.mean(),
+        .sum => c.samples.sum(),
+        .min => c.samples.min(),
+        .max => c.samples.max(),
+        .count => @floatFromInt(c.samples.len()),
+        .rate => @as(f64, @floatFromInt(c.samples.len())) / (@as(f64, @floatFromInt(c.period_ms)) / 1000.0),
+    };
+}
+
 // --- Side-effecting publish ops -----------------------------------------
 
 // TODO: dead since the publish/publish-to merge (every spelling now routes
@@ -304,6 +405,117 @@ fn callPublishTo(ctx: *Context, args: []const Value) EvalError!Value {
     subject_mod.validatePublish(subj) catch return error.InvalidSubject;
     try ctx.emit(subj, payload);
     return .nil;
+}
+
+/// `(debounce! :ms N SUBJECT VALUE)`. Store the latest SUBJECT/VALUE and
+/// publish it only after no matching message has arrived for N ms.
+fn callDebounce(ctx: *Context, args: []const Value) EvalError!Value {
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const win = try takeWindow(args, 0);
+    if (win.spec.kind != .time_ms) return error.TypeMismatch;
+    if (args.len != win.consumed + 2) return error.ArityMismatch;
+    if (args[win.consumed + 1] == .nil) return .nil;
+
+    const subj = try state.asString(args[win.consumed]);
+    subject_mod.validatePublish(subj) catch return error.InvalidSubject;
+    const payload = try coercePayload(ctx.arena, args[win.consumed + 1]);
+
+    const key = try state.keyForOp(ctx.arena, "debounce", ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+    const c = try ensureClocked(ctx, slot.value_ptr, .debounce, win.spec.n);
+    c.period_ms = win.spec.n;
+    c.deadline_ms = ctx.now_ms + @as(i64, @intCast(win.spec.n));
+    try c.setSubject(ctx.gpa, subj);
+    try c.setPayload(ctx.gpa, payload);
+    ctx.notifyClockSlot(rule, slot.key_ptr);
+    return .nil;
+}
+
+/// `(sample! :ms N SUBJECT VALUE)`. Publish the latest SUBJECT/VALUE every
+/// N ms after the first matching message; new messages update the retained
+/// value without moving the cadence.
+fn callSample(ctx: *Context, args: []const Value) EvalError!Value {
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const win = try takeWindow(args, 0);
+    if (win.spec.kind != .time_ms) return error.TypeMismatch;
+    if (args.len != win.consumed + 2) return error.ArityMismatch;
+    if (args[win.consumed + 1] == .nil) return .nil;
+
+    const subj = try state.asString(args[win.consumed]);
+    subject_mod.validatePublish(subj) catch return error.InvalidSubject;
+    const payload = try coercePayload(ctx.arena, args[win.consumed + 1]);
+
+    const key = try state.keyForOp(ctx.arena, "sample", ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+    const c = try ensureClocked(ctx, slot.value_ptr, .sample, win.spec.n);
+    c.period_ms = win.spec.n;
+    if (c.deadline_ms == null) {
+        c.deadline_ms = ctx.now_ms + @as(i64, @intCast(win.spec.n));
+    }
+    try c.setSubject(ctx.gpa, subj);
+    try c.setPayload(ctx.gpa, payload);
+    ctx.notifyClockSlot(rule, slot.key_ptr);
+    return .nil;
+}
+
+/// `(aggregate! :ms N SUBJECT :avg X)`. Push X into a time window and emit
+/// the requested metric to SUBJECT on each clock deadline. Supported
+/// metrics: `:avg`, `:sum`, `:min`, `:max`, `:count`, `:rate`.
+fn callAggregate(ctx: *Context, args: []const Value) EvalError!Value {
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const win = try takeWindow(args, 0);
+    if (win.spec.kind != .time_ms) return error.TypeMismatch;
+    if (args.len != win.consumed + 3) return error.ArityMismatch;
+
+    const subj = try state.asString(args[win.consumed]);
+    subject_mod.validatePublish(subj) catch return error.InvalidSubject;
+    const metric = try aggregateKind(args[win.consumed + 1]);
+    const x = try state.asNumber(args[win.consumed + 2]);
+
+    const op_name = try aggregateOpName(ctx.arena, metric, win.spec.n, subj);
+    const key = try state.keyForOp(ctx.arena, op_name, ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+    const c = try ensureClocked(ctx, slot.value_ptr, .aggregate, win.spec.n);
+    c.period_ms = win.spec.n;
+    c.aggregate_kind = metric;
+    c.samples.window_ms = win.spec.n;
+    try c.samples.push(ctx.gpa, x, ctx.now_ms);
+    try c.setSubject(ctx.gpa, subj);
+    if (c.deadline_ms == null) {
+        c.deadline_ms = ctx.now_ms + @as(i64, @intCast(win.spec.n));
+    }
+    ctx.notifyClockSlot(rule, slot.key_ptr);
+    return .nil;
+}
+
+fn aggregateKind(v: Value) EvalError!state.AggregateKind {
+    if (v != .keyword) return error.TypeMismatch;
+    return if (std.mem.eql(u8, v.keyword, "avg"))
+        .avg
+    else if (std.mem.eql(u8, v.keyword, "sum"))
+        .sum
+    else if (std.mem.eql(u8, v.keyword, "min"))
+        .min
+    else if (std.mem.eql(u8, v.keyword, "max"))
+        .max
+    else if (std.mem.eql(u8, v.keyword, "count"))
+        .count
+    else if (std.mem.eql(u8, v.keyword, "rate"))
+        .rate
+    else
+        error.TypeMismatch;
+}
+
+fn aggregateOpName(arena: Allocator, kind: state.AggregateKind, window_ms: u64, out_subject: []const u8) Allocator.Error![]const u8 {
+    const name = switch (kind) {
+        .avg => "aggregate-avg",
+        .sum => "aggregate-sum",
+        .min => "aggregate-min",
+        .max => "aggregate-max",
+        .count => "aggregate-count",
+        .rate => "aggregate-rate",
+    };
+    return std.fmt.allocPrint(arena, "{s}-{d}->{s}", .{ name, window_ms, out_subject });
 }
 
 fn coercePayload(arena: Allocator, v: Value) EvalError![]const u8 {

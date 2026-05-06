@@ -23,6 +23,7 @@ const xev = @import("xev");
 
 const patchbay = @import("patchbay");
 const rules_mod = patchbay.eval;
+const builtins = patchbay.builtins;
 const Rule = rules_mod.Rule;
 const StateEntry = rules_mod.StateEntry;
 const Publisher = rules_mod.Publisher;
@@ -122,6 +123,29 @@ pub const Registry = struct {
         cs.timer.run(self.loop, &cs.completion, due_in_ms, ClockSlot, cs, ClockSlot.onFire);
     }
 
+    /// Re-arm deadline-bearing slots that already existed before the
+    /// registry was created, primarily state restored from snapshots.
+    pub const ResumeStats = struct {
+        armed: usize = 0,
+        due_now: usize = 0,
+    };
+
+    pub fn armExisting(self: *Registry) ResumeStats {
+        var stats: ResumeStats = .{};
+        const now = self.loop.now();
+        for (self.rules) |*rule| {
+            var it = rule.state.iterator();
+            while (it.next()) |entry| {
+                if (computeDeadline(rule, entry.key_ptr.*)) |deadline| {
+                    self.arm(rule, entry.key_ptr.*);
+                    stats.armed += 1;
+                    if (deadline <= now) stats.due_now += 1;
+                }
+            }
+        }
+        return stats;
+    }
+
     fn ruleIndex(self: *Registry, rule: *Rule) ?u32 {
         // Pointer math: rules live contiguously in the slice we were
         // built with, so rule_idx is derivable in O(1).
@@ -199,6 +223,18 @@ pub const ClockSlot = struct {
                 }
             },
             .time_ring => |*ring| ring.evict(now),
+            .clocked => {
+                var ctx: rules_mod.Context = .{
+                    .subject = "",
+                    .payload = "",
+                    .publisher = reg.publisher,
+                    .arena = arena,
+                    .gpa = reg.gpa,
+                    .now_ms = now,
+                    .wall_ms = wallClockMs(),
+                };
+                builtins.fireClocked(&ctx, rule, entry_ptr, now) catch {};
+            },
             else => {},
         }
 
@@ -261,6 +297,7 @@ fn computeDeadline(rule: *Rule, slot_key: []const u8) ?i64 {
     return switch (entry.*) {
         .ohlc => |bar| bar.nextDeadlineMs(),
         .time_ring => |ring| ring.nextDeadlineMs(),
+        .clocked => |clocked| clocked.nextDeadlineMs(),
         else => null,
     };
 }
@@ -301,4 +338,10 @@ fn emitBar(
 pub fn hookFn(ctx: ?*anyopaque, rule: *Rule, slot_key: []const u8) void {
     const reg: *Registry = @ptrCast(@alignCast(ctx.?));
     reg.arm(rule, slot_key);
+}
+
+fn wallClockMs() i64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(std.posix.CLOCK.REALTIME, &ts);
+    return @as(i64, @intCast(ts.sec)) *| std.time.ms_per_s +| @divFloor(ts.nsec, std.time.ns_per_ms);
 }
