@@ -6,7 +6,9 @@ monoblok is a tiny messaging broker with built-in _processing_. It speaks enough
 
 For smaller scenarios, NATS is optional: run monoblok itself in the cloud and point clients straight at it and benefit from further conditioning and processing. Absolutely reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
 
-Opt-in last-value streams on `$LVC.*` give late subscribers the current value per configured subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+Any monoblok process is a NATS core broker, so you can arrange things as you like. Your subscribers directly connected to your single monoblok will only see conditioned streams.
+
+You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ## Try it out with no install
 
