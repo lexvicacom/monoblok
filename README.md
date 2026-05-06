@@ -4,7 +4,7 @@ monoblok is a tiny messaging broker with built-in _processing_. It speaks enough
 
 >The suggested topology is to run monoblok as a _conditioning twig_: it cleans and shapes local streams, then exports the results directly to a NATS cluster, or through a real NATS leaf, via the bridge. [tinyblok](https://github.com/lexvicacom/tinyblok) can sit even further out, running the same patchbay DSL on ESP32 chips. **Conditioning at the edge, analysis in the cloud.**
 
-For smaller scenarios, NATS is optional: run monoblok itself in the cloud and point clients straight at it. Reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
+For smaller scenarios, NATS is optional: run monoblok itself in the cloud and point clients straight at it and benefit from further conditioning and processing. Absolutely reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
 
 Opt-in last-value streams on `$LVC.*` give late subscribers the current value per configured subject. You can use it to process firehoses from jittery sensors (bought from Temu perhaps), high-frequency market data, and, well, anything where the _same old processing code_ gets monotonous to write and maintain. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
