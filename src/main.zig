@@ -169,6 +169,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     const ruleset = try rules.buildRuleSet(arena, loaded_rules);
+    printBanner("server");
     std.log.info("loaded {d} patchbay form(s)", .{loaded_rules.len});
     std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
     const lvc_enabled = lvc_allowed and lvc_filters.len != 0;
@@ -346,6 +347,7 @@ fn onSignalRequestShutdown(_: std.posix.SIG) callconv(.c) void {
 }
 
 fn mixer_main(gpa: std.mem.Allocator, arena: std.mem.Allocator, fsio: Io, path: []const u8) !void {
+    printBanner("mixer");
     std.log.info("monoblok mixer mode: pid={d} cfg={s}", .{ std.c.getpid(), path });
 
     const src = try readFile(fsio, arena, path);
@@ -501,6 +503,21 @@ fn printVersion() void {
         builtin.zig_version.minor,
         builtin.zig_version.patch,
     });
+}
+
+fn printBanner(mode: []const u8) void {
+    std.debug.print(
+        \\
+        \\    __  __   ___   _  _   ___   ___   _      ___   _  __
+        \\   |  \/  | / _ \ | \| | / _ \ | _ ) | |    / _ \ | |/ /
+        \\   | |\/| || (_) || .` || (_) || _ \ | |__ | (_) || ' <
+        \\   |_|  |_| \___/ |_|\_| \___/ |___/ |____| \___/ |_|\_\
+        \\
+        \\   monoblok {s} - {s} mode
+        \\   patchbay-conditioned pub/sub, one loop, no fuss
+        \\
+        \\
+    , .{ manifest.version, mode });
 }
 
 test {
