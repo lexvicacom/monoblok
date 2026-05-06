@@ -4,7 +4,7 @@
 ;; internals or each other's namespaces. Each rule below is an example
 ;; of one patchbay primitive; see docs/demo.md for the companion walkthrough.
 
-(lvc "demo.>")
+(lvc ["demo.>"])
 
 ;; 1. Squelch: round to 1dp, only emit when the rounded value changes.
 ;;    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.stable`.
