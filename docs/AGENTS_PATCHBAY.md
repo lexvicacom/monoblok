@@ -128,7 +128,7 @@ Idempotent filters (per-rule, per-subject state; first sight always passes / is 
 Windows (used as the first arg(s) of windowed ops):
 
 - bare integer `N`: last N samples; ring is fixed-cap, allocated once
-- `:ms N`: last N ms of wall-clock time (ingress timestamp); samples evict by age, the server walker also evicts on its ~500ms tick so quiet streams don't keep stale data
+- `:ms N`: last N ms of wall-clock time (ingress timestamp); samples evict by age, and the server arms one timer per active time-windowed slot so quiet streams don't keep stale data
 
 Windowed aggregates (per `(rule, subject, op, window-kind)` slot; tick and time variants on the same rule + subject keep distinct state):
 
@@ -137,6 +137,10 @@ Windowed aggregates (per `(rule, subject, op, window-kind)` slot; tick and time 
 - `(percentile WINDOW P X)` Pth percentile (P in [0, 1]). `(median WINDOW X)` is sugar for `(percentile WINDOW 0.5 X)`. O(n log n) per call.
 - `(stddev WINDOW X)`, `(variance WINDOW X)` population stddev / variance over WINDOW. O(n).
 - `(throttle WINDOW MAX X)` pass X iff fewer than MAX events have already passed within WINDOW (then record this pass). Differs from `hold-off`: `hold-off` is min-interval-between-passes; `throttle` is max-count-per-window.
+- `(on-silence :ms N BODY...)` clocked special form: reset a per-subject timer on each match; evaluate BODY with the last subject/payload if no match arrives for N ms.
+- `(debounce! :ms N SUBJECT VALUE)` trailing-edge publish: emit the latest SUBJECT/VALUE after N ms of quiet.
+- `(sample! :ms N SUBJECT VALUE)` cadence publish: emit the latest SUBJECT/VALUE every N ms after first match.
+- `(aggregate! :ms N SUBJECT :METRIC X)` clocked aggregate publish. Metrics: `:avg`, `:sum`, `:min`, `:max`, `:count`, `:rate`.
 
 Edge gates (take a boolean, fire once per transition; first sight never fires):
 
@@ -149,7 +153,7 @@ JSON (top-level object only, no JSON path, value-last):
 
 Bars (side-effecting, per (rule, subject, window-kind)):
 
-- `(bar! WINDOW X)` accumulates X into an in-progress bar. WINDOW is `N` (close every N samples) or `:ms N` (close every N ms of wall-clock time, aligned to `floor(now/N)*N`). On close, publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume isn't reported (N for tick bars, varies for time bars; pair with `(count!)` if you need it). Time bars also close from the server walker if a window elapses without a new sample, so close events land within ~half the walker tick (~500ms) of the boundary.
+- `(bar! WINDOW X)` accumulates X into an in-progress bar. WINDOW is `N` (close every N samples) or `:ms N` (close every N ms of wall-clock time, aligned to `floor(now/N)*N`). On close, publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume isn't reported (N for tick bars, varies for time bars; pair with `(count!)` if you need it). Time bars also close from the slot's exact deadline timer if a window elapses without a new sample.
 
 Running counters (side-effecting, per (rule, subject)):
 
@@ -239,11 +243,25 @@ still accepted.
       (publish! (subject-append "smoothed"))))
 
 ; Time-windowed smoothing: 5-second sliding average. Old samples drop
-; off on the next push or on the server's clock walker.
+; off on the next push or on the slot's deadline timer.
 (on "sensors.*"
   (-> payload-float
       (moving-avg :ms 5000)
       (publish! (subject-append "avg5s"))))
+
+; Clocked liveness + trailing/cadence values.
+(on "devices.*.heartbeat"
+  (on-silence :ms 30000
+    (publish! (subject-append "stale") "true")))
+
+(on "knobs.*"
+  (debounce! :ms 250 (subject-append "settled") payload))
+
+(on "sensors.*"
+  (sample! :ms 1000 (subject-append "sampled") payload))
+
+(on "sensors.*"
+  (aggregate! :ms 5000 (subject-append "avg5s") :avg payload-float))
 
 ; Sustained-heat alert and all-clear, one rule, one ring.
 (on "temp.*.*"
@@ -258,8 +276,8 @@ still accepted.
     (publish! (subject-append "volatile") payload)))
 
 ; 1-minute aligned OHLC bars on a market feed. Bars close on the next
-; tick that crosses a wall-clock minute boundary, or from the server
-; walker if the feed goes quiet.
+; tick that crosses a wall-clock minute boundary, or from the slot's
+; deadline timer if the feed goes quiet.
 (on "MARKET.*"
   (bar! :ms 60000 payload-float))
 

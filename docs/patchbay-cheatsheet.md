@@ -40,6 +40,10 @@ Trailing `!` marks forms that emit (terminal effect, return nil). Scan a rule an
 | `(json-demux! KEY... PAYLOAD)` | break a top-level JSON object out onto `<subject>.<key>` for each KEY |
 | `(count!)` / `(count! COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
 | `(bar! WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
+| `(on-silence :ms N BODY...)` | reset a per-subject timer on each match; evaluate BODY if no match arrives for N ms |
+| `(debounce! :ms N SUBJECT VALUE)` | publish the latest SUBJECT/VALUE after N ms of quiet |
+| `(sample! :ms N SUBJECT VALUE)` | publish the latest SUBJECT/VALUE every N ms after the first match |
+| `(aggregate! :ms N SUBJECT :METRIC X)` | clock-publish `:avg`, `:sum`, `:min`, `:max`, `:count`, or `:rate` over the last N ms |
 | `(print! X)` / `(print! LABEL X)` | debug aid: writes one line to stderr, returns X unchanged so it threads. Not a publish; loader counts these and the server warns at startup. |
 
 ## Strings and subjects
@@ -97,10 +101,11 @@ Windowed ops take a **window** as their first argument(s):
 | form | meaning |
 |------|---------|
 | `N` (bare integer) | last N samples; fixed-cap ring |
-| `:ms N` | last N ms of wall-clock time (ingress timestamp). The server walker also evicts on its ~500ms tick. |
+| `:ms N` | last N ms of wall-clock time (ingress timestamp). The server arms one timer per active time-windowed slot and evicts at that slot's exact next deadline. |
 
 Slots are keyed `(rule, op, kind, subject)`, so the same op with both
-window kinds keeps distinct state.
+window kinds keeps distinct state. Snapshot restore re-arms time-window
+slots; overdue slots fire immediately on startup.
 
 ## Windowed aggregates
 
@@ -113,6 +118,9 @@ window kinds keeps distinct state.
 | `(percentile N P X)` / `(percentile :ms N P X)` | Pth percentile (P in [0, 1]) |
 | `(median N X)` / `(median :ms N X)` | sugar for `(percentile WINDOW 0.5 X)` |
 | `(stddev N X)` / `(variance N X)` (and `:ms` forms) | population stats |
+
+`aggregate!` is the clock-emitting sibling for dashboards that need a
+fresh value when a time window elapses even if no new PUB arrives.
 
 ## Rate gates
 

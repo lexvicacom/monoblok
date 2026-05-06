@@ -302,8 +302,8 @@ value changed, and at most once per 500ms."
 
 `(throttle WINDOW MAX X)` is the related but distinct gate for "at most
 MAX events per WINDOW." `hold-off` enforces a minimum interval between
-passes (one timer that resets each pass); `throttle` enforces a maximum
-count over a sliding window (a bucket of recent pass timestamps).
+passes; `throttle` enforces a maximum count over a sliding window (a
+bucket of recent pass timestamps).
 Reach for `hold-off` when you want to debounce a chattery edge, and
 `throttle` when you want to cap a steady stream's rate without caring
 about the spacing.
@@ -318,8 +318,8 @@ about the spacing.
 
 `WINDOW` is either a bare integer `N` (tick window) or `:ms N` (time
 window). Tick form counts the last `N` evaluations; time form counts
-pass timestamps in the last `N` ms (walker-evicted). Per (rule,
-subject, window-kind).
+pass timestamps in the last `N` ms and is evicted by the server's
+per-slot deadline timer. Per (rule, subject, window-kind).
 
 ## Windowed aggregates
 
@@ -337,10 +337,17 @@ A window is either a tick count or a wall-clock duration:
 
 Wall-clock time is the ingress timestamp stamped once per inbound PUB
 (same source `hold-off` reads). For windows that elapse without a new
-PUB, the server's clock walker (~500ms cadence) evicts old samples and
+PUB, the server arms one timer per active time-windowed slot and fires
+it at that slot's exact next deadline. The timer evicts old samples and
 closes any time-windowed `bar!` whose window has fully passed, so a
 quiet feed doesn't leave you with a stale aggregate or an unflushed
 bar.
+
+On snapshot warm-start, existing time-window slots are re-armed when the
+server starts. If a brief service bounce crossed a slot's deadline, that
+slot fires immediately: old time-ring samples are evicted, and an
+in-progress time bar closes with the last sample captured before the
+bounce.
 
 | form                       | returns | cost                                |
 |----------------------------|---------|-------------------------------------|
@@ -433,6 +440,63 @@ percentile/median (sort copy) and O(n) for stddev/variance.
 (on "MARKET.*"
   (when (> (stddev :ms 60000 payload-float) 0.5)
     (publish! (subject-append "volatile") payload)))
+```
+
+### Clock-emitting forms
+
+Most patchbay forms run only while handling an inbound PUB. These forms
+also use the server's per-slot clock, so they can publish after time
+passes even if the feed goes quiet.
+
+| form                                  | behavior                                      |
+|---------------------------------------|-----------------------------------------------|
+| `(on-silence :ms N BODY...)`          | evaluate BODY if no matching PUB arrives for N ms |
+| `(debounce! :ms N SUBJECT VALUE)`     | publish the latest SUBJECT/VALUE after N ms of quiet |
+| `(sample! :ms N SUBJECT VALUE)`       | publish the latest SUBJECT/VALUE every N ms after the first match |
+| `(aggregate! :ms N SUBJECT :METRIC X)` | publish a time-window metric on the clock deadline |
+
+`on-silence` is a special form: BODY is stored unevaluated and runs
+later with the last subject and payload in scope. It is useful for
+liveness and stale-device detection.
+
+```edn
+(on "devices.*.heartbeat"
+  (on-silence :ms 30000
+    (publish! (subject-append "stale") "true")))
+
+(on "devices.*.heartbeat"
+  (publish! (subject-append "stale") "false"))
+```
+
+`debounce!` is a trailing-edge emitter. It differs from `deadband`:
+`deadband` suppresses small value movement, while `debounce!` waits for
+quiet time and then publishes the latest value.
+
+```edn
+(on "knobs.*"
+  (debounce! :ms 250
+    (subject-append "settled")
+    payload))
+```
+
+`sample!` keeps a regular cadence once the first matching message has
+arrived. New messages update the retained value without moving the
+cadence.
+
+```edn
+(on "sensors.*"
+  (sample! :ms 1000
+    (subject-append "sampled")
+    payload))
+```
+
+`aggregate!` is the clock-emitting sibling of the value-returning
+windowed aggregate forms. It supports `:avg`, `:sum`, `:min`, `:max`,
+`:count`, and `:rate`, and publishes to the subject you provide.
+
+```edn
+(on "rpc.latency"
+  (aggregate! :ms 10000 "rpc.latency.avg10s" :avg payload-float))
 ```
 
 ## Edge gates
@@ -545,9 +609,8 @@ survive a snapshot reload.
 
 For tick bars, the close happens inline on the Nth sample. For time
 bars, the close happens either on the next sample that crosses the
-boundary, or on the server's clock walker tick if no further samples
-arrive. The walker fires every ~500ms; expect close events to land
-within roughly half its tick of the wall-clock boundary.
+boundary, or on the slot's exact deadline timer if no further samples
+arrive.
 
 ```edn
 ; 60-tick OHLC bars per symbol on a market feed.

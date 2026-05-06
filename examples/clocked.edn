@@ -1,0 +1,40 @@
+;; Clock-native patchbay forms in one file.
+;;
+;; Try publishing numeric values to `clocked.sensor.temp` quickly, then stop.
+;; The rules below produce:
+;;   - `clocked.sensor.temp.stale` after 5s of silence
+;;   - `clocked.sensor.temp.debounced` after 250ms of quiet
+;;   - `clocked.sensor.temp.sampled` every 1s with the latest value
+;;   - `clocked.sensor.temp.avg5s` every 5s while the window has samples
+;;   - `clocked.sensor.temp.rate5s` every 5s while the window has samples
+
+(lvc ["clocked.>"])
+
+(on "clocked.sensor.*"
+  (on-silence :ms 5000
+    (publish! (subject-append "stale") "true")))
+
+(on "clocked.sensor.*"
+  (publish! (subject-append "stale") "false"))
+
+(on "clocked.sensor.*"
+  (debounce! :ms 250
+    (subject-append "debounced")
+    payload))
+
+(on "clocked.sensor.*"
+  (sample! :ms 1000
+    (subject-append "sampled")
+    payload))
+
+(on "clocked.sensor.*"
+  (aggregate! :ms 5000
+    (subject-append "avg5s")
+    :avg
+    payload-float))
+
+(on "clocked.sensor.*"
+  (aggregate! :ms 5000
+    (subject-append "rate5s")
+    :rate
+    payload-float))
