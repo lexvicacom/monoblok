@@ -1,25 +1,27 @@
-# Patchbay system prompt for Claude
+# Patchbay agent instructions
 
-Paste the block below into Claude's system prompt (or append to a project
-CLAUDE.md) whenever you want the model to author or edit patchbay rule
-files for monoblok. It is self-contained: it does not assume the model
-has read the repo.
+Paste the block below into an LLM coding agent's project instructions
+whenever you want the model to author or edit patchbay rule files for
+monoblok. It is self-contained: it does not assume the model has read
+the repo.
 
 ## Install
 
-Append this file to a project CLAUDE.md so Claude Code picks it up
-automatically when you are editing `.edn` rule files in that project:
+For Codex and other agents that read `AGENTS.md`, append this file to
+the project's agent instructions:
 
 ```sh
-# project-scoped (recommended)
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ./CLAUDE.md
-
-# or user-global
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/claude-patchbay.md >> ~/.claude/CLAUDE.md
+# project-scoped
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
 ```
 
-For one-off use, reference it inline in a prompt with
-`@docs/claude-patchbay.md` (Claude Code inlines `@path` refs).
+Codex discovers repository-scoped `AGENTS.md` automatically when it
+runs in that tree. For other tools, paste or reference this file in
+the equivalent project instruction area: Cursor rules, Aider
+conventions, ChatGPT project instructions, or another agent-specific
+memory file. For one-off use, reference `docs/AGENTS_PATCHBAY.md` in
+the prompt and ask the model to follow it while editing `.edn`
+patchbay files.
 
 Agent guidance
 ---
@@ -112,7 +114,7 @@ Side effects:
 
 Forms whose entire purpose is to emit (terminal effect, return nil) carry a trailing `!`. Scanning a rule, the bangs are the lines that put bytes on the wire; everything else is pure or value-returning. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) are still accepted as aliases. `publish` and `publish-to` were once distinct (args flipped); they collapsed to one form when the distinction stopped mattering. Use `publish!`.
 
-- `(publish! SUBJECT VALUE)` validates SUBJECT, coerces VALUE (numbers stringified canonically, booleans → "true"/"false"), enqueues. No-op if VALUE is nil so a suppressed gate upstream self-terminates the chain. Returns nil.
+- `(publish! SUBJECT VALUE)` validates SUBJECT, coerces VALUE (numbers stringified canonically, booleans -> "true"/"false"), enqueues. No-op if VALUE is nil so a suppressed gate upstream self-terminates the chain. Returns nil.
 
 Idempotent filters (per-rule, per-subject state; first sight always passes / is treated as "no prior"):
 
