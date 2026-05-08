@@ -1,7 +1,0 @@
-# The build cache
-zig-cache
-.zig-cache
-zig-out/
-tmp/
-.mcp.json
-.claude/
