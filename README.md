@@ -69,6 +69,13 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
+For quick patchbay debugging, `--soundcheck` runs the same evaluator without opening a NATS socket. It reads newline-delimited `SUBJECT|payload` rows on stdin, passes inputs through stdout, and prints any `publish!` emissions. Time-based patchbay ops use the normal libxev clock path; after stdin closes, pending timers stay alive briefly unless you set `--soundcheck-linger-ms 0`.
+
+```sh
+printf 'sensors.temp|31\n' | monoblok --soundcheck examples/sensors.edn
+printf 'sensors.temp|31\n' | monoblok --soundcheck --soundcheck-label examples/sensors.edn
+```
+
 A nice way to learn it is with an LLM that has the DSL loaded as project context. [docs/AGENTS_PATCHBAY.md](./docs/AGENTS_PATCHBAY.md) is a self-contained, agent-neutral prompt for Codex and other coding agents; append it to your project's `AGENTS.md` so compatible tools pick it up automatically when editing `.edn` rule files:
 
 ```sh
