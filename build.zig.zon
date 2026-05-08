@@ -8,15 +8,15 @@
             .url = "git+https://github.com/mitchellh/libxev#a82a04eabb46b0611c72d6d0e32db2d9dcf2e745",
             .hash = "libxev-0.0.0-86vtcwIRFACVrx54GaHsMFFlyC4dTi0tcVh10V7btRUc",
         },
-        // Vendored at vendor/nats.zig (v0.1.0 + a one-line fcntl fix needed
-        // for Zig 0.16; see vendor/nats.zig/src/Client.zig:106).
-        .nats = .{ .path = "vendor/nats.zig" },
+        .nats = .{
+            .url = "git+https://github.com/AlexJReid/nats.zig#e2f9ebe60e98fcda5bd0dc5857ccff03934761ac",
+            .hash = "nats_alexjreid-0.1.0-alexjreid.1-LXpHQpuKHwChXVni6qNSMrOJOhozpzqHB5YWCrat-hmR",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        "vendor",
         "LICENSE",
         "README.md",
     },
