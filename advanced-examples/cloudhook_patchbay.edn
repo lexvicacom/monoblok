@@ -1,0 +1,145 @@
+; Cloudhook patchbay: a fictional fleet of autonomous kite turbines tethered
+; above offshore buoys. Kites publish JSON frames; rules derive flight safety,
+; power quality, stable dashboards, and operator audit streams.
+
+(lvc ["cloudhook.>"
+      "alerts.>"
+      "ops.>"
+      "audit.>"])
+
+; Flight frame:
+; cloudhook.kite-04.flight {"alt":612,"airspeed":28.4,"tether":43.1,
+;                           "yaw":-2.4,"roll":8.1,"mode":"LOOP"}
+(on "cloudhook.*.flight" :reentrant true
+  (json-demux! "alt" "airspeed" "tether" "yaw" "roll" "mode" payload))
+
+; Weather frame:
+; cloudhook.kite-04.weather {"wind":31.2,"gust":39.5,"shear":0.14,
+;                            "pressure":1002.3,"rain":0.0}
+(on "cloudhook.*.weather" :reentrant true
+  (json-demux! "wind" "gust" "shear" "pressure" "rain" payload))
+
+; Power frame:
+; cloudhook.kite-04.power {"kw":84.2,"voltage":711,"battery":68.1,
+;                          "inverter":"GRID","brake":0}
+(on "cloudhook.*.power" :reentrant true
+  (json-demux! "kw" "voltage" "battery" "inverter" "brake" payload))
+
+; Stable dashboard outputs.
+(on "cloudhook.*.flight.alt"
+  (-> payload-float
+      (moving-avg 10)
+      (quantize 10)
+      (squelch)
+      (publish! (subject-append "band"))))
+
+(on "cloudhook.*.flight.airspeed"
+  (-> payload-float
+      (moving-avg :ms 20000)
+      (round 1)
+      (deadband 0.6)
+      (publish! (subject-append "stable"))))
+
+(on "cloudhook.*.weather.wind"
+  (-> payload-float
+      (round 1)
+      (squelch)
+      (publish! (subject-append "stable"))))
+
+(on "cloudhook.*.power.kw"
+  (-> payload-float
+      (hold-off 5000)
+      (publish! (subject-append "sampled"))))
+
+; Liveness and recent snapshots.
+(on "cloudhook.*.flight"
+  (do
+    (sample! :ms 4000 (subject-append "snapshot") payload)
+    (on-silence :ms 30000
+      (publish! (subject-append "stale") "true"))))
+
+(on "cloudhook.*.weather"
+  (sample! :ms 10000 (subject-append "snapshot") payload))
+
+; Flight envelope protection.
+(on "cloudhook.*.flight.alt"
+  (transition (or (< (moving-avg 6 payload-float) 350.0)
+                  (> (moving-avg 6 payload-float) 900.0))
+    (publish! (subject-append "alert") "altitude-envelope")
+    (publish! (subject-append "ok") "altitude-normal")))
+
+(on "cloudhook.*.flight.tether"
+  (transition (> (percentile 30 0.95 payload-float) 72.0)
+    (publish! (subject-with "ops" (subject-token 1) "winch" "ease") "high-tension")
+    (publish! (subject-with "ops" (subject-token 1) "winch" "hold") "tension-normal")))
+
+(on "cloudhook.*.flight.roll"
+  (when (> (stddev 20 payload-float) 14.0)
+    (publish! (subject-append "unstable") payload)))
+
+(on "cloudhook.*.flight.mode"
+  (when (changed? payload)
+    (publish! (subject-with "audit" (now :date) (subject-token 1) "mode")
+              (str-concat subject ": " payload))))
+
+; Weather hazards.
+(on "cloudhook.*.weather.gust"
+  (-> (> payload-float 47.0)
+      (rising-edge)
+      (throttle :ms 600000 3)
+      (publish! (subject-with "alerts" "gust" (subject-token 1)))))
+
+(on "cloudhook.*.weather.shear"
+  (transition (> (moving-avg :ms 30000 payload-float) 0.32)
+    (publish! (subject-with "ops" (subject-token 1) "pattern" "widen") "shear")
+    (publish! (subject-with "ops" (subject-token 1) "pattern" "normal") "shear-clear")))
+
+(on "cloudhook.*.weather.rain"
+  (when (> (- (moving-max 20 payload-float)
+              (moving-min 20 payload-float)) 4.0)
+    (publish! (subject-append "squall") payload)))
+
+; Power quality and generation rollups.
+(on "cloudhook.*.power.kw"
+  (do
+    (aggregate! :ms 300000 (subject-append "avg5m") :avg payload-float)
+    (bar! :ms 60000 payload-float)))
+
+(on "cloudhook.*.power.voltage"
+  (transition (or (< (moving-avg 8 payload-float) 640.0)
+                  (> (moving-avg 8 payload-float) 780.0))
+    (publish! (subject-append "alert") "voltage-out-of-band")
+    (publish! (subject-append "ok") "voltage-normal")))
+
+(on "cloudhook.*.power.battery"
+  (transition (< (moving-avg 12 payload-float) 25.0)
+    (publish! (subject-append "alert") "reserve-low")
+    (publish! (subject-append "ok") "reserve-recovered")))
+
+(on "cloudhook.*.power.inverter"
+  (when (contains? ["ISLAND" "FAULT" "STARTUP"] payload)
+    (do
+      (count!)
+      (publish! (subject-with "alerts" "inverter" (subject-token 1)) payload))))
+
+(on "cloudhook.*.power.brake"
+  (-> (= payload-int 1)
+      (rising-edge)
+      (publish! (subject-with "audit" (now :minute) (subject-token 1) "brake"))))
+
+; Free-form kite diagnostics.
+(on "cloudhook.*.log"
+  (do
+    (count! (contains? payload "ERROR"))
+    (when (or (contains? payload "ERROR")
+              (contains? payload "LINE_SNAP")
+              (contains? payload "BIRD_STRIKE"))
+      (publish! (subject-with "audit" (now :hour) (subject-token 1) "events")
+                (str-concat subject ": " payload)))))
+
+; Fleet ingest rate.
+(on "cloudhook.>"
+  (-> payload
+      (rate :ms 1000)
+      (round 1)
+      (publish! "ops.cloudhook.ingest.hz")))
