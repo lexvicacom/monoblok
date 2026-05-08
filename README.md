@@ -69,6 +69,8 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 
 Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
+For more elaborate generated demos, see [`advanced-examples/`](./advanced-examples/). They pair larger patchbay files with Python pump drivers and are intentionally a bit over the top, but they give a feel for what is possible.
+
 For quick patchbay debugging, `--soundcheck` runs the same evaluator without opening a NATS socket. It reads newline-delimited `SUBJECT|payload` rows on stdin, passes inputs through stdout, and prints any `publish!` emissions. Time-based patchbay ops use the normal libxev clock path; after stdin closes, pending timers stay alive briefly unless you set `--soundcheck-linger-ms 0`.
 
 ```sh
