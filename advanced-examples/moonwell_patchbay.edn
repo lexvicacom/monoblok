@@ -1,0 +1,146 @@
+; Moonwell patchbay: a fictional lunar ice-mining habitat under Shackleton
+; crater. Prospectors publish JSON frames; rules derive stable telemetry,
+; drill safety alerts, power rollups, and operator audit streams.
+
+(lvc ["moonwell.>"
+      "alerts.>"
+      "ops.>"
+      "audit.>"])
+
+; Environmental frame:
+; moonwell.rig-03.env {"temp":-142.1,"pressure":69.4,"dust":0.12,
+;                      "radiation":0.08,"ice":41.2,"seal":"LOCKED"}
+(on "moonwell.*.env" :reentrant true
+  (json-demux! "temp" "pressure" "dust" "radiation" "ice" "seal" payload))
+
+; Drill frame:
+; moonwell.rig-03.drill {"depth":18.4,"torque":62,"rpm":94,
+;                        "vibration":0.31,"bit_temp":81.4,"mode":"AUTO"}
+(on "moonwell.*.drill" :reentrant true
+  (json-demux! "depth" "torque" "rpm" "vibration" "bit_temp" "mode" payload))
+
+; Power frame:
+; moonwell.rig-03.power {"battery":77.4,"solar":410,"load":360,
+;                        "heater":44,"bus":"NOMINAL"}
+(on "moonwell.*.power" :reentrant true
+  (json-demux! "battery" "solar" "load" "heater" "bus" payload))
+
+; Stable dashboard channels.
+(on "moonwell.*.env.temp"
+  (-> payload-float
+      (moving-avg :ms 45000)
+      (round 1)
+      (squelch)
+      (publish! (subject-append "stable"))))
+
+(on "moonwell.*.env.pressure"
+  (-> payload-float
+      (deadband 0.8)
+      (round 1)
+      (publish! (subject-append "stable"))))
+
+(on "moonwell.*.drill.depth"
+  (-> payload-float
+      (quantize 0.5)
+      (squelch)
+      (publish! (subject-append "meter"))))
+
+(on "moonwell.*.power.load"
+  (-> payload-float
+      (hold-off 10000)
+      (publish! (subject-append "sampled"))))
+
+; Liveness and current snapshots.
+(on "moonwell.*.env"
+  (do
+    (sample! :ms 5000 (subject-append "snapshot") payload)
+    (on-silence :ms 60000
+      (publish! (subject-append "stale") "true"))))
+
+(on "moonwell.*.drill"
+  (sample! :ms 3000 (subject-append "snapshot") payload))
+
+; Habitat safety.
+(on "moonwell.*.env.pressure"
+  (transition (< (moving-avg 8 payload-float) 61.0)
+    (publish! (subject-append "alert") "pressure-low")
+    (publish! (subject-append "ok") "pressure-restored")))
+
+(on "moonwell.*.env.dust"
+  (-> (> payload-float 0.55)
+      (rising-edge)
+      (throttle :ms 300000 2)
+      (publish! (subject-with "alerts" "dust" (subject-token 1)))))
+
+(on "moonwell.*.env.radiation"
+  (transition (> (percentile 40 0.95 payload-float) 0.18)
+    (publish! (subject-append "alert") "radiation-p95-high")
+    (publish! (subject-append "ok") "radiation-normal")))
+
+(on "moonwell.*.env.seal"
+  (when (changed? payload)
+    (publish! (subject-with "audit" (now :date) (subject-token 1) "seal")
+              (str-concat subject ": " payload))))
+
+; Drill protection.
+(on "moonwell.*.drill.torque"
+  (when (> (- (moving-max 20 payload-float)
+              (moving-min 20 payload-float)) 32.0)
+    (publish! (subject-append "chatter") payload)))
+
+(on "moonwell.*.drill.vibration"
+  (transition (> (moving-avg :ms 20000 payload-float) 0.72)
+    (publish! (subject-with "ops" (subject-token 1) "drill" "slow") "vibration")
+    (publish! (subject-with "ops" (subject-token 1) "drill" "resume") "vibration-clear")))
+
+(on "moonwell.*.drill.bit_temp"
+  (-> payload-float
+      (moving-avg 10)
+      (clamp -200.0 140.0)
+      (deadband 2.0)
+      (publish! (subject-append "managed"))))
+
+(on "moonwell.*.drill.mode"
+  (when (contains? ["MANUAL" "SAFE" "FAULT"] payload)
+    (do
+      (count!)
+      (publish! (subject-with "alerts" "drill-mode" (subject-token 1)) payload))))
+
+; Ice yield and power economics.
+(on "moonwell.*.env.ice"
+  (do
+    (debounce! :ms 2500 (subject-append "settled") payload)
+    (aggregate! :ms 300000 (subject-append "avg5m") :avg payload-float)
+    (bar! :ms 60000 payload-float)))
+
+(on "moonwell.*.power.battery"
+  (transition (< (moving-avg 12 payload-float) 24.0)
+    (publish! (subject-append "alert") "reserve-low")
+    (publish! (subject-append "ok") "reserve-recovered")))
+
+(on "moonwell.*.power.solar"
+  (aggregate! :ms 300000 (subject-append "sum5m") :sum payload-float))
+
+(on "moonwell.*.power.heater"
+  (when (> (variance 30 payload-float) 260.0)
+    (publish! (subject-append "unstable") payload)))
+
+(on "moonwell.*.power.bus"
+  (when (not (= payload "NOMINAL"))
+    (publish! (subject-with "alerts" "power-bus" (subject-token 1)) payload)))
+
+; Free-form rig diagnostics.
+(on "moonwell.*.log"
+  (do
+    (count! (contains? payload "ERROR"))
+    (when (or (contains? payload "ERROR")
+              (contains? payload "ICE_VOID"))
+      (publish! (subject-with "audit" (now :hour) (subject-token 1) "events")
+                (str-concat subject ": " payload)))))
+
+; Fleet ingest and noisy-subject meter.
+(on "moonwell.>"
+  (-> payload
+      (rate :ms 1000)
+      (round 1)
+      (publish! "ops.moonwell.ingest.hz")))
