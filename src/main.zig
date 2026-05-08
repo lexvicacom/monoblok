@@ -15,10 +15,11 @@ pub const bridge = @import("bridge.zig");
 pub const mixer = @import("mixer.zig");
 pub const mixer_config = @import("mixer_config.zig");
 pub const lvc_config = @import("lvc_config.zig");
+pub const soundcheck = @import("soundcheck.zig");
 
 const manifest = @import("manifest");
 
-const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, stats_tick_ms, ping_interval_ms, max_pending_bytes, validate, mixer, inherit_fd, help, version };
+const Flag = enum { port, unix_socket, patchbay, no_lvc, stats, trace, snapshot, snapshot_every, stats_tick_ms, ping_interval_ms, max_pending_bytes, validate, soundcheck, soundcheck_label, soundcheck_linger_ms, mixer, inherit_fd, help, version };
 
 const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--port", .port },
@@ -35,6 +36,9 @@ const flag_map = std.StaticStringMap(Flag).initComptime(.{
     .{ "--ping-interval-ms", .ping_interval_ms },
     .{ "--max-pending-bytes", .max_pending_bytes },
     .{ "--validate", .validate },
+    .{ "--soundcheck", .soundcheck },
+    .{ "--soundcheck-label", .soundcheck_label },
+    .{ "--soundcheck-linger-ms", .soundcheck_linger_ms },
     .{ "--mixer", .mixer },
     .{ "--inherit-fd", .inherit_fd },
     .{ "--help", .help },
@@ -60,6 +64,9 @@ pub fn main(init: std.process.Init) !void {
     var ping_interval_ms: u64 = server.default_ping_interval_ms;
     var max_pending_bytes: usize = server.default_max_pending_bytes;
     var validate_only = false;
+    var soundcheck_enabled = false;
+    var soundcheck_label = false;
+    var soundcheck_linger_ms: u64 = 10_000;
     var mixer_path: ?[]const u8 = null;
     var inherit_fd: ?std.posix.fd_t = null;
 
@@ -109,6 +116,12 @@ pub fn main(init: std.process.Init) !void {
                 if (max_pending_bytes == 0) fatal("--max-pending-bytes must be > 0");
             },
             .validate => validate_only = true,
+            .soundcheck => soundcheck_enabled = true,
+            .soundcheck_label => soundcheck_label = true,
+            .soundcheck_linger_ms => {
+                const v = it.next() orelse fatal("--soundcheck-linger-ms requires a value in milliseconds");
+                soundcheck_linger_ms = std.fmt.parseInt(u64, v, 10) catch fatal("invalid --soundcheck-linger-ms value");
+            },
             .mixer => mixer_path = it.next() orelse fatal("--mixer requires a path"),
             .inherit_fd => {
                 const v = it.next() orelse fatal("--inherit-fd requires an fd number");
@@ -126,6 +139,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (mixer_path != null and inherit_fd != null) fatal("--mixer and --inherit-fd are mutually exclusive");
+    if (soundcheck_enabled and mixer_path != null) fatal("--soundcheck and --mixer are mutually exclusive");
+    if (soundcheck_enabled and inherit_fd != null) fatal("--soundcheck and --inherit-fd are mutually exclusive");
     if (mixer_path) |mp| return mixer_main(gpa, arena, fsio, mp);
 
     const patchbay_src: ?[]u8 = if (patchbay_path) |path| try readFile(fsio, arena, path) else null;
@@ -169,6 +184,17 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     const ruleset = try rules.buildRuleSet(arena, loaded_rules);
+    if (soundcheck_enabled) {
+        if (patchbay_path == null) fatal("--soundcheck requires a patchbay path");
+        var runner = try soundcheck.Runner.init(gpa, arena, fsio, ruleset, .{
+            .label = soundcheck_label,
+            .linger_ms = soundcheck_linger_ms,
+            .trace = trace_enabled,
+        });
+        defer runner.deinit();
+        try runner.run();
+        return;
+    }
     printBanner("server");
     std.log.info("loaded {d} patchbay form(s)", .{loaded_rules.len});
     std.log.info("libxev backend: {s} (os={s})", .{ @tagName(xev.backend), @tagName(builtin.os.tag) });
@@ -492,6 +518,16 @@ fn printUsage() void {
         \\                   check that runs at startup; useful for
         \\                   editor / pre-commit / CI flows. Requires
         \\                   a patchbay path.
+        \\  --soundcheck     Read newline-delimited SUBJECT|payload rows
+        \\                   from stdin, pass inputs through stdout, and
+        \\                   print patchbay-emitted publishes. Requires
+        \\                   a patchbay path.
+        \\  --soundcheck-label
+        \\                   Prefix rows with in| or out| in soundcheck
+        \\                   mode.
+        \\  --soundcheck-linger-ms MS
+        \\                   In soundcheck mode, keep xev clock timers
+        \\                   alive for MS after stdin EOF (default 10000).
         \\
     , .{});
 }
