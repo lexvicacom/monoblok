@@ -148,8 +148,10 @@ test "parseServerOp INFO" {
 
 test "parseServerOp MSG without reply" {
     const r = try parseServerOp("MSG foo 7 5\r\nhello\r\n");
+    try testing.expectEqual(proto.ServerMsgKind.msg, r.op.msg.kind);
     try testing.expectEqualStrings("foo", r.op.msg.subject);
     try testing.expectEqualStrings("7", r.op.msg.sid);
+    try testing.expectEqualStrings(" 5\r\nhello\r\n", r.op.msg.suffix_after_sid);
     try testing.expectEqual(@as(?[]const u8, null), r.op.msg.reply);
     try testing.expectEqualStrings("hello", r.op.msg.payload);
 }
@@ -175,6 +177,27 @@ test "writeMsg with reply" {
     defer buf.deinit(testing.allocator);
     try writeMsg(testing.allocator, &buf, "foo", "1", "reply.box", "hi");
     try testing.expectEqualStrings("MSG foo 1 reply.box 2\r\nhi\r\n", buf.items);
+}
+
+test "writeServerMsgWithSid preserves suffix" {
+    const r = try parseServerOp("MSG foo 7 reply.box 3\r\nhey\r\n");
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try proto.writeServerMsgWithSid(testing.allocator, &buf, r.op.msg.kind, r.op.msg.subject, "client-42", r.op.msg.suffix_after_sid);
+    try testing.expectEqualStrings("MSG foo client-42 reply.box 3\r\nhey\r\n", buf.items);
+}
+
+test "parseServerMsgEnvelope MSG with reply" {
+    const r = try proto.parseServerMsgEnvelope("MSG foo 7 reply.box 3\r\nhey\r\n");
+    try testing.expectEqual(proto.ServerMsgKind.msg, r.kind);
+    try testing.expectEqualStrings("foo", r.subject);
+    try testing.expectEqualStrings("7", r.sid);
+    try testing.expectEqualStrings(" reply.box 3\r\nhey\r\n", r.suffix_after_sid);
+    try testing.expectEqual(@as(usize, "MSG foo 7 reply.box 3\r\nhey\r\n".len), r.consumed);
+}
+
+test "parseServerMsgEnvelope ignores non-message ops" {
+    try testing.expectError(error.UnknownOp, proto.parseServerMsgEnvelope("PING\r\n"));
 }
 
 test "parse HPUB without reply" {
@@ -256,9 +279,24 @@ test "parseServerOp HMSG round-trip" {
     const headers = "NATS/1.0\r\nX: y\r\n\r\n";
     try writeHmsg(testing.allocator, &wire, "foo", "1", "rep", headers, "hello");
     const r = try parseServerOp(wire.items);
+    try testing.expectEqual(proto.ServerMsgKind.hmsg, r.op.msg.kind);
     try testing.expectEqualStrings("foo", r.op.msg.subject);
     try testing.expectEqualStrings("1", r.op.msg.sid);
+    try testing.expectEqualStrings(" rep 18 23\r\nNATS/1.0\r\nX: y\r\n\r\nhello\r\n", r.op.msg.suffix_after_sid);
     try testing.expectEqualStrings("rep", r.op.msg.reply.?);
     try testing.expectEqualStrings(headers, r.op.msg.headers.?);
     try testing.expectEqualStrings("hello", r.op.msg.payload);
+}
+
+test "parseServerMsgEnvelope HMSG with reply" {
+    var wire: std.ArrayList(u8) = .empty;
+    defer wire.deinit(testing.allocator);
+    const headers = "NATS/1.0\r\nX: y\r\n\r\n";
+    try writeHmsg(testing.allocator, &wire, "foo", "1", "rep", headers, "hello");
+    const r = try proto.parseServerMsgEnvelope(wire.items);
+    try testing.expectEqual(proto.ServerMsgKind.hmsg, r.kind);
+    try testing.expectEqualStrings("foo", r.subject);
+    try testing.expectEqualStrings("1", r.sid);
+    try testing.expectEqualStrings(" rep 18 23\r\nNATS/1.0\r\nX: y\r\n\r\nhello\r\n", r.suffix_after_sid);
+    try testing.expectEqual(wire.items.len, r.consumed);
 }
