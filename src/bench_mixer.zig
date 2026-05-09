@@ -473,6 +473,33 @@ fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
     var cursor: usize = 0;
     while (cursor < w.rx.items.len) {
         const slice = w.rx.items[cursor..];
+        if (proto.parseServerMsgEnvelope(slice)) |m| {
+            const entry = benchEntryForSid(w, m.sid) orelse {
+                cursor += m.consumed;
+                continue;
+            };
+            if (entry.subscribers.items.len == 1) {
+                const sub = entry.subscribers.items[0];
+                if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
+                    try sub.client.out.appendSlice(gpa, slice[0..m.consumed]);
+                    kicks.push(sub.client);
+                    cursor += m.consumed;
+                    continue;
+                }
+            }
+            for (entry.subscribers.items) |sub| {
+                if (sub.client.closing) continue;
+                try proto.writeServerMsgWithSid(gpa, &sub.client.out, m.kind, m.subject, sub.client_sid, m.suffix_after_sid);
+                kicks.push(sub.client);
+            }
+            cursor += m.consumed;
+            continue;
+        } else |err| switch (err) {
+            error.NeedMoreData => break,
+            error.UnknownOp => {},
+            else => return err,
+        }
+
         const result = proto.parseServerOp(slice) catch |err| switch (err) {
             error.NeedMoreData => break,
             else => return err,
@@ -483,7 +510,7 @@ fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
                     cursor += result.consumed;
                     continue;
                 };
-                if (m.headers == null and m.reply == null and entry.subscribers.items.len == 1) {
+                if (entry.subscribers.items.len == 1) {
                     const sub = entry.subscribers.items[0];
                     if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
                         try sub.client.out.appendSlice(gpa, slice[0..result.consumed]);
@@ -494,11 +521,7 @@ fn processUpstreamForReal(w: *Worker, loop: *xev.Loop) !void {
                 }
                 for (entry.subscribers.items) |sub| {
                     if (sub.client.closing) continue;
-                    if (m.headers) |h| {
-                        try proto.writeHmsg(gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, h, m.payload);
-                    } else {
-                        try proto.writeMsg(gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
-                    }
+                    try proto.writeServerMsgWithSid(gpa, &sub.client.out, m.kind, m.subject, sub.client_sid, m.suffix_after_sid);
                     kicks.push(sub.client);
                 }
             },
@@ -561,6 +584,31 @@ fn processUpstreamFor(w: *Worker, loop: *xev.Loop) !void {
     var cursor: usize = 0;
     while (cursor < w.rx.items.len) {
         const slice = w.rx.items[cursor..];
+        if (proto.parseServerMsgEnvelope(slice)) |m| {
+            const entry = benchEntryForSid(w, m.sid) orelse {
+                cursor += m.consumed;
+                continue;
+            };
+            if (entry.subscribers.items.len == 1) {
+                const sub = entry.subscribers.items[0];
+                if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
+                    try sub.client.out.appendSlice(gpa, slice[0..m.consumed]);
+                    cursor += m.consumed;
+                    continue;
+                }
+            }
+            for (entry.subscribers.items) |sub| {
+                if (sub.client.closing) continue;
+                try proto.writeServerMsgWithSid(gpa, &sub.client.out, m.kind, m.subject, sub.client_sid, m.suffix_after_sid);
+            }
+            cursor += m.consumed;
+            continue;
+        } else |err| switch (err) {
+            error.NeedMoreData => break,
+            error.UnknownOp => {},
+            else => return err,
+        }
+
         const result = proto.parseServerOp(slice) catch |err| switch (err) {
             error.NeedMoreData => break,
             else => return err,
@@ -571,7 +619,7 @@ fn processUpstreamFor(w: *Worker, loop: *xev.Loop) !void {
                     cursor += result.consumed;
                     continue;
                 };
-                if (m.headers == null and m.reply == null and entry.subscribers.items.len == 1) {
+                if (entry.subscribers.items.len == 1) {
                     const sub = entry.subscribers.items[0];
                     if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
                         try sub.client.out.appendSlice(gpa, slice[0..result.consumed]);
@@ -581,11 +629,7 @@ fn processUpstreamFor(w: *Worker, loop: *xev.Loop) !void {
                 }
                 for (entry.subscribers.items) |sub| {
                     if (sub.client.closing) continue;
-                    if (m.headers) |h| {
-                        try proto.writeHmsg(gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, h, m.payload);
-                    } else {
-                        try proto.writeMsg(gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
-                    }
+                    try proto.writeServerMsgWithSid(gpa, &sub.client.out, m.kind, m.subject, sub.client_sid, m.suffix_after_sid);
                 }
             },
             else => {},
