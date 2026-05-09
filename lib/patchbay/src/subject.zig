@@ -14,7 +14,27 @@ pub const Error = error{
 };
 
 pub fn validatePublish(s: []const u8) Error!void {
-    try validate(s, .publish);
+    if (s.len == 0) return error.Empty;
+    if (s.len > max_len) return error.TooLong;
+
+    var tokens: usize = 1;
+    var token_len: usize = 0;
+    for (s) |c| {
+        if (c == '.') {
+            if (token_len == 0) return error.EmptyToken;
+            tokens += 1;
+            if (tokens > max_tokens) return error.TooManyTokens;
+            token_len = 0;
+            continue;
+        }
+        switch (c) {
+            '*', '>' => return error.WildcardInPublish,
+            'A'...'Z', 'a'...'z', '0'...'9', '-', '_', '$', ':' => {},
+            else => return error.InvalidCharacter,
+        }
+        token_len += 1;
+    }
+    if (token_len == 0) return error.EmptyToken;
 }
 
 pub fn validateFilter(s: []const u8) Error!void {

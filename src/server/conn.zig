@@ -270,6 +270,15 @@ pub fn Conn(comptime Server: type) type {
 
                     self.server.total_pubs += 1;
 
+                    if (self.server.rules.rules.len == 0) {
+                        router.publishRequest(p.subject, p.headers, p.payload, p.reply, p.no_responders) catch |err| {
+                            std.log.warn("publish error: {s}", .{@errorName(err)});
+                        };
+                        if (self.server.stats_enabled) self.server.recordPub(0);
+                        if (self.verbose) try proto.writeOk(gpa, &rconn.out);
+                        return;
+                    }
+
                     _ = self.msg_arena.reset(.retain_capacity);
                     const arena = self.msg_arena.allocator();
                     const subject = try arena.dupe(u8, p.subject);
