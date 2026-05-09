@@ -16,7 +16,6 @@
 #
 # NOTE: If numbers seem low, ensure you're running a release build:
 #   zig build --release=safe   (recommended, what release artifacts ship)
-#   zig build --release=fast   (slightly faster, no safety checks)
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

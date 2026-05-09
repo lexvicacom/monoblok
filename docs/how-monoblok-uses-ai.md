@@ -27,7 +27,7 @@ the design notes already in the repo.
 
 **Sanity-checking and doing first pass benchmarks.** monoblok has `scripts/smoke.sh`,
 `scripts/bridge-smoke.sh`, and a pile of ad-hoc perf runs under
-`--release=fast`. I'll ask an assistant things like "is this benchmark
+`--release=safe`. I'll ask an assistant things like "is this benchmark
 actually measuring what I think it is", "am I warming up enough",
 "does this look like coordinated omission". AI is good at this kind of non-core busy work, the stuff you would expect from a careful codebase.
 

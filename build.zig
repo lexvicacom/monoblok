@@ -66,13 +66,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_patchbay_tests.step);
 
-    // In-process router microbench. Forces ReleaseFast since debug numbers
+    // In-process router microbench. Forces ReleaseSafe since debug numbers
     // are useless for comparing routing-table changes. Run with:
     //   zig build bench-router -- [N] [M] [PUBS]
     const bench_router_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_router.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .ReleaseSafe,
         .link_libc = true,
         .imports = &.{
             .{ .name = "xev", .module = libxev_dep.module("xev") },
@@ -90,12 +90,12 @@ pub fn build(b: *std.Build) void {
     const bench_router_step = b.step("bench-router", "Run the in-process router microbench");
     bench_router_step.dependOn(&run_bench_router.step);
 
-    // In-process patchbay microbench. ReleaseFast for the same reasons.
+    // In-process patchbay microbench. ReleaseSafe for the same reasons.
     //   zig build bench-patchbay -- [MODE] [N] [PUBS]
     const bench_patchbay_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_patchbay.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .ReleaseSafe,
         .link_libc = true,
         .imports = &.{
             .{ .name = "patchbay", .module = patchbay_mod },
@@ -115,7 +115,7 @@ pub fn build(b: *std.Build) void {
     const bench_mixer_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_mixer.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .ReleaseSafe,
         .link_libc = true,
         .imports = &.{
             .{ .name = "xev", .module = libxev_dep.module("xev") },
@@ -133,5 +133,4 @@ pub fn build(b: *std.Build) void {
     const bench_mixer_step = b.step("bench-mixer", "Run the in-process mixer microbench");
     bench_mixer_step.dependOn(&run_bench_mixer.step);
 }
-
 
