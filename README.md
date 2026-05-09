@@ -13,7 +13,7 @@ Use it anywhere the _same old processing/cleaning code_ gets monotonous to write
 monoblok can help if:
 
 - you have noisy numeric streams (sensors, tickers, telemetry) and every consumer is reimplementing the same round/dedupe/deadband/smooth code
-- you want a small box at the edge that cleans data before it goes upstream, instead of paying to ship the noise
+- you want a small box at the edge that cleans data, saving paying to ship the noise
 - you want last-value replay (`$LVC.*`) so a late subscriber sees current state immediately, without standing up a separate cache
 - you want OHLC bars, moving stats, or windowed aggregates declared once in a config file rather than coded per consumer
 
