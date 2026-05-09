@@ -25,9 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/st
 Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 
-## Core features
-
-### patchbay
+## patchbay
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
@@ -69,8 +67,10 @@ Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). On
 | [`lvc.edn`](./examples/lvc.edn)                   | `$LVC.>` cache replay: a late joiner gets the last value        |
 | [`mixer.edn`](./examples/mixer.edn)               | mixer mode: one process fronts N workers, sharded by first token (run with `python3 examples/mixer.py`) |
 
-Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
+### Testing
+
+Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
 For quick patchbay debugging, `--soundcheck` runs the same evaluator without opening a NATS socket. It reads newline-delimited `SUBJECT|payload` rows on stdin, passes inputs through stdout, and prints any `publish!` emissions. Time-based patchbay ops use the normal libxev clock path; after stdin closes, pending timers stay alive briefly unless you set `--soundcheck-linger-ms 0`.
 
@@ -79,7 +79,23 @@ printf 'sensors.temp|31\n' | monoblok --soundcheck examples/sensors.edn
 printf 'sensors.temp|31\n' | monoblok --soundcheck --soundcheck-label examples/sensors.edn
 ```
 
-#### Coding assistants
+### `--trace`: per-evaluation debugger
+
+Prints every patchbay form the evaluator visits to stderr, with result and elapsed time. 
+
+```
+$ monoblok --port 4222 --patchbay patchbay.edn --trace
+trace: sensors.temp 42.5
+  rule 0 (on "sensors.*") matched
+  (when (> payload-float 30) (publish! (subject-append "high") payload))
+    (> payload-float 30)
+      => true [124µs]
+    (publish! (subject-append "high") payload)
+      => published "sensors.temp.high" 42.5 [549µs]
+total [3ms]
+```
+
+### Coding assistants
 
 A nice way to learn it is with an LLM that has the DSL loaded as project context. [docs/AGENTS_PATCHBAY.md](./docs/AGENTS_PATCHBAY.md) is a self-contained, agent-neutral prompt that teaches Codex and other coding agents Patchbay. Append it to your project's `AGENTS.md` so compatible tools pick it up automatically when editing `.edn` rule files:
 
@@ -95,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENT
 
 For some elaborate generated demos, see [`advanced-examples/`](./advanced-examples/). They are intentionally a bit over the top, but they give a feel for what is possible.
 
-### `$LVC.*`: last-value-cache stream
+## `$LVC.*`: last-value-cache stream
 
 Top-level `(lvc ...)` forms opt subjects into the last-value cache. Subscribing to `$LVC.foo.bar` joins a live stream of `foo.bar`: current cached value first (if any), then every subsequent opted-in publish. Wildcards work. `PUB $LVC.*` is rejected.
 
@@ -114,12 +130,12 @@ Absent `(lvc ...)`, LVC is off and the publish path does no cache work. `--no-lv
 
 ## NATS support
 
-### Server
+### As a NATS core server
 
 Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers.
 Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
 
-### Export NATS bridge
+### As a bridging client to a NATS server
 
 <p align="center">
   <img src="bridge.png" alt="bridge" width="720">
@@ -141,8 +157,6 @@ Zero or one `(bridge ...)` form in the patchbay file configures it:
 A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.zig.
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./docs/patchbay-cheatsheet.md).
-
-In the roadmap is microcontroller interop with monoblok and/or NATS itself. The current thinking is `publish!` forms on an MCU join a ring buffer that gets flushed remotely when there is a connection. Naturally memory constraints are a big thing here.
 
 ## Snapshots
 
@@ -170,7 +184,7 @@ whose filter no longer matches at its recorded position is skipped with a warnin
 
 Build-out before build-across: start with one monoblok and reach for the mixer when one core actually isn't enough. See [docs/mixer.md](./docs/mixer.md) for the sharding rule, SUB constraints, supervisor policy, and what's out of scope in v1. Runnable example: [`examples/mixer.py`](./examples/mixer.py).
 
-Note: mixer mode is experimental. The mixer runs single-threaded like the workers, so its own throughput on one core is the system-wide cap on inbound publishes. In microbenches the mixer's per-PUB cost (parse, shard by first token, forward bytes) is roughly an order of magnitude cheaper than a worker running a real patchbay (squelch, deadband, moving averages, JSON demux), so one mixer comfortably feeds many worker cores' worth of signal-conditioning load. The ratio collapses if your patchbay does almost nothing per PUB, in which case the mixer can saturate before the workers do — but a near-null patchbay is also a deployment that probably doesn't need the patchbay tier at all.
+> Note: mixer mode is experimental. The mixer runs single-threaded like the workers, so its own throughput on one core is the system-wide cap on inbound publishes. 
 
 ## Observability
 
@@ -185,23 +199,6 @@ Every accepted/closed connection logs at info level. Two always-on warn threshol
 info: stats: pubs=10000 max_rule_publishes=0 max_out_hwm=41160B
 ```
 
-### `--trace`: per-evaluation debugger
-
-Prints every patchbay form the evaluator visits to stderr, with result and elapsed time. 
-
-```
-$ monoblok --port 4222 --patchbay patchbay.edn --trace
-trace: sensors.temp 42.5
-  rule 0 (on "sensors.*") matched
-  (when (> payload-float 30) (publish! (subject-append "high") payload))
-    (> payload-float 30)
-      => true [124µs]
-    (publish! (subject-append "high") payload)
-      => published "sensors.temp.high" 42.5 [549µs]
-total [3ms]
-```
-
-
 ## Architecture
 
 Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
@@ -212,7 +209,7 @@ Mixer mode reuses that same single-loop model per worker. The mixer-to-worker ho
 
 ## Deploying
 
-monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good start. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
+monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good starting point. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
 
 The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
 
@@ -252,7 +249,7 @@ Release binaries are built natively per arch by `.github/workflows/release.yml` 
 
 ## AI
 
-It's 2026, Claude helps me a lot. This is something of a _scarlet letter_ to many - [some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
+It's 2026, Claude and Codex help me a lot. This is something of a _scarlet letter_ to many - [some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
 
 ## License
 
