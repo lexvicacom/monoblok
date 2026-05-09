@@ -23,30 +23,42 @@ resolved by the evaluator.
 That's the whole grammar. The rest of this doc is just which
 operators exist and what they do.
 
-### Lists are calls only inside rule bodies
+### EDN is the notation; the patchbay is the evaluator
 
-If you've used Clojure, the muscle memory is "every `(...)` is a call
-unless I `'`-quote it." Patchbay is not quite that. There is no quote
-form. Whether a `(...)` list is "evaluated as a call" depends purely
-on where it appears:
+Patchbay files are valid EDN, which is why `.edn` editor tooling
+(syntax highlighting, paren-matching, structural editing) works out
+of the box. EDN itself is a data notation — it parses lists `(...)`,
+vectors `[...]`, strings, numbers, keywords, and so on, and stops
+there. It does not say what any of those mean. The patchbay is the
+piece that gives some of those forms call semantics, and only in
+some places.
 
-- Inside an `(on FILTER BODY)` body, every list dispatches on its head
-  symbol (`hold-off`, `publish`, `+`, etc.). Unknown heads error.
-- Inside top-level config forms, sequences are data. In `(lvc ...)`, a
-  single vector or list is read as the filter set. Inside `(bridge ...)`
-  and `(mixer ...)`, after a keyword like `:servers`, `:export`, or
-  `:workers`, a list is read as a literal sequence of values. `(:servers ("nats://a:4222"
-  "nats://b:4222") ...)` is a two-element list of strings, not a call
-  to `nats://a:4222`. Same underlying parser, different consumer. See
-  [`mixer.md`](./mixer.md) for the mixer config form.
+If you've used Clojure, this is the part where the muscle memory
+diverges. Clojure's rule is "every `(...)` is a call unless I
+`'`-quote it." Patchbay has no quote form and doesn't need one,
+because whether a list dispatches as a call is decided by *where it
+appears*, not by a sigil:
+
+- Inside an `(on FILTER BODY)` body, every list dispatches on its
+  head symbol (`hold-off`, `publish!`, `+`, etc.). Unknown heads
+  error.
+- Inside top-level config forms, sequences are data. In `(lvc ...)`,
+  a single vector or list is read as the filter set. Inside
+  `(bridge ...)` and `(mixer ...)`, after a keyword like `:servers`,
+  `:export`, or `:workers`, a list is read as a literal sequence of
+  values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
+  two-element list of strings, not a call to `nats://a:4222`. Same
+  parser, different consumer. See [`mixer.md`](./mixer.md) for the
+  mixer config form.
 
 For unambiguous data-as-data inside a rule body, write a vector with
 square brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors
-self-evaluate (each element is evaluated, the result is returned as a
-vector), they never dispatch on a head, and they're what `contains?`
-checks for membership against. Config readers (`bridge`, `mixer`)
-accept either `(...)` or `[...]` for keyword-tagged collections;
-vectors read more naturally and are the recommended form.
+self-evaluate (each element is evaluated, the result is returned as
+a vector), they never dispatch on a head, and they're what
+`contains?` checks for membership against. Config readers (`bridge`,
+`mixer`) accept either `(...)` or `[...]` for keyword-tagged
+collections; vectors read more naturally and are the recommended
+form.
 
 ## Values
 
