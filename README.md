@@ -8,7 +8,7 @@ monoblok is a messaging broker with built-in _processing_. It speaks enough of t
 
 For smaller scenarios, NATS is optional: every monoblok process is a NATS core broker, so you can run one directly in the cloud and point clients straight at it. Absolutely reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
 
-Reach for it anywhere the _same old processing code_ gets monotonous to write across consumers: cheap sensors with noisy readings, market data feeds, telemetry. [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+Use it anywhere the _same old processing/cleaning code_ gets monotonous to write across consumers: cheap sensors with noisy readings, market data feeds, telemetry. **It reduces downstream work.** [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 monoblok can help if:
 
