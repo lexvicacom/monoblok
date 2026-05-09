@@ -117,6 +117,8 @@ pub fn parseClientOp(buf: []const u8) ParseError!ParseResult {
     const trimmed = std.mem.trimEnd(u8, line, "\r");
     if (trimmed.len == 0) return error.MalformedOp;
 
+    if (std.mem.startsWith(u8, trimmed, "PUB ")) return parsePubFast(buf, line_end, trimmed[4..]);
+
     const verb_end = std.mem.indexOfAny(u8, trimmed, " \t") orelse trimmed.len;
     const verb = trimmed[0..verb_end];
     const rest_raw = if (verb_end == trimmed.len) trimmed[0..0] else trimmed[verb_end + 1 ..];
@@ -184,6 +186,64 @@ fn parsePub(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Parse
         .op = .{ .pub_msg = .{ .subject = subject, .reply = reply, .payload = payload } },
         .consumed = line_end + nbytes + trailer_len,
     };
+}
+
+fn parsePubFast(buf: []const u8, line_end: usize, rest_raw: []const u8) ParseError!ParseResult {
+    const rest = std.mem.trim(u8, rest_raw, " \t");
+    if (rest.len == 0) return error.InvalidArgs;
+
+    const subject_end = std.mem.indexOfAny(u8, rest, " \t") orelse return error.InvalidArgs;
+    const subject = rest[0..subject_end];
+    var pos = skipSpaces(rest, subject_end);
+    if (pos >= rest.len) return error.InvalidArgs;
+
+    const a_start = pos;
+    while (pos < rest.len and rest[pos] != ' ' and rest[pos] != '\t') : (pos += 1) {}
+    const a = rest[a_start..pos];
+    pos = skipSpaces(rest, pos);
+
+    var reply: ?[]const u8 = null;
+    const nbytes_str = if (pos < rest.len) blk: {
+        reply = a;
+        const len_start = pos;
+        while (pos < rest.len and rest[pos] != ' ' and rest[pos] != '\t') : (pos += 1) {}
+        const len_str = rest[len_start..pos];
+        pos = skipSpaces(rest, pos);
+        if (pos != rest.len) return error.InvalidArgs;
+        break :blk len_str;
+    } else a;
+
+    const nbytes = try parsePayloadLen(nbytes_str);
+    return finishPub(buf, line_end, subject, reply, nbytes);
+}
+
+fn finishPub(
+    buf: []const u8,
+    line_end: usize,
+    subject: []const u8,
+    reply: ?[]const u8,
+    nbytes: usize,
+) ParseError!ParseResult {
+    const after_header = buf[line_end..];
+    if (after_header.len < nbytes + 1) return error.NeedMoreData;
+    const payload = after_header[0..nbytes];
+    const tail = after_header[nbytes..];
+    const trailer_len: usize = switch (tail[0]) {
+        '\r' => if (tail.len < 2) return error.NeedMoreData else if (tail[1] == '\n') 2 else return error.MalformedOp,
+        '\n' => 1,
+        else => return error.MalformedOp,
+    };
+
+    return .{
+        .op = .{ .pub_msg = .{ .subject = subject, .reply = reply, .payload = payload } },
+        .consumed = line_end + nbytes + trailer_len,
+    };
+}
+
+fn skipSpaces(s: []const u8, start: usize) usize {
+    var i = start;
+    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) : (i += 1) {}
+    return i;
 }
 
 /// HPUB <subject> [reply] <hdr_len> <total_len>\r\n<headers><payload>\r\n
@@ -518,6 +578,18 @@ fn parseUnsigned(comptime T: type, s: []const u8) ParseError!T {
         const digit: T = @intCast(c - '0');
         n = std.math.mul(T, n, 10) catch return error.InvalidArgs;
         n = std.math.add(T, n, digit) catch return error.InvalidArgs;
+    }
+    return n;
+}
+
+fn parsePayloadLen(s: []const u8) ParseError!usize {
+    if (s.len == 0) return error.InvalidArgs;
+    var n: usize = 0;
+    for (s) |c| {
+        if (c < '0' or c > '9') return error.InvalidArgs;
+        const digit: usize = @intCast(c - '0');
+        if (n > (max_payload - digit) / 10) return error.PayloadTooLarge;
+        n = n * 10 + digit;
     }
     return n;
 }

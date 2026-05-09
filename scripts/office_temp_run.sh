@@ -11,7 +11,7 @@ PATCHBAY="$ROOT/examples/office-temp.edn"
 PORT=4333
 export NATS_URL="nats://127.0.0.1:$PORT"
 
-[ -x "$MB_BIN" ] || { echo "build first: zig build --release=fast"; exit 1; }
+[ -x "$MB_BIN" ] || { echo "build first: zig build --release=safe"; exit 1; }
 command -v nats >/dev/null 2>&1 || { echo "missing nats CLI"; exit 1; }
 
 SUB_LOG=/tmp/office_temp_sub.log

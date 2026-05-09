@@ -27,8 +27,8 @@ DEFAULT_LOG="$TMP/default.log"
 SAMPLES="$TMP/samples.txt"
 
 if [ ! -x "$BIN" ]; then
-    echo "building (release=fast)..."
-    (cd "$ROOT" && zig build --release=fast) || exit 1
+    echo "building (release=safe)..."
+    (cd "$ROOT" && zig build --release=safe) || exit 1
 fi
 
 cleanup() {
