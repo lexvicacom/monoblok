@@ -169,47 +169,17 @@ monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
 `--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
 whose filter no longer matches at its recorded position is skipped with a warning.
 
-## Mixer mode (experimental)
-
-`monoblok --mixer cfg.edn` runs a stateless front-end that spawns N worker processes (each a normal monoblok) and forwards each publish to the worker owning its first subject token. Clients connect to just one NATS endpoint. Subscriptions coalesce across clients (one upstream SUB per unique filter), so a hundred dashboards on the same filter look like one to the worker.
-
-```edn
-(mixer
-  :listen "tcp://0.0.0.0:4222"
-  :workers
-    [[:shard "SENSORS" :patchbay "examples/mixer-sensors.edn"]
-     [:shard "ORDERS"  :patchbay "examples/mixer-orders.edn"]
-     [:shard "*"       :patchbay "examples/mixer-default.edn"]])
-```
-
-Build-out before build-across: start with one monoblok and reach for the mixer when one core actually isn't enough. See [docs/mixer.md](./docs/mixer.md) for the sharding rule, SUB constraints, supervisor policy, and what's out of scope in v1. Runnable example: [`examples/mixer.py`](./examples/mixer.py).
-
-> Note: mixer mode is experimental. The mixer runs single-threaded like the workers, so its own throughput on one core is the system-wide cap on inbound publishes. 
-
-## Observability
-
-Every accepted/closed connection logs at info level. Two always-on warn thresholds fire if something's off:
-
-- **Patchbay amplification**: a single inbound PUB causing 64+ rule-generated publishes logs once with the offending subject.
-- **Outbound buffer high-water**: a connection's pending-write buffer growing past 4 MiB between drains logs the conn id and size (slow consumer or fan-out blow-up).
-
-`--stats` prints a periodic summary every 10k inbound PUBs:
-
-```
-info: stats: pubs=10000 max_rule_publishes=0 max_out_hwm=41160B
-```
-
-## Architecture
+## Design
 
 Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
 
 Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's serial through monoblok. Adding a second thread would mean atomics or locks. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. 
 
-Mixer mode reuses that same single-loop model per worker. The mixer-to-worker hop runs over inherited socketpairs rather than TCP or AF_UNIX, which simplifies things since the processes share a host.
+[Mixer mode](./docs/mixer.md) reuses that same single-loop model per worker. The mixer-to-worker hop runs over inherited socketpairs rather than TCP or AF_UNIX, which simplifies things since the processes share a host.
 
 ## Deploying
 
-monoblok has very low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good starting point. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
+monoblok has low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good starting point. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
 
 The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
 
