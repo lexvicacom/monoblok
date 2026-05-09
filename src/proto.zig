@@ -72,8 +72,13 @@ pub const ServerOp = union(enum) {
     err: []const u8,
 
     pub const Msg = struct {
+        kind: ServerMsgKind = .msg,
         subject: []const u8,
         sid: []const u8,
+        /// Bytes after the SID through the end of the complete frame. Mixer
+        /// uses this to rewrite only the SID while preserving reply, lengths,
+        /// headers, payload, and trailer byte-for-byte.
+        suffix_after_sid: []const u8 = &.{},
         reply: ?[]const u8,
         /// Optional NATS protocol-v1 header chunk (HMSG). Same shape and
         /// opacity rules as `Pub.headers`.
@@ -82,8 +87,18 @@ pub const ServerOp = union(enum) {
     };
 };
 
+pub const ServerMsgKind = enum { msg, hmsg };
+
 pub const ServerParseResult = struct {
     op: ServerOp,
+    consumed: usize,
+};
+
+pub const ServerMsgEnvelope = struct {
+    kind: ServerMsgKind,
+    subject: []const u8,
+    sid: []const u8,
+    suffix_after_sid: []const u8,
     consumed: usize,
 };
 
@@ -272,6 +287,31 @@ pub fn parseServerOp(buf: []const u8) ParseError!ServerParseResult {
     return error.UnknownOp;
 }
 
+/// Parse only the server-to-client message envelope needed by mixer return
+/// routing. It validates frame boundaries but does not split reply, headers,
+/// or payload.
+pub fn parseServerMsgEnvelope(buf: []const u8) ParseError!ServerMsgEnvelope {
+    const nl = std.mem.indexOfScalar(u8, buf, '\n') orelse {
+        if (buf.len > max_control_line) return error.ControlLineTooLong;
+        return error.NeedMoreData;
+    };
+    if (nl > max_control_line) return error.ControlLineTooLong;
+
+    const line_end = nl + 1;
+    const line = buf[0..nl];
+    const trimmed = std.mem.trimEnd(u8, line, "\r");
+    if (trimmed.len == 0) return error.MalformedOp;
+
+    const verb_end = std.mem.indexOfAny(u8, trimmed, " \t") orelse trimmed.len;
+    const verb = trimmed[0..verb_end];
+    const rest_raw = if (verb_end == trimmed.len) trimmed[0..0] else trimmed[verb_end + 1 ..];
+    const rest = std.mem.trim(u8, rest_raw, " \t");
+
+    if (eqIgnoreCase(verb, "MSG")) return parseMsgEnvelope(.msg, buf, line_end, rest);
+    if (eqIgnoreCase(verb, "HMSG")) return parseMsgEnvelope(.hmsg, buf, line_end, rest);
+    return error.UnknownOp;
+}
+
 fn parseMsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!ServerParseResult {
     var it = std.mem.tokenizeAny(u8, rest, " \t");
     const subject = it.next() orelse return error.InvalidArgs;
@@ -302,7 +342,14 @@ fn parseMsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Serve
     };
 
     return .{
-        .op = .{ .msg = .{ .subject = subject, .sid = sid, .reply = reply, .payload = payload } },
+        .op = .{ .msg = .{
+            .kind = .msg,
+            .subject = subject,
+            .sid = sid,
+            .suffix_after_sid = suffixAfterSid(buf, sid, line_end + nbytes + trailer_len),
+            .reply = reply,
+            .payload = payload,
+        } },
         .consumed = line_end + nbytes + trailer_len,
     };
 }
@@ -345,9 +392,67 @@ fn parseHmsg(buf: []const u8, line_end: usize, rest: []const u8) ParseError!Serv
     };
 
     return .{
-        .op = .{ .msg = .{ .subject = subject, .sid = sid, .reply = reply, .headers = headers, .payload = payload } },
+        .op = .{ .msg = .{
+            .kind = .hmsg,
+            .subject = subject,
+            .sid = sid,
+            .suffix_after_sid = suffixAfterSid(buf, sid, line_end + total_len + trailer_len),
+            .reply = reply,
+            .headers = headers,
+            .payload = payload,
+        } },
         .consumed = line_end + total_len + trailer_len,
     };
+}
+
+fn parseMsgEnvelope(kind: ServerMsgKind, buf: []const u8, line_end: usize, rest: []const u8) ParseError!ServerMsgEnvelope {
+    var it = std.mem.tokenizeAny(u8, rest, " \t");
+    const subject = it.next() orelse return error.InvalidArgs;
+    const sid = it.next() orelse return error.InvalidArgs;
+
+    const total_len = switch (kind) {
+        .msg => blk: {
+            const a = it.next() orelse return error.InvalidArgs;
+            const b = it.next();
+            if (it.next() != null) return error.InvalidArgs;
+            const nbytes_str = b orelse a;
+            break :blk try parseUnsigned(usize, nbytes_str);
+        },
+        .hmsg => blk: {
+            const a = it.next() orelse return error.InvalidArgs;
+            const b = it.next() orelse return error.InvalidArgs;
+            const c = it.next();
+            if (it.next() != null) return error.InvalidArgs;
+            const hdr_str = if (c != null) b else a;
+            const total_str = c orelse b;
+            const hdr_len = try parseUnsigned(usize, hdr_str);
+            const n = try parseUnsigned(usize, total_str);
+            if (hdr_len > n) return error.InvalidArgs;
+            break :blk n;
+        },
+    };
+    if (total_len > max_payload) return error.PayloadTooLarge;
+
+    const after_header = buf[line_end..];
+    if (after_header.len < total_len + 1) return error.NeedMoreData;
+    const tail = after_header[total_len..];
+    const trailer_len: usize = switch (tail[0]) {
+        '\r' => if (tail.len < 2) return error.NeedMoreData else if (tail[1] == '\n') 2 else return error.MalformedOp,
+        '\n' => 1,
+        else => return error.MalformedOp,
+    };
+    const consumed = line_end + total_len + trailer_len;
+    return .{
+        .kind = kind,
+        .subject = subject,
+        .sid = sid,
+        .suffix_after_sid = suffixAfterSid(buf, sid, consumed),
+        .consumed = consumed,
+    };
+}
+
+fn suffixAfterSid(buf: []const u8, sid: []const u8, consumed: usize) []const u8 {
+    return buf[(@intFromPtr(sid.ptr) - @intFromPtr(buf.ptr)) + sid.len .. consumed];
 }
 
 /// Parsed subset of the CONNECT JSON body. Fields default to false / null when
@@ -497,6 +602,26 @@ pub fn writeMsg(
     out.appendSliceAssumeCapacity("\r\n");
     out.appendSliceAssumeCapacity(payload);
     out.appendSliceAssumeCapacity("\r\n");
+}
+
+pub fn writeServerMsgWithSid(
+    gpa: Allocator,
+    out: *std.ArrayList(u8),
+    kind: ServerMsgKind,
+    subject: []const u8,
+    sid: []const u8,
+    suffix_after_sid: []const u8,
+) !void {
+    const verb = switch (kind) {
+        .msg => "MSG ",
+        .hmsg => "HMSG ",
+    };
+    try out.ensureUnusedCapacity(gpa, verb.len + subject.len + 1 + sid.len + suffix_after_sid.len);
+    out.appendSliceAssumeCapacity(verb);
+    out.appendSliceAssumeCapacity(subject);
+    out.appendAssumeCapacity(' ');
+    out.appendSliceAssumeCapacity(sid);
+    out.appendSliceAssumeCapacity(suffix_after_sid);
 }
 
 fn appendUnsignedDecimal(out: *std.ArrayList(u8), n: usize) void {

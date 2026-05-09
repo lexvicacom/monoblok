@@ -1,6 +1,7 @@
 // Stateless mixer. Spawns one monoblok worker per shard over a socketpair
 // and forwards client PUBs to the worker owning the first subject token.
-// SUB/UNSUB and worker->client MSGs are not routed in this skeleton.
+// SUB/UNSUB are coalesced per worker, and worker MSG/HMSG frames are routed
+// back to client subscribers by rewriting only the worker SID.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -291,6 +292,16 @@ pub const Worker = struct {
         var cursor: usize = 0;
         while (cursor < self.rx.items.len) {
             const slice = self.rx.items[cursor..];
+            if (proto.parseServerMsgEnvelope(slice)) |m| {
+                try self.dispatchMsg(m, slice[0..m.consumed], &kicks);
+                cursor += m.consumed;
+                continue;
+            } else |err| switch (err) {
+                error.NeedMoreData => break,
+                error.UnknownOp => {},
+                else => return err,
+            }
+
             const result = proto.parseServerOp(slice) catch |err| switch (err) {
                 error.NeedMoreData => break,
                 else => return err,
@@ -299,7 +310,7 @@ pub const Worker = struct {
                 .info => {},
                 .pong, .ping, .ok => {},
                 .err => |e| std.log.warn("mixer: worker shard={s} -ERR {s}", .{ self.shard, e }),
-                .msg => |m| try self.dispatchMsg(m, slice[0..result.consumed], &kicks),
+                .msg => unreachable,
             }
             cursor += result.consumed;
         }
@@ -311,13 +322,13 @@ pub const Worker = struct {
         kicks.flush(self.mixer.loop);
     }
 
-    fn dispatchMsg(self: *Worker, m: proto.ServerOp.Msg, wire: []const u8, kicks: *KickQueue) !void {
+    fn dispatchMsg(self: *Worker, m: proto.ServerMsgEnvelope, wire: []const u8, kicks: *KickQueue) !void {
         const entry = self.entryForSid(m.sid) orelse {
             std.log.warn("mixer: MSG with unknown sid {s} from shard={s}", .{ m.sid, self.shard });
             return;
         };
 
-        if (m.headers == null and m.reply == null and entry.subscribers.items.len == 1) {
+        if (entry.subscribers.items.len == 1) {
             const sub = entry.subscribers.items[0];
             if (!sub.client.closing and std.mem.eql(u8, sub.client_sid, m.sid)) {
                 try sub.client.out.appendSlice(self.mixer.gpa, wire);
@@ -328,11 +339,7 @@ pub const Worker = struct {
 
         for (entry.subscribers.items) |sub| {
             if (sub.client.closing) continue;
-            if (m.headers) |h| {
-                try proto.writeHmsg(self.mixer.gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, h, m.payload);
-            } else {
-                try proto.writeMsg(self.mixer.gpa, &sub.client.out, m.subject, sub.client_sid, m.reply, m.payload);
-            }
+            try proto.writeServerMsgWithSid(self.mixer.gpa, &sub.client.out, m.kind, m.subject, sub.client_sid, m.suffix_after_sid);
             kicks.push(sub.client);
         }
     }
