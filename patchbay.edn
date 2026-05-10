@@ -45,15 +45,21 @@
       (publish! (subject-append "smoothed"))))
 
 ; Time-windowed smoothing: 5-second sliding average. Old samples expire
-; on the next push or the server's clock walker, whichever is sooner.
+; on the next push or the slot's exact deadline timer, whichever is sooner.
 (on "sensors.*"
   (-> payload-float
       (moving-avg :ms 5000)
       (publish! (subject-append "avg5s"))))
 
+; JSON device frame fan-out. This lets the rest of the patchbay treat
+; devices.kitchen.temp and devices.kitchen.hum as normal scalar streams.
+; :reentrant true lets the demuxed publishes feed the following rules.
+(on "devices.*" :reentrant true
+  (json-demux! "temp" "hum" "batt" payload))
+
 ; 1-minute aligned OHLC bars on a price stream. Bars close on the next
-; tick that crosses a wall-clock minute boundary, or from the server
-; walker if the feed goes quiet.
+; tick that crosses a wall-clock minute boundary, or from the slot's
+; exact deadline timer if the feed goes quiet.
 ;(on "MARKET.*"
 ;  (bar! :ms 60000 payload-float))
 
