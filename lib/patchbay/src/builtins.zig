@@ -15,7 +15,7 @@ const EvalError = eval.EvalError;
 const WindowKind = sexpr.WindowKind;
 const WindowSpec = sexpr.WindowSpec;
 
-const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread, transition, on_silence };
+const SpecialForm = enum { @"if", @"when", @"and", @"or", do, thread, transition, on_silence, dropout };
 
 const special_form_map = std.StaticStringMap(SpecialForm).initComptime(.{
     .{ "if", .@"if" },
@@ -26,6 +26,7 @@ const special_form_map = std.StaticStringMap(SpecialForm).initComptime(.{
     .{ "->", .thread },
     .{ "transition", .transition },
     .{ "on-silence", .on_silence },
+    .{ "dropout", .dropout },
 });
 
 const Op = enum {
@@ -133,6 +134,7 @@ pub fn evalCall(ctx: *Context, items: []const Value) EvalError!Value {
         .thread => evalThread(ctx, args),
         .transition => evalTransition(ctx, args),
         .on_silence => evalOnSilence(ctx, args),
+        .dropout => evalDropout(ctx, args),
     };
 
     const tag = op_map.get(op) orelse return error.UnknownSymbol;
@@ -309,6 +311,61 @@ fn evalOnSilence(ctx: *Context, args: []const Value) EvalError!Value {
     return .nil;
 }
 
+/// `(dropout :ms N :lost LOST :found FOUND)`. Each matching message
+/// arms/resets a per-subject deadline. If the stream goes quiet, LOST is
+/// evaluated once and the slot stays tripped until the next matching
+/// message evaluates FOUND.
+fn evalDropout(ctx: *Context, args: []const Value) EvalError!Value {
+    const rule = ctx.current_rule orelse return error.TypeMismatch;
+    const win = try takeWindow(args, 0);
+    if (win.spec.kind != .time_ms) return error.TypeMismatch;
+    const branches = try takeDropoutBranches(args[win.consumed..]);
+
+    const key = try state.keyForOp(ctx.arena, "dropout", ctx.subject);
+    const slot = try state.getOrPutStateSlot(ctx.gpa, rule, key);
+    const c = try ensureClocked(ctx, slot.value_ptr, .dropout, win.spec.n);
+    c.period_ms = win.spec.n;
+    c.body = branches.lost;
+    c.found_body = branches.found;
+    try c.setSubject(ctx.gpa, ctx.subject);
+    try c.setPayload(ctx.gpa, ctx.payload);
+
+    if (c.tripped) {
+        c.tripped = false;
+        for (c.found_body) |form| _ = try ctx.eval_fn(ctx, form);
+    }
+
+    c.deadline_ms = ctx.now_ms + @as(i64, @intCast(win.spec.n));
+    ctx.notifyClockSlot(rule, slot.key_ptr);
+    return .nil;
+}
+
+const DropoutBranches = struct {
+    lost: []const Value,
+    found: []const Value,
+};
+
+fn takeDropoutBranches(args: []const Value) EvalError!DropoutBranches {
+    if (args.len != 4) return error.ArityMismatch;
+    var lost: ?[]const Value = null;
+    var found: ?[]const Value = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 2) {
+        if (args[i] != .keyword) return error.TypeMismatch;
+        if (std.mem.eql(u8, args[i].keyword, "lost")) {
+            lost = args[i + 1 .. i + 2];
+        } else if (std.mem.eql(u8, args[i].keyword, "found")) {
+            found = args[i + 1 .. i + 2];
+        } else {
+            return error.TypeMismatch;
+        }
+    }
+    return .{
+        .lost = lost orelse return error.ArityMismatch,
+        .found = found orelse return error.ArityMismatch,
+    };
+}
+
 fn ensureClocked(
     ctx: *Context,
     entry: *state.StateEntry,
@@ -338,6 +395,11 @@ pub fn fireClocked(ctx: *Context, rule: *state.Rule, entry: *state.StateEntry, n
     switch (c.kind) {
         .on_silence => {
             c.deadline_ms = null;
+            for (c.body) |form| _ = try ctx.eval_fn(ctx, form);
+        },
+        .dropout => {
+            c.deadline_ms = null;
+            c.tripped = true;
             for (c.body) |form| _ = try ctx.eval_fn(ctx, form);
         },
         .debounce => {
