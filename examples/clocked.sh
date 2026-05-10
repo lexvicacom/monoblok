@@ -20,13 +20,15 @@ done
 settle 1.2
 pub clocked.sensor.temp 30
 settle 6.0
+pub clocked.sensor.temp 31
+settle 0.5
 
 note \
-    "Published a short burst, then one later update, then went quiet." \
+    "Published a short burst, one later update, then waited for dropout and published a recovery update." \
     "debounce! emits the final value after 250ms of quiet." \
     "sample! emits the latest value once per second." \
     "aggregate! emits 5-second average/rate values from the clock." \
-    "on-silence marks the subject stale after 5 seconds without input."
+    "dropout marks the subject stale after 5 seconds without input, then clears it on recovery."
 show "publishes"          _pubs.log
 show "raw input"          raw.txt
 show "stale flag"         stale.txt
