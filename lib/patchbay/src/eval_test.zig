@@ -1597,6 +1597,61 @@ test "on-silence evaluates body from clock fire" {
     try testing.expectEqualStrings("last", tp.buf.items[0].payload);
 }
 
+test "dropout emits lost on silence and found only after trip" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const loaded = try loadRules(arena,
+        \\(on "device.*"
+        \\  (dropout :ms 100
+        \\    :lost (publish! (subject-append "stale") "true")
+        \\    :found (publish! (subject-append "stale") "false")))
+    );
+    defer deinitRules(loaded, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "device.a",
+        .payload = "beat",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+        .now_ms = 0,
+    };
+    try run(loaded, &ctx);
+    try testing.expectEqual(@as(usize, 0), tp.buf.items.len);
+
+    ctx.now_ms = 50;
+    try run(loaded, &ctx);
+    try testing.expectEqual(@as(usize, 0), tp.buf.items.len);
+
+    var fire_ctx: Context = .{
+        .subject = "",
+        .payload = "",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    const slot = loaded[0].state.getPtr("dropout/n:device.a").?;
+    try builtins.fireClocked(&fire_ctx, &loaded[0], slot, 100);
+    try testing.expectEqual(@as(usize, 0), tp.buf.items.len);
+    try builtins.fireClocked(&fire_ctx, &loaded[0], slot, 150);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("device.a.stale", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("true", tp.buf.items[0].payload);
+
+    ctx.now_ms = 160;
+    try run(loaded, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("device.a.stale", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("false", tp.buf.items[1].payload);
+
+    ctx.now_ms = 180;
+    try run(loaded, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+}
+
 test "debounce publishes latest value after quiet interval" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();

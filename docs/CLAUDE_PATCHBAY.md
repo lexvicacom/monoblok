@@ -142,6 +142,7 @@ Windowed aggregates (per `(rule, subject, op, window-kind)` slot; tick and time 
 - `(stddev WINDOW X)`, `(variance WINDOW X)` population stddev / variance over WINDOW. O(n).
 - `(throttle WINDOW MAX X)` pass X iff fewer than MAX events have already passed within WINDOW (then record this pass). Differs from `hold-off`: `hold-off` is min-interval-between-passes; `throttle` is max-count-per-window.
 - `(on-silence :ms N BODY...)` clocked special form: reset a per-subject timer on each match; evaluate BODY with the last subject/payload if no match arrives for N ms.
+- `(dropout :ms N :lost LOST :found FOUND)` clocked liveness latch: first match arms the timer quietly; silence evaluates LOST once; the next match after that evaluates FOUND once.
 - `(debounce! :ms N SUBJECT VALUE)` trailing-edge publish: emit the latest SUBJECT/VALUE after N ms of quiet.
 - `(sample! :ms N SUBJECT VALUE)` cadence publish: emit the latest SUBJECT/VALUE every N ms after first match.
 - `(aggregate! :ms N SUBJECT :METRIC X)` clocked aggregate publish. Metrics: `:avg`, `:sum`, `:min`, `:max`, `:count`, `:rate`.
@@ -266,8 +267,9 @@ still accepted.
 
 ; Clocked liveness + trailing/cadence values.
 (on "devices.*.heartbeat"
-  (on-silence :ms 30000
-    (publish! (subject-append "stale") "true")))
+  (dropout :ms 30000
+    :lost  (publish! (subject-append "stale") "true")
+    :found (publish! (subject-append "stale") "false")))
 
 (on "knobs.*"
   (debounce! :ms 250 (subject-append "settled") payload))
