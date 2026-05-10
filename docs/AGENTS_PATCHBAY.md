@@ -314,6 +314,34 @@ still accepted.
       (publish! (subject-append "rate-limited"))))
 ```
 
+## Cheap validation
+
+When you can run local commands, validate patchbay edits before handing
+them back:
+
+```sh
+monoblok --validate patchbay.edn
+```
+
+`--validate` form-lints the file and exits without opening a NATS
+socket. It catches parse errors, invalid subjects, arity/type mistakes,
+and rule bodies that fail against synthetic matching subjects.
+
+For evaluator-level checks without starting a daemon, use
+`--soundcheck`. It reads newline-delimited `SUBJECT|payload` rows on
+stdin, echoes inputs to stdout, and prints any `publish!` emissions:
+
+```sh
+printf 'sensors.temp|31\n' | monoblok --soundcheck patchbay.edn
+printf 'sensors.temp|31\n' | monoblok --soundcheck --soundcheck-label patchbay.edn
+```
+
+Use `--soundcheck` when you need cheap confidence that a real input
+subject matches the intended rules and produces the expected derived
+subjects/payloads. Time-based ops use the normal libxev clock path; if
+you do not want to wait for pending timers after stdin closes, add
+`--soundcheck-linger-ms 0`.
+
 ## Companion pump drivers
 
 If you are asked to generate a pump driver for the topology, create a
