@@ -53,7 +53,7 @@ Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an 
 
 The vocabulary is borrowed from electronics (`squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
 
-JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; top-level keys only.
+JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep.
 
 Time-windowed `bar!` closes and `moving-* :ms` evictions are driven by one libxev timer per active slot, scheduled at the slot's exact next deadline; a quiet feed still flushes its bar at the window boundary, with no periodic walker.
 

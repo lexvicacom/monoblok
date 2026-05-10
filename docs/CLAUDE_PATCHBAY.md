@@ -151,10 +151,10 @@ Edge gates (take a boolean, fire once per transition; first sight never fires):
 
 - `(rising-edge X)`, `(falling-edge X)`
 
-JSON (top-level object only, no JSON path, value-last):
+JSON (value-last):
 
-- `(json-get KEY PAYLOAD)` returns the field as number / string / boolean, or nil if missing, malformed, null, or nested. Threads through `->` and short-circuits `publish!` on nil.
-- `(json-demux! KEY ... PAYLOAD)` side-effecting demux: for each KEY, publishes the field's value to `<subject>.<key>`. Skips missing / null / nested fields silently. Returns nil. Use as the head rule for JSON-emitting devices so the rest of the patchbay stays scalar.
+- `(json-get KEY PAYLOAD)` returns the selected top-level key or dotted object path up to four tokens deep (`"a.b.c.d"`) as number / string / boolean, or nil if missing, malformed, null, array, or non-selected nested object. Threads through `->` and short-circuits `publish!` on nil.
+- `(json-demux! KEY ... PAYLOAD)` side-effecting demux: for each top-level KEY or dotted object path up to four tokens deep (`"a.b.c.d"`), publishes the value to `<subject>.<suffix>`. By default suffix is the key/path; `:leaf` uses only the final path token, and `[PATH SUFFIX]` overrides one output suffix. Skips missing / null / arrays / non-selected nested objects silently. Returns nil. Use as the head rule for JSON-emitting devices so the rest of the patchbay stays scalar.
 
 Bars (side-effecting, per (rule, subject, window-kind)):
 

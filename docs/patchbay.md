@@ -571,20 +571,21 @@ when you later add or remove rules around it.
 ## JSON payloads
 
 Most off-the-shelf sensors and gateways emit JSON frames (`{"temp":12.04,"hum":80}`),
-not bare scalars. Two ops bridge that gap. Both look up keys against
-the **top-level** object only (no JSON path, no nesting, no array
-indexing) and use Zig's `std.json.Scanner` so escapes and `\uXXXX` are
-handled correctly.
+not bare scalars. Two ops bridge that gap. Both accept top-level keys and
+dotted object paths up to four levels deep (`"a.b.c.d"`), but not arrays
+or full JSONPath. Both use Zig's `std.json.Scanner` so escapes and
+`\uXXXX` are handled correctly.
 
 | form                          | what it does                                                                |
 |-------------------------------|-----------------------------------------------------------------------------|
 | `(json-get KEY PAYLOAD)`      | return that field's value as a number, string, or boolean. Nil otherwise.   |
-| `(json-demux! KEY ... PAYLOAD)` | publish each KEY's value to `<subject>.<key>`. Side-effecting. Returns nil. |
+| `(json-demux! KEY ... PAYLOAD)` | publish each KEY/path value to `<subject>.<suffix>`. Side-effecting. Returns nil. |
 
-`json-get` returns `nil` whenever the field can't be turned into a
-scalar (key missing, payload not a JSON object, value is `null`, value
-is a nested object/array). That nil flows through `publish!` as a
-no-op, so a JSON-aware pipeline reads exactly like the analog ones:
+`json-get` returns `nil` whenever the selected path can't be turned into
+a scalar (key missing, payload not a JSON object, value is `null`, value
+is an array or non-selected nested object). That nil flows through
+`publish!` as a no-op, so a JSON-aware pipeline reads exactly like the
+analog ones:
 
 ```edn
 ; Treat a JSON sensor frame like a scalar stream.
@@ -611,9 +612,33 @@ can stay scalar.
   (json-demux! "temp" "hum" payload))
 ```
 
-If a key is missing, null, or holds a nested value, `json-demux!` skips
-it silently rather than emitting an error. Numbers come out canonically
-formatted, strings are unquoted, booleans render as `true` / `false`.
+For nested objects, use dotted paths with either JSON op. In
+`json-demux!`, the full path is appended to the input subject by default:
+
+```edn
+; sensors.foo {"temp":{"c":20}} -> sensors.foo.temp.c 20
+(on "sensors.*"
+  (json-demux! "temp.c" payload))
+```
+
+`json-demux!` can flatten output subjects with `:leaf`, or override a
+single output suffix with `[PATH SUFFIX]`:
+
+```edn
+; both emit sensors.foo.c for {"temp":{"c":20}}
+(on "sensors.*"
+  (json-demux! :leaf "temp.c" payload))
+
+(on "sensors.*"
+  (json-demux! ["temp.c" "c"] payload))
+```
+
+Both JSON ops support object paths up to four tokens deep, such as
+`"a.b.c.d"`. Deeper paths are rejected when the rule runs. If a key is
+missing, null, an array, or a non-selected nested object, `json-demux!`
+skips it silently rather than emitting an error. Numbers come out
+canonically formatted, strings are unquoted, booleans render as `true` /
+`false`.
 
 Both ops are arity-flexible at the **value-last** end (`PAYLOAD` is the
 last argument), matching the rest of the dialect, so you can just as

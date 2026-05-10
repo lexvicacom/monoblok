@@ -41,7 +41,7 @@ window.
 | form | effect |
 |------|--------|
 | `(publish! SUBJECT VALUE)` | emit a publish; no-op if VALUE is nil; numbers coerced canonically |
-| `(json-demux! KEY... PAYLOAD)` | break a top-level JSON object out onto `<subject>.<key>` for each KEY |
+| `(json-demux! KEY... PAYLOAD)` | break JSON fields or dotted object paths out onto `<subject>.<suffix>` |
 | `(count!)` / `(count! COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
 | `(bar! WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
 | `(on-silence :ms N BODY...)` | reset a per-subject timer on each match; evaluate BODY if no match arrives for N ms |
@@ -138,13 +138,16 @@ Two flavours, picked by what you actually want:
 
 ## JSON
 
-Top-level objects only (no JSON path, no array indexing, no nesting).
-Backed by `std.json.Scanner`, so escapes / `\uXXXX` work.
+Backed by `std.json.Scanner`, so escapes / `\uXXXX` work. Both JSON ops
+support top-level keys and dotted object paths up to four tokens deep,
+such as `"a.b.c.d"`; arrays and deeper paths are not supported. For
+`json-demux!`, `:leaf` flattens output suffixes to the last path token,
+and `[PATH SUFFIX]` overrides one output suffix.
 
 | form | returns |
 |------|---------|
-| `(json-get KEY PAYLOAD)` | field as number / string / bool, or nil if missing / malformed / null / nested |
-| `(json-demux! KEY... PAYLOAD)` | side-effecting; publishes each present field to `<subject>.<key>`, returns nil |
+| `(json-get KEY PAYLOAD)` | field/path as number / string / bool, or nil if missing / malformed / null / non-primitive |
+| `(json-demux! KEY... PAYLOAD)` | side-effecting; publishes each present field/path to `<subject>.<suffix>`, returns nil |
 
 ## Bridge keywords
 
