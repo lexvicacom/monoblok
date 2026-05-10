@@ -91,6 +91,7 @@ Evaluate their arguments lazily / with short-circuiting.
 | `(do  X...)`                | evaluate in order, return the last                           |
 | `(-> X F...)`               | thread `X` as the **last** arg of each `F` (see below)       |
 | `(transition C UP DOWN)`    | eval `UP` on `C` false→true, `DOWN` on true→false, else nil  |
+| `(dropout :ms N :lost L :found F)` | eval `L` after silence, `F` on recovery after a trip   |
 
 ## Comparisons and logic
 
@@ -485,21 +486,22 @@ passes even if the feed goes quiet.
 | form                                  | behavior                                      |
 |---------------------------------------|-----------------------------------------------|
 | `(on-silence :ms N BODY...)`          | evaluate BODY if no matching PUB arrives for N ms |
+| `(dropout :ms N :lost LOST :found FOUND)` | silence runs LOST once; next match runs FOUND once |
 | `(debounce! :ms N SUBJECT VALUE)`     | publish the latest SUBJECT/VALUE after N ms of quiet |
 | `(sample! :ms N SUBJECT VALUE)`       | publish the latest SUBJECT/VALUE every N ms after the first match |
 | `(aggregate! :ms N SUBJECT :METRIC X)` | publish a time-window metric on the clock deadline |
 
 `on-silence` is a special form: BODY is stored unevaluated and runs
 later with the last subject and payload in scope. It is useful for
-liveness and stale-device detection.
+liveness and stale-device detection. `dropout` adds the matching
+recovery side: the first heartbeat arms quietly, silence runs `:lost`,
+and only the next heartbeat after that runs `:found`.
 
 ```edn
 (on "devices.*.heartbeat"
-  (on-silence :ms 30000
-    (publish! (subject-append "stale") "true")))
-
-(on "devices.*.heartbeat"
-  (publish! (subject-append "stale") "false"))
+  (dropout :ms 30000
+    :lost  (publish! (subject-append "stale") "true")
+    :found (publish! (subject-append "stale") "false")))
 ```
 
 `debounce!` is a trailing-edge emitter. It differs from `deadband`:
