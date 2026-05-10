@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
     types:
       - opened
@@ -34,3 +35,22 @@ jobs:
           version: 0.16.0
       - name: Test
         run: zig build test --summary all
+
+  smoke:
+    needs: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install smoke dependencies
+        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd
+      - name: Build
+        run: zig build
+      - name: Server smoke
+        run: bash scripts/smoke.sh
+      - name: Mixer PUB smoke
+        run: bash scripts/mixer-smoke.sh
+      - name: Mixer SUB smoke
+        run: python3 scripts/mixer-sub-smoke.py
