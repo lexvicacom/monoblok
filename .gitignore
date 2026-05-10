@@ -9,3 +9,4 @@ perf.data*
 *.prof
 .claude/settings.local.json
 AGENTS.md
+!*/AGENTS.md

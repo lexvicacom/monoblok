@@ -141,8 +141,10 @@ Two flavours, picked by what you actually want:
 Backed by `std.json.Scanner`, so escapes / `\uXXXX` work. Both JSON ops
 support top-level keys and dotted object paths up to four tokens deep,
 such as `"a.b.c.d"`; arrays and deeper paths are not supported. For
-`json-demux!`, `:leaf` flattens output suffixes to the last path token,
-and `[PATH SUFFIX]` overrides one output suffix.
+`json-demux!`, the dotted path is the default output suffix:
+`"foo.atmo.bar"` emits `<subject>.foo.atmo.bar`. Use `:leaf` to flatten
+to the last path token (`<subject>.bar`), or `[PATH SUFFIX]` to override
+one output suffix.
 
 | form | returns |
 |------|---------|
