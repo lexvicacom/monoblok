@@ -92,31 +92,45 @@ class RigState:
 
     def env_payload(self) -> dict[str, object]:
         return {
-            "temp": round(self.temp, 1),
-            "pressure": round(self.pressure, 1),
-            "dust": round(self.dust, 3),
-            "radiation": round(self.radiation, 3),
-            "ice": round(self.ice, 1),
-            "seal": random.choice(SEAL_STATES),
+            "sensor": {
+                "thermal": {"temp": round(self.temp, 1)},
+                "atmo": {
+                    "pressure": round(self.pressure, 1),
+                    "dust": round(self.dust, 3),
+                    "radiation": round(self.radiation, 3),
+                },
+                "prospect": {"ice": round(self.ice, 1)},
+                "hatch": {"seal": random.choice(SEAL_STATES)},
+            },
         }
 
     def drill_payload(self) -> dict[str, object]:
         return {
-            "depth": round(self.depth, 2),
-            "torque": round(self.torque, 1),
-            "rpm": round(self.rpm, 1),
-            "vibration": round(self.vibration, 3),
-            "bit_temp": round(self.bit_temp, 1),
-            "mode": random.choice(DRILL_MODES),
+            "sensor": {
+                "bore": {"depth": round(self.depth, 2)},
+                "motor": {
+                    "torque": round(self.torque, 1),
+                    "rpm": round(self.rpm, 1),
+                    "mode": random.choice(DRILL_MODES),
+                },
+                "bit": {
+                    "vibration": round(self.vibration, 3),
+                    "temp": round(self.bit_temp, 1),
+                },
+            },
         }
 
     def power_payload(self) -> dict[str, object]:
         return {
-            "battery": round(self.battery, 1),
-            "solar": round(self.solar, 1),
-            "load": round(self.load, 1),
-            "heater": round(self.heater, 1),
-            "bus": random.choice(BUS_STATES),
+            "sensor": {
+                "storage": {"battery": round(self.battery, 1)},
+                "array": {"solar": round(self.solar, 1)},
+                "bus": {
+                    "load": round(self.load, 1),
+                    "heater": round(self.heater, 1),
+                    "state": random.choice(BUS_STATES),
+                },
+            },
         }
 
 

@@ -8,22 +8,42 @@
       "audit.>"])
 
 ; Environmental frame:
-; moonwell.rig-03.env {"temp":-142.1,"pressure":69.4,"dust":0.12,
-;                      "radiation":0.08,"ice":41.2,"seal":"LOCKED"}
+; moonwell.rig-03.env {"sensor":{"thermal":{"temp":-142.1},
+;                      "atmo":{"pressure":69.4,"dust":0.12,"radiation":0.08},
+;                      "prospect":{"ice":41.2},"hatch":{"seal":"LOCKED"}}}
 (on "moonwell.*.env" :reentrant true
-  (json-demux! "temp" "pressure" "dust" "radiation" "ice" "seal" payload))
+  (json-demux! ["sensor.thermal.temp" "temp"]
+               ["sensor.atmo.pressure" "pressure"]
+               ["sensor.atmo.dust" "dust"]
+               ["sensor.atmo.radiation" "radiation"]
+               ["sensor.prospect.ice" "ice"]
+               ["sensor.hatch.seal" "seal"]
+               payload))
 
 ; Drill frame:
-; moonwell.rig-03.drill {"depth":18.4,"torque":62,"rpm":94,
-;                        "vibration":0.31,"bit_temp":81.4,"mode":"AUTO"}
+; moonwell.rig-03.drill {"sensor":{"bore":{"depth":18.4},
+;                        "motor":{"torque":62,"rpm":94,"mode":"AUTO"},
+;                        "bit":{"vibration":0.31,"temp":81.4}}}
 (on "moonwell.*.drill" :reentrant true
-  (json-demux! "depth" "torque" "rpm" "vibration" "bit_temp" "mode" payload))
+  (json-demux! ["sensor.bore.depth" "depth"]
+               ["sensor.motor.torque" "torque"]
+               ["sensor.motor.rpm" "rpm"]
+               ["sensor.bit.vibration" "vibration"]
+               ["sensor.bit.temp" "bit_temp"]
+               ["sensor.motor.mode" "mode"]
+               payload))
 
 ; Power frame:
-; moonwell.rig-03.power {"battery":77.4,"solar":410,"load":360,
-;                        "heater":44,"bus":"NOMINAL"}
+; moonwell.rig-03.power {"sensor":{"storage":{"battery":77.4},
+;                        "array":{"solar":410},
+;                        "bus":{"load":360,"heater":44,"state":"NOMINAL"}}}
 (on "moonwell.*.power" :reentrant true
-  (json-demux! "battery" "solar" "load" "heater" "bus" payload))
+  (json-demux! ["sensor.storage.battery" "battery"]
+               ["sensor.array.solar" "solar"]
+               ["sensor.bus.load" "load"]
+               ["sensor.bus.heater" "heater"]
+               ["sensor.bus.state" "bus"]
+               payload))
 
 ; Stable dashboard channels.
 (on "moonwell.*.env.temp"
@@ -54,8 +74,9 @@
 (on "moonwell.*.env"
   (do
     (sample! :ms 5000 (subject-append "snapshot") payload)
-    (on-silence :ms 60000
-      (publish! (subject-append "stale") "true"))))
+    (dropout :ms 60000
+      :lost  (publish! (subject-append "stale") "true")
+      :found (publish! (subject-append "stale") "false"))))
 
 (on "moonwell.*.drill"
   (sample! :ms 3000 (subject-append "snapshot") payload))

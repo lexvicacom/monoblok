@@ -55,8 +55,9 @@
 (on "cloudhook.*.flight"
   (do
     (sample! :ms 4000 (subject-append "snapshot") payload)
-    (on-silence :ms 30000
-      (publish! (subject-append "stale") "true"))))
+    (dropout :ms 30000
+      :lost  (publish! (subject-append "stale") "true")
+      :found (publish! (subject-append "stale") "false"))))
 
 (on "cloudhook.*.weather"
   (sample! :ms 10000 (subject-append "snapshot") payload))
