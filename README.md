@@ -53,11 +53,11 @@ Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an 
 
 The vocabulary is borrowed from electronics (`squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
 
-JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep.
+JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep. The root [`patchbay.edn`](./patchbay.edn) includes a starter rule for this, while [`json-frames.edn`](./examples/json-frames.edn) shows the fuller version.
 
 Time-windowed `bar!` closes and `moving-* :ms` evictions are driven by one libxev timer per active slot, scheduled at the slot's exact next deadline; a quiet feed still flushes its bar at the window boundary, with no periodic walker.
 
-Full reference and worked examples in [docs/patchbay.md](./docs/patchbay.md). One-line summary of every form in the [cheatsheet](./docs/patchbay-cheatsheet.md). Runnable end-to-end demos in [`examples/`](./examples/); each `.edn` has a matching `.sh` that starts monoblok, publishes a sequence, subscribes in parallel, and prints publishes vs deliveries.
+The repository root [`patchbay.edn`](./patchbay.edn) is the short default tour: routing, filtering, numeric cleanup, LVC, JSON demux, and commented pointers to bars and bridging. Full reference and worked examples live in [docs/patchbay.md](./docs/patchbay.md). One-line summary of every form in the [cheatsheet](./docs/patchbay-cheatsheet.md). Runnable end-to-end demos are in [`examples/`](./examples/); each `.edn` has a matching `.sh` that starts monoblok, publishes a sequence, subscribes in parallel, and prints publishes vs deliveries. Larger, weirder Codex-generated patchbays live in [`advanced-examples/`](./advanced-examples/).
 
 | file                                              | what it shows                                                   |
 |---------------------------------------------------|-----------------------------------------------------------------|
