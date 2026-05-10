@@ -120,11 +120,11 @@ sleep 0.4
 
 wait $SUB_JOB 2>/dev/null || true
 
-if ! grep -qE '^12\r?$' "$SUB_OUT"; then
+if ! tr -d '\r' < "$SUB_OUT" | grep -qx '12'; then
     echo "FAIL: \$LVC stream should deliver cached value 12 on subscribe"
     cat "$SUB_OUT"; exit 1
 fi
-if ! grep -qE '^13\r?$' "$SUB_OUT"; then
+if ! tr -d '\r' < "$SUB_OUT" | grep -qx '13'; then
     echo "FAIL: \$LVC stream should deliver live value 13"
     cat "$SUB_OUT"; exit 1
 fi
