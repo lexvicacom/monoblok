@@ -8,7 +8,7 @@
 ; sits at the tail of the rule.
 ;   devices.kitchen {"temp":12.5,"hum":80} -> devices.kitchen.temp 12.5
 ;                                             devices.kitchen.hum  80
-; Missing, null, and nested fields are skipped silently.
+; Missing, null, array, and non-selected nested fields are skipped silently.
 (on "devices.*" :reentrant true
   (json-demux! "temp" "hum" "batt" payload))
 
@@ -28,7 +28,7 @@
 
 ; Inline lookup: sometimes you only want one field from a frame and
 ; don't need the demux. Pull it straight off the JSON and into a
-; threaded pipeline. json-get returns nil on missing/malformed/nested,
+; threaded pipeline. json-get returns nil on missing/malformed/non-primitive,
 ; and publish! is a no-op on nil, so the rule self-skips bad frames.
 (on "devices.*"
   (-> payload

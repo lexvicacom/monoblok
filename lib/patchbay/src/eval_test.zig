@@ -1094,7 +1094,7 @@ test "json-get extracts numeric field and threads through pipeline" {
     try testing.expectEqualStrings("12", tp.buf.items[0].payload);
 }
 
-test "json-get returns nil for missing key, malformed payload, nested values" {
+test "json-get returns nil for missing key, malformed payload, non-primitive values" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1161,6 +1161,53 @@ test "json-get extracts strings (escapes decoded) and booleans" {
     try testing.expectEqualStrings("true", tp.buf.items[1].payload);
 }
 
+test "json-get extracts dotted object paths up to four levels" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (publish! "out.room" (json-get "meta.location.floor.room" payload)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "in",
+        .payload = "{\"meta\":{\"location\":{\"floor\":{\"room\":\"lab\"}}}}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 1), tp.buf.items.len);
+    try testing.expectEqualStrings("out.room", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("lab", tp.buf.items[0].payload);
+}
+
+test "json-get rejects paths deeper than four object levels" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on ">"
+        \\  (publish! "out.too-deep" (json-get "a.b.c.d.e" payload)))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "in",
+        .payload = "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":1}}}}}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try testing.expectError(error.TypeMismatch, run(rules, &ctx));
+}
+
 test "json-demux fans a flat object out onto sub-subjects" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
@@ -1186,6 +1233,84 @@ test "json-demux fans a flat object out onto sub-subjects" {
     try testing.expectEqualStrings("12.5", tp.buf.items[0].payload);
     try testing.expectEqualStrings("sensors.foo.hum", tp.buf.items[1].subject);
     try testing.expectEqualStrings("80", tp.buf.items[1].payload);
+}
+
+test "json-demux extracts dotted object paths in argument order" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (json-demux! "hum" "temp.c" "temp.f" "meta.tags" "missing.x" payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "sensors.foo",
+        .payload = "{\"temp\":{\"f\":68,\"c\":20},\"hum\":40,\"meta\":{\"tags\":[\"lab\"]}}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 3), tp.buf.items.len);
+    try testing.expectEqualStrings("sensors.foo.hum", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("40", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("sensors.foo.temp.c", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("20", tp.buf.items[1].payload);
+    try testing.expectEqualStrings("sensors.foo.temp.f", tp.buf.items[2].subject);
+    try testing.expectEqualStrings("68", tp.buf.items[2].payload);
+}
+
+test "json-demux can flatten dotted paths or override output suffixes" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (json-demux! :leaf "temp.c" ["meta.location.floor.room" "room"] payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "sensors.foo",
+        .payload = "{\"temp\":{\"c\":20},\"meta\":{\"location\":{\"floor\":{\"room\":\"lab\"}}}}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try run(rules, &ctx);
+    try testing.expectEqual(@as(usize, 2), tp.buf.items.len);
+    try testing.expectEqualStrings("sensors.foo.c", tp.buf.items[0].subject);
+    try testing.expectEqualStrings("20", tp.buf.items[0].payload);
+    try testing.expectEqualStrings("sensors.foo.room", tp.buf.items[1].subject);
+    try testing.expectEqualStrings("lab", tp.buf.items[1].payload);
+}
+
+test "json-demux rejects paths deeper than four object levels" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rules = try loadRules(arena,
+        \\(on "sensors.*"
+        \\  (json-demux! "a.b.c.d.e" payload))
+    );
+    defer deinitRules(rules, testing.allocator);
+
+    var tp: TestPublisher = .{ .alloc = arena };
+    var ctx: Context = .{
+        .subject = "sensors.foo",
+        .payload = "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":1}}}}}",
+        .publisher = tp.publisher(),
+        .arena = arena,
+        .gpa = testing.allocator,
+    };
+    try testing.expectError(error.TypeMismatch, run(rules, &ctx));
 }
 
 test "bar emits open/high/low/close every N ticks" {
