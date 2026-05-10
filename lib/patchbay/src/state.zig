@@ -62,7 +62,7 @@ pub const StateEntry = union(enum) {
     }
 };
 
-pub const ClockedKind = enum { on_silence, debounce, sample, aggregate };
+pub const ClockedKind = enum { on_silence, dropout, debounce, sample, aggregate };
 pub const AggregateKind = enum { avg, sum, min, max, count, rate };
 
 /// Host-clocked patchbay state. `body` points into the loaded rule arena
@@ -74,6 +74,8 @@ pub const Clocked = struct {
     period_ms: u64,
     aggregate_kind: AggregateKind = .avg,
     body: []const Value = &.{},
+    found_body: []const Value = &.{},
+    tripped: bool = false,
     subject: std.ArrayList(u8) = .empty,
     payload: std.ArrayList(u8) = .empty,
     samples: TimeRing = TimeRing.init(1),

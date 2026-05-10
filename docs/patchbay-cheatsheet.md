@@ -45,6 +45,7 @@ window.
 | `(count!)` / `(count! COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
 | `(bar! WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
 | `(on-silence :ms N BODY...)` | reset a per-subject timer on each match; evaluate BODY if no match arrives for N ms |
+| `(dropout :ms N :lost LOST :found FOUND)` | first match arms quietly; silence runs LOST once; next match runs FOUND once |
 | `(debounce! :ms N SUBJECT VALUE)` | publish the latest SUBJECT/VALUE after N ms of quiet |
 | `(sample! :ms N SUBJECT VALUE)` | publish the latest SUBJECT/VALUE every N ms after the first match |
 | `(aggregate! :ms N SUBJECT :METRIC X)` | clock-publish `:avg`, `:sum`, `:min`, `:max`, `:count`, or `:rate` over the last N ms |
