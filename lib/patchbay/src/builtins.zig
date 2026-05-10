@@ -1563,31 +1563,43 @@ fn formatValue(buf: *std.ArrayList(u8), gpa: Allocator, v: Value) !void {
 
 // --- JSON ops -----------------------------------------------------------
 
-/// `(json-get KEY PAYLOAD)`. Top-level object lookup; returns number /
-/// string / bool, or nil for missing / null / nested.
+/// `(json-get KEY PAYLOAD)`. Dotted object path lookup up to four object
+/// levels deep; returns number / string / bool, or nil for missing / null /
+/// non-primitive values.
 fn callJsonGet(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len != 2) return error.ArityMismatch;
     const key = try state.asString(args[0]);
     const payload = try state.asString(args[1]);
-    return jsonLookup(ctx.arena, payload, key) catch |e| switch (e) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => .nil,
+    if (!jsonDemuxPathAllowed(key)) return error.TypeMismatch;
+
+    var field_buf = [_]JsonDemuxField{.{ .path = key, .suffix = key }};
+    const found = jsonDemuxLookup(ctx.arena, payload, field_buf[0..]) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .nil,
     };
+    return found[0] orelse .nil;
 }
 
-/// `(json-demux KEY ... PAYLOAD)`. For each KEY in the top-level object,
-/// publishes its value to `<subject>.<key>`. Skips missing / null / nested.
+/// `(json-demux KEY ... PAYLOAD)`. For each KEY or dotted object path up to
+/// four object levels deep, publishes its primitive value to `<subject>.<suffix>`.
+/// By default suffix is the key/path. `:leaf` uses only the final path token,
+/// and `[PATH SUFFIX]` overrides one field's suffix. Skips missing / null /
+/// non-primitive values.
 fn callJsonDemux(ctx: *Context, args: []const Value) EvalError!Value {
     if (args.len < 2) return error.ArityMismatch;
     const payload = try state.asString(args[args.len - 1]);
-    for (args[0 .. args.len - 1]) |a| {
-        const key = try state.asString(a);
-        const v = jsonLookup(ctx.arena, payload, key) catch |e| switch (e) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => continue,
-        };
+    const key_args = args[0 .. args.len - 1];
+    const fields = try parseJsonDemuxFields(ctx.arena, key_args);
+    if (fields.len == 0) return error.ArityMismatch;
+
+    const found = jsonDemuxLookup(ctx.arena, payload, fields) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .nil,
+    };
+    for (fields, found) |field, maybe_v| {
+        const v = maybe_v orelse continue;
         if (v == .nil) continue;
-        const subj = try std.fmt.allocPrint(ctx.arena, "{s}.{s}", .{ ctx.subject, key });
+        const subj = try std.fmt.allocPrint(ctx.arena, "{s}.{s}", .{ ctx.subject, field.suffix });
         const out = try coercePayload(ctx.arena, v);
         subject_mod.validatePublish(subj) catch return error.InvalidSubject;
         try ctx.emit(subj, out);
@@ -1595,40 +1607,145 @@ fn callJsonDemux(ctx: *Context, args: []const Value) EvalError!Value {
     return .nil;
 }
 
-const JsonLookupError = error{ Malformed, NotObject, KeyMissing, NestedValue } || Allocator.Error;
+const JsonDemuxError = error{ Malformed, NotObject } || Allocator.Error;
 
-/// Find KEY in a top-level JSON object. Errors on malformed / non-object /
-/// nested values. Backed by `std.json.Scanner`.
-fn jsonLookup(arena: Allocator, payload: []const u8, key: []const u8) JsonLookupError!Value {
+const JsonDemuxField = struct {
+    path: []const u8,
+    suffix: []const u8,
+};
+
+const json_demux_max_path_tokens = 4;
+
+fn parseJsonDemuxFields(arena: Allocator, args: []const Value) EvalError![]JsonDemuxField {
+    var leaf_suffix = false;
+    var fields: std.ArrayList(JsonDemuxField) = .empty;
+    for (args) |arg| {
+        switch (arg) {
+            .keyword => |k| {
+                if (!std.mem.eql(u8, k, "leaf")) return error.TypeMismatch;
+                leaf_suffix = true;
+            },
+            .vector => |items| {
+                if (items.len != 2) return error.ArityMismatch;
+                const path = try state.asString(items[0]);
+                if (!jsonDemuxPathAllowed(path)) return error.TypeMismatch;
+                try fields.append(arena, .{
+                    .path = path,
+                    .suffix = try state.asString(items[1]),
+                });
+            },
+            else => {
+                const path = try state.asString(arg);
+                if (!jsonDemuxPathAllowed(path)) return error.TypeMismatch;
+                try fields.append(arena, .{
+                    .path = path,
+                    .suffix = if (leaf_suffix) jsonPathLeaf(path) else path,
+                });
+            },
+        }
+    }
+    return try fields.toOwnedSlice(arena);
+}
+
+fn jsonDemuxPathAllowed(path: []const u8) bool {
+    var tokens: usize = 1;
+    for (path) |c| {
+        if (c == '.') {
+            tokens += 1;
+            if (tokens > json_demux_max_path_tokens) return false;
+        }
+    }
+    return true;
+}
+
+fn jsonPathLeaf(path: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, path, '.')) |dot| return path[dot + 1 ..];
+    return path;
+}
+
+fn jsonDemuxLookup(arena: Allocator, payload: []const u8, fields: []const JsonDemuxField) JsonDemuxError![]?Value {
     var scanner = std.json.Scanner.initCompleteInput(arena, payload);
     defer scanner.deinit();
+
+    const found = try arena.alloc(?Value, fields.len);
+    @memset(found, null);
 
     const first = scanner.next() catch return error.Malformed;
     if (first != .object_begin) return error.NotObject;
 
+    var path: std.ArrayList(u8) = .empty;
+    try scanDemuxObject(arena, &scanner, fields, found, &path, 0);
+    return found;
+}
+
+fn scanDemuxObject(
+    arena: Allocator,
+    scanner: *std.json.Scanner,
+    fields: []const JsonDemuxField,
+    found: []?Value,
+    path: *std.ArrayList(u8),
+    depth: usize,
+) JsonDemuxError!void {
     while (true) {
         const tok = scanner.nextAlloc(arena, .alloc_if_needed) catch return error.Malformed;
-        const this_key = switch (tok) {
+        const field = switch (tok) {
             .string => |s| s,
             .allocated_string => |s| s,
-            .object_end => return error.KeyMissing,
+            .object_end => return,
             else => return error.Malformed,
         };
-        if (!std.mem.eql(u8, this_key, key)) {
-            scanner.skipValue() catch return error.Malformed;
-            continue;
-        }
-        const v = scanner.nextAlloc(arena, .alloc_if_needed) catch return error.Malformed;
-        return switch (v) {
-            .string, .allocated_string => |s| .{ .string = s },
-            .number, .allocated_number => |s| .{
-                .number = std.fmt.parseFloat(f64, s) catch return error.Malformed,
+
+        const old_len = path.items.len;
+        if (old_len != 0) try path.append(arena, '.');
+        try path.appendSlice(arena, field);
+        defer path.shrinkRetainingCapacity(old_len);
+
+        const value_tok = scanner.nextAlloc(arena, .alloc_if_needed) catch return error.Malformed;
+        switch (value_tok) {
+            .object_begin => if (depth + 1 < json_demux_max_path_tokens)
+                try scanDemuxObject(arena, scanner, fields, found, path, depth + 1)
+            else
+                try skipOpenJsonContainer(scanner),
+            .array_begin => try skipOpenJsonContainer(scanner),
+            .string, .allocated_string, .number, .allocated_number, .true, .false, .null => {
+                if (demuxKeyIndex(fields, found, path.items)) |idx| {
+                    found[idx] = jsonTokenToValue(value_tok) catch return error.Malformed;
+                }
             },
-            .true => .{ .boolean = true },
-            .false => .{ .boolean = false },
-            .null => .nil,
-            .object_begin, .array_begin => error.NestedValue,
-            else => error.Malformed,
-        };
+            else => return error.Malformed,
+        }
     }
+}
+
+fn skipOpenJsonContainer(scanner: *std.json.Scanner) JsonDemuxError!void {
+    var depth: usize = 1;
+    while (depth > 0) {
+        const tok = scanner.next() catch return error.Malformed;
+        switch (tok) {
+            .object_begin, .array_begin => depth += 1,
+            .object_end, .array_end => depth -= 1,
+            else => {},
+        }
+    }
+}
+
+fn demuxKeyIndex(fields: []const JsonDemuxField, found: []?Value, path: []const u8) ?usize {
+    for (fields, 0..) |field, i| {
+        if (found[i] != null) continue;
+        if (std.mem.eql(u8, field.path, path)) return i;
+    }
+    return null;
+}
+
+fn jsonTokenToValue(tok: std.json.Token) JsonDemuxError!Value {
+    return switch (tok) {
+        .string, .allocated_string => |s| .{ .string = s },
+        .number, .allocated_number => |s| .{
+            .number = std.fmt.parseFloat(f64, s) catch return error.Malformed,
+        },
+        .true => .{ .boolean = true },
+        .false => .{ .boolean = false },
+        .null => .nil,
+        else => error.Malformed,
+    };
 }
