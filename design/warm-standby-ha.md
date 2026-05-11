@@ -64,17 +64,24 @@ publishers configured with:
                       +--> conditioned downstream output
                       |
                       +--> direct accepted-frame mirror
+                           over privileged replication/control connection
                                 |
                                 v
                          STANDBY monoblok B
                            data port :4222
+                           control/replication port :8222
                            output disabled
 ```
 
 The standby shadow-processes the same accepted input stream as the active node.
 
-The standby is not active/active. It does not accept publisher writes and does
-not emit downstream output until promoted.
+The standby is not active/active. It does not accept client publisher writes on
+the public data listener and does not emit downstream output until promoted.
+
+The distinction is connection authority, not wire shape: a standby rejects
+ordinary client `PUB` frames on its public data listener, but may accept mirrored
+NATS `PUB` frames from the active node over a privileged replication
+connection.
 
 ---
 
@@ -125,7 +132,8 @@ An `ACTIVE` node may:
 
 A `STANDBY` node may:
 
-- receive mirrored input from the active node
+- receive mirrored NATS `PUB` frames from the active node over a privileged
+  replication connection
 - run the normal conditioning pipeline internally
 - maintain warm state
 - receive snapshots or checkpoints
@@ -134,7 +142,7 @@ A `STANDBY` node may:
 
 A `STANDBY` node must not:
 
-- accept publisher writes on the data listener
+- accept client publisher writes on the public data listener
 - publish downstream output
 
 ### STAND_DOWN
@@ -417,6 +425,10 @@ the risk explicit.
 ## Accepted-Frame Mirroring
 
 The standby is kept warm by mirroring accepted input frames from the active node.
+Those frames may use the normal NATS `PUB` wire shape, but they are accepted
+only on a privileged replication connection from an authorized active peer. The
+same `PUB` frame on the standby's public data listener is still rejected while
+the node is not active.
 
 Mirroring occurs after:
 
@@ -439,7 +451,8 @@ socket bytes
 ```
 
 The mirrored unit is not arbitrary TCP bytes. It is a canonical accepted input
-frame.
+frame. In the NATS-shaped v1 path, that canonical unit is the accepted `PUB`
+subject, optional reply subject, and payload, plus replication metadata.
 
 Example mirrored frame fields:
 
@@ -529,7 +542,7 @@ The mirror worker should:
 
 - consume accepted frames from a bounded queue
 - serialize frames for the standby peer
-- send frames over a private standby mirror connection
+- send frames over a private, peer-authorized standby mirror connection
 - track standby lag
 - reconnect or require fresh snapshots for standby peers as needed
 - mark a standby stale if it cannot keep up
@@ -1269,9 +1282,10 @@ publishers know A and B
 +
 one active data endpoint
 +
-one standby that rejects publishers
+one standby that rejects publishers on the public data listener
 +
-direct async accepted-frame mirroring from active to standby
+direct async accepted-frame mirroring from active to standby over a privileged
+replication connection using NATS `PUB` frames
 +
 manual stand-down / promote through a NATS-shaped control listener
 ```
