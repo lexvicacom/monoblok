@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Moonwell Patchbay LinkedIn Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1013;
+      color: #eef2f4;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 24% 12%, rgba(139, 190, 176, 0.18), transparent 32%),
+        linear-gradient(135deg, #0d1013 0%, #161b20 54%, #101314 100%);
+    }
+
+    main {
+      width: min(760px, calc(100vw - 32px));
+      display: grid;
+      gap: 14px;
+      padding: 18px 0;
+    }
+
+    .stage-wrap {
+      overflow: hidden;
+      border: 1px solid rgba(238, 242, 244, 0.14);
+      border-radius: 8px;
+      background: #080a0c;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      aspect-ratio: 4 / 5;
+      background: #080a0c;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: #b9c3c6;
+      font-size: 14px;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid rgba(238, 242, 244, 0.18);
+      border-radius: 6px;
+      background: #182027;
+      color: #eef2f4;
+      font: inherit;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #22303a;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    a {
+      color: #92d6c4;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="stage-wrap">
+      <canvas id="stage" width="1080" height="1350" aria-label="Animated Moonwell Codex terminal demo for LinkedIn"></canvas>
+    </div>
+    <div class="controls">
+      <span>LinkedIn 4:5 export: Codex authors Moonwell, monoblok runs the patchbay, the pump publishes telemetry, and NATS subscribers show derived subjects.</span>
+      <div class="buttons">
+        <button id="restart">Replay</button>
+        <button id="record">Record WebM</button>
+        <a id="download" hidden>Download WebM</a>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("stage");
+    const ctx = canvas.getContext("2d");
+    const restartButton = document.getElementById("restart");
+    const recordButton = document.getElementById("record");
+    const downloadLink = document.getElementById("download");
+
+    const W = canvas.width;
+    const H = canvas.height;
+    let startMs = performance.now();
+    let rafId = 0;
+    let recorder = null;
+    let recordedChunks = [];
+
+    const palette = {
+      bg: "#080a0c",
+      ink: "#eef2f4",
+      dim: "#829095",
+      muted: "#5e6c72",
+      line: "rgba(238,242,244,0.12)",
+      panel: "#10161a",
+      panel2: "#0c1115",
+      green: "#92d6c4",
+      yellow: "#e7c975",
+      red: "#ef7f72",
+      blue: "#79aee8",
+      purple: "#c79df0",
+      orange: "#d99964"
+    };
+
+    const codexLines = [
+      { at: 0.3, text: "$ codex", color: palette.dim },
+      { at: 0.9, text: "> build me a fictional lunar ice-mining patchbay demo", color: palette.ink },
+      { at: 1.7, text: "Reading project instructions: patchbay EDN, pump drivers, validation.", color: palette.dim },
+      { at: 2.7, text: "Drafting Moonwell: JSON demux, stable telemetry, safety alerts, audit streams.", color: palette.green },
+      { at: 4.0, text: "Created moonwell_patchbay.edn", color: palette.blue },
+      { at: 5.0, text: "Created pump_moonwell.py", color: palette.blue },
+      { at: 6.2, text: "$ monoblok --validate moonwell_patchbay.edn", color: palette.dim },
+      { at: 7.0, text: "ok: 27 top-level forms, LVC filters, reentrant JSON demux rules", color: palette.green },
+      { at: 8.0, text: "$ monoblok moonwell_patchbay.edn", color: palette.dim },
+      { at: 8.8, text: "INFO listening on 127.0.0.1:4222", color: palette.green },
+      { at: 9.4, text: "INFO patchbay loaded: moonwell.>, alerts.>, ops.>, audit.>", color: palette.green }
+    ];
+
+    const pumpLines = [
+      { at: 10.0, text: "$ python pump_moonwell.py --rigs 6 --interval 0.12 --seed 42", color: palette.dim },
+      { at: 10.7, text: "published batch for rig-03 (3 messages total)", color: palette.green },
+      { at: 11.2, text: "PUB moonwell.rig-03.env 148 bytes", color: palette.blue },
+      { at: 11.7, text: "PUB moonwell.rig-03.drill 132 bytes", color: palette.blue },
+      { at: 12.2, text: "PUB moonwell.rig-02.power 104 bytes", color: palette.blue },
+      { at: 12.8, text: "published batch for rig-05 (9 messages total)", color: palette.green },
+      { at: 13.4, text: "PUB moonwell.rig-05.log \"ICE_VOID detected under drill string\"", color: palette.yellow },
+      { at: 14.0, text: "PUB moonwell.rig-01.env 149 bytes", color: palette.blue },
+      { at: 14.6, text: "PUB moonwell.rig-04.power 103 bytes", color: palette.blue },
+      { at: 15.2, text: "published batch for rig-06 (18 messages total)", color: palette.green }
+    ];
+
+    const subLines = [
+      { at: 10.3, text: "$ nats sub 'moonwell.*.env.ice.settled'", color: palette.dim },
+      { at: 11.3, text: "$ nats sub 'moonwell.*.env.ice.bar.*'", color: palette.dim },
+      { at: 12.0, text: "$ nats sub 'alerts.>'", color: palette.dim },
+      { at: 12.7, text: "$ nats sub 'ops.moonwell.ingest.hz'", color: palette.dim },
+      { at: 13.6, text: "moonwell.rig-03.env.ice.settled\n  41.7", color: palette.green },
+      { at: 14.2, text: "ops.moonwell.ingest.hz\n  23.8", color: palette.purple },
+      { at: 14.9, text: "alerts.drill-mode.rig-05\n  SAFE", color: palette.red },
+      { at: 16.0, text: "audit.2026-05-10T16.rig-05.events\n  ICE_VOID detected under drill string", color: palette.yellow },
+      { at: 17.0, text: "moonwell.rig-03.env.ice.bar.open\n  41.7", color: palette.green },
+      { at: 17.4, text: "moonwell.rig-03.env.ice.bar.high\n  43.1", color: palette.green },
+      { at: 17.8, text: "moonwell.rig-03.env.ice.bar.low\n  39.8", color: palette.green },
+      { at: 18.2, text: "moonwell.rig-03.env.ice.bar.close\n  42.4", color: palette.green },
+      { at: 18.9, text: "moonwell.rig-04.power.battery.alert\n  reserve-low", color: palette.red },
+      { at: 20.0, text: "ops.rig-06.drill.slow\n  vibration", color: palette.orange }
+    ];
+
+    const patchbaySnippet = [
+      '(lvc ["moonwell.>" "alerts.>" "ops.>" "audit.>"])',
+      "",
+      '(on "moonwell.*.env" :reentrant true',
+      '  (json-demux! ["sensor.prospect.ice" "ice"]',
+      '               ["sensor.hatch.seal" "seal"] payload))',
+      "",
+      '(on "moonwell.*.env.ice"',
+      "  (do",
+      '    (debounce! :ms 2500 (subject-append "settled") payload)',
+      '    (aggregate! :ms 300000 (subject-append "avg5m") :avg payload-float)',
+      "    (bar! :ms 60000 payload-float)))"
+    ];
+
+    const explainLines = [
+      { at: 22.2, text: "> explain this generated section", color: palette.ink, continuationPrefix: "" },
+      { at: 23.1, text: 'Matches publishes like moonwell.rig-03.env.ice.', color: palette.dim, continuationPrefix: "" },
+      { at: 24.0, text: 'debounce! waits 2.5s of quiet, then emits .settled.', color: palette.green, continuationPrefix: "" },
+      { at: 25.0, text: 'aggregate! publishes a 5-minute rolling average to .avg5m.', color: palette.green, continuationPrefix: "" },
+      { at: 26.0, text: 'bar! closes 1-minute OHLC values under .bar.open/high/low/close.', color: palette.yellow, continuationPrefix: "" },
+      { at: 27.0, text: '✨ Raw sensor JSON fans out as stable NATS subjects.', color: palette.blue, continuationPrefix: "", pulse: true }
+    ];
+
+    function clamp01(x) {
+      return Math.max(0, Math.min(1, x));
+    }
+
+    function ease(x) {
+      x = clamp01(x);
+      return x * x * (3 - 2 * x);
+    }
+
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function text(str, x, y, size, color, font = "500") {
+      ctx.font = `${font} ${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      ctx.fillStyle = color;
+      ctx.fillText(str, x, y);
+    }
+
+    function label(str, x, y, size, color, font = "700") {
+      ctx.font = `${font} ${size}px Inter, ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillStyle = color;
+      ctx.fillText(str, x, y);
+    }
+
+    function rightText(str, x, y, size, color, font = "500") {
+      ctx.font = `${font} ${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      ctx.fillStyle = color;
+      ctx.fillText(str, x - ctx.measureText(str).width, y);
+    }
+
+    function drawWindow(x, y, w, h, title, accent) {
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.32)";
+      ctx.shadowBlur = 24;
+      ctx.shadowOffsetY = 14;
+      roundRect(x, y, w, h, 14);
+      ctx.fillStyle = palette.panel;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = palette.line;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = "#0b0f12";
+      roundRect(x, y, w, 44, 14);
+      ctx.fill();
+      ctx.fillStyle = "#ef6a5d";
+      ctx.beginPath();
+      ctx.arc(x + 24, y + 22, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#e8bd52";
+      ctx.beginPath();
+      ctx.arc(x + 46, y + 22, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#64c677";
+      ctx.beginPath();
+      ctx.arc(x + 68, y + 22, 6, 0, Math.PI * 2);
+      ctx.fill();
+      label(title, x + 94, y + 29, 16, accent);
+      ctx.restore();
+    }
+
+    function ednTokenColor(token) {
+      if (token.startsWith(";")) return palette.muted;
+      if (token.startsWith('"')) return palette.green;
+      if (token.startsWith(":")) return palette.orange;
+      if (/^[()\[\]]$/.test(token)) return palette.dim;
+      if (/^\d+$/.test(token)) return palette.blue;
+      if (/^(on|lvc|do)$/.test(token)) return palette.purple;
+      if (/^(json-demux!|debounce!|aggregate!|bar!|subject-append)$/.test(token)) return palette.yellow;
+      if (/^(payload|payload-float|true)$/.test(token)) return palette.blue;
+      return palette.ink;
+    }
+
+    function drawEdnLine(line, x, y, fontSize) {
+      ctx.font = `500 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      let cursor = x;
+      const tokens = line.match(/;.*|"(?:\\.|[^"])*"|:[^\s()\[\]]+|[()\[\]]|[^\s()\[\]]+|\s+/g) || [line];
+      tokens.forEach((token) => {
+        ctx.fillStyle = /^\s+$/.test(token) ? palette.ink : ednTokenColor(token);
+        ctx.fillText(token, cursor, y);
+        cursor += ctx.measureText(token).width;
+      });
+    }
+
+    function ednRowCount(lines, wrapWidth, fontSize) {
+      let rows = 0;
+      lines.forEach((line) => {
+        rows += line === "" ? 1 : wrapTextLine(line, wrapWidth, fontSize).length;
+      });
+      return rows;
+    }
+
+    function drawEdnLines(lines, x, y, fontSize, lineHeight, wrapWidth) {
+      let row = 0;
+      lines.forEach((line) => {
+        const parts = line === "" ? [""] : wrapTextLine(line, wrapWidth, fontSize);
+        parts.forEach((part) => {
+          drawEdnLine(part, x, y + row * lineHeight, fontSize);
+          row += 1;
+        });
+      });
+      return row;
+    }
+
+    function visibleLines(lines, now) {
+      return lines.filter((line) => line.at <= now);
+    }
+
+    function wrapTextLine(value, maxWidth, fontSize, font = "500", continuationPrefix = "  ") {
+      ctx.font = `${font} ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      if (!maxWidth || ctx.measureText(value).width <= maxWidth) return [value];
+      const indent = value.match(/^\s*/)[0] || "";
+      const words = value.trim().split(/\s+/);
+      if (words.length === 0) return [value];
+      const wrapped = [];
+      let line = indent + words.shift();
+      words.forEach((word) => {
+        const candidate = `${line} ${word}`;
+        if (ctx.measureText(candidate).width <= maxWidth) {
+          line = candidate;
+        } else {
+          wrapped.push(line);
+          line = `${indent}${continuationPrefix}${word}`;
+        }
+      });
+      wrapped.push(line);
+      return wrapped;
+    }
+
+    function expandedLines(lines, wrapWidth, fontSize) {
+      const out = [];
+      lines.forEach((line) => {
+        line.text.split("\n").forEach((part, idx) => {
+          const isInput = line.input === undefined ? /^[>$]\s/.test(part) : line.input;
+          const continuationPrefix = line.continuationPrefix === undefined ? "  " : line.continuationPrefix;
+          const wrappedParts = wrapTextLine(part, wrapWidth, fontSize, "500", continuationPrefix);
+          wrappedParts.forEach((wrapped, wrapIdx) => {
+            out.push({
+              at: line.at + idx * 0.03 + wrapIdx * 0.02,
+              text: wrapped,
+              color: line.color,
+              continuation: idx > 0 || wrapIdx > 0,
+              input: isInput,
+              pulse: line.pulse === true
+            });
+          });
+        });
+      });
+      return out;
+    }
+
+    function drawTerminalLines(lines, now, x, y, maxLines, lineHeight, clip, fontSize = 24, wrapWidth = 0) {
+      ctx.save();
+      if (clip) {
+        ctx.beginPath();
+        ctx.rect(clip.x, clip.y, clip.w, clip.h);
+        ctx.clip();
+      }
+      const fitLines = clip
+        ? Math.max(1, Math.floor((clip.h - fontSize - 6) / lineHeight))
+        : maxLines;
+      const shown = visibleLines(expandedLines(lines, wrapWidth, fontSize), now).slice(-Math.min(maxLines, fitLines));
+      shown.forEach((line, idx) => {
+        let body = line.text;
+        if (line.input && !line.continuation && idx === shown.length - 1 && now - line.at < 0.7) {
+          const chars = Math.max(0, Math.floor(ease((now - line.at) / 0.7) * line.text.length));
+          body = line.text.slice(0, chars);
+        }
+        if (line.pulse) {
+          ctx.save();
+          ctx.globalAlpha *= 0.68 + 0.32 * ((Math.sin(now * 5.5) + 1) / 2);
+        }
+        text(body, x, y + idx * lineHeight, fontSize, line.color);
+        if (line.pulse) ctx.restore();
+      });
+      if (Math.floor(now * 2) % 2 === 0) {
+        ctx.fillStyle = palette.green;
+        ctx.fillRect(x, y + shown.length * lineHeight - fontSize + 4, Math.max(10, fontSize * 0.54), fontSize);
+      }
+      ctx.restore();
+    }
+
+    function drawPatchbay(now) {
+      const alpha = ease((now - 4.2) / 1.8);
+      if (alpha <= 0) return;
+      ctx.save();
+      ctx.globalAlpha = alpha * (1 - ease((now - 12.8) / 0.8));
+      drawWindow(50, 468, 980, 270, "moonwell_patchbay.edn", palette.blue);
+      const fontSize = 14;
+      const lineHeight = 18;
+      const x = 82;
+      const y = 525;
+      const wrapWidth = 900;
+      drawEdnLines(patchbaySnippet, x, y, fontSize, lineHeight, wrapWidth);
+      ctx.restore();
+    }
+
+    function eventPulse(now, times, span = 0.8) {
+      return times.reduce((best, at) => Math.max(best, 1 - clamp01((now - at) / span)), 0);
+    }
+
+    function drawSparkline(x, y, w, h, now, color, eventTimes) {
+      roundRect(x, y + h - 8, w, 1, 1);
+      ctx.fillStyle = "rgba(238,242,244,0.10)";
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let i = 0; i < 28; i += 1) {
+        const t = now + i * 0.13;
+        const event = eventPulse(t, eventTimes, 0.7);
+        const value = 0.48 + Math.sin(t * 2.4) * 0.16 + Math.sin(t * 5.1) * 0.06 + event * 0.26;
+        const px = x + (i / 27) * w;
+        const py = y + h - clamp01(value) * h;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+    function drawStatusFlag(x, y, w, h, color, active, now) {
+      const pillW = 120;
+      const pulse = active ? 0 : (Math.sin(now * 8) + 1) / 2;
+      roundRect(x, y, pillW, h, 7);
+      ctx.fillStyle = active ? "rgba(146,214,196,0.16)" : `rgba(217,153,100,${0.18 + pulse * 0.10})`;
+      ctx.fill();
+      ctx.strokeStyle = active ? color : palette.orange;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = active ? color : palette.orange;
+      ctx.beginPath();
+      ctx.arc(x + 18, y + h / 2, 5, 0, Math.PI * 2);
+      ctx.fill();
+      label(active ? "SAFE" : "WATCH", x + 34, y + h - 5, 13, active ? color : palette.orange, "800");
+    }
+
+    function drawLiveBars(now) {
+      const alpha = ease((now - 12.9) / 0.8) * (1 - ease((now - 21.2) / 0.8));
+      if (alpha <= 0) return;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      const x = 50;
+      const y = 468;
+      drawWindow(x, y, 980, 270, "Moonwell Live Subjects", palette.green);
+      const labelX = x + 42;
+      const valueX = x + 930;
+      const barX = x + 42;
+      const barW = 888;
+      const envPulse = eventPulse(now, [11.2, 14.0], 1.2);
+      const drillPulse = eventPulse(now, [13.4, 14.9], 1.1);
+      const powerPulse = eventPulse(now, [12.2, 14.6, 18.9], 1.2);
+      const ice = 0.58 + Math.sin(now * 1.7) * 0.05 + envPulse * 0.16;
+      const power = 0.32 + Math.sin(now * 1.9) * 0.04 - powerPulse * 0.16;
+      const drillSafe = drillPulse < 0.45;
+      const rows = [
+        { name: "ice yield", readout: `${(39 + Math.sin(now * 1.7) * 3).toFixed(1)} kg/t`, color: palette.green, kind: "bar", value: ice },
+        { name: "ingest rate", readout: `${(23 + Math.sin(now * 2.1) * 2).toFixed(1)} Hz`, color: palette.purple, kind: "spark" },
+        { name: "drill state", readout: drillSafe ? "SAFE" : "WATCH", color: drillSafe ? palette.green : palette.orange, kind: "flag", active: drillSafe },
+        { name: "power reserve", readout: `${(24 + Math.sin(now * 1.9) * 5).toFixed(0)}%`, color: palette.red, kind: "bar", value: power }
+      ];
+      const rowYs = [y + 72, y + 122, y + 174, y + 236];
+      rows.forEach((row, idx) => {
+        const rowY = rowYs[idx];
+        label(row.name, labelX, rowY, 16, palette.ink, "650");
+        rightText(row.readout, valueX, rowY, 16, row.color);
+        if (row.kind === "bar") {
+          roundRect(barX, rowY + 18, barW, 14, 6);
+          ctx.fillStyle = "#0a0f12";
+          ctx.fill();
+          roundRect(barX, rowY + 18, barW * clamp01(row.value), 14, 6);
+          ctx.fillStyle = row.color;
+          ctx.fill();
+        } else if (row.kind === "spark") {
+          drawSparkline(barX, rowY + 14, barW, 28, now, row.color, [10.7, 12.8, 15.2]);
+        } else {
+          drawStatusFlag(barX, rowY + 17, barW, 24, row.color, row.active, now);
+        }
+      });
+      ctx.restore();
+    }
+
+    function drawAlarmCue(now) {
+      const windows = [
+        { at: 14.9, label: "ALARM ROUTE", detail: "alerts.> can page ops", color: palette.red },
+        { at: 16.0, label: "AUDIT EVENT", detail: "ICE_VOID captured", color: palette.yellow },
+        { at: 18.9, label: "POWER ALARM", detail: "reserve-low", color: palette.red }
+      ];
+      const active = windows.find((item) => now >= item.at && now < item.at + 1.0);
+      if (!active) return;
+
+      const age = now - active.at;
+      const alpha = ease(age / 0.18) * (1 - ease((age - 0.7) / 0.3));
+      const pulse = (Math.sin(now * 14) + 1) / 2;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      ctx.strokeStyle = active.color;
+      ctx.lineWidth = 3 + pulse * 2;
+      roundRect(544, 760, 490, 500, 16);
+      ctx.stroke();
+
+      const x = 590;
+      const y = 796;
+      roundRect(x, y, 392, 74, 8);
+      ctx.fillStyle = "rgba(16,22,26,0.94)";
+      ctx.fill();
+      ctx.strokeStyle = active.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = `rgba(239,127,114,${0.16 + pulse * 0.12})`;
+      roundRect(x + 14, y + 16, 42, 42, 6);
+      ctx.fill();
+      label("!", x + 29, y + 47, 30, active.color, "850");
+      label(active.label, x + 70, y + 31, 18, active.color, "800");
+      label(active.detail, x + 70, y + 55, 16, palette.ink, "650");
+      ctx.restore();
+    }
+
+    function drawExplanationBeat(now) {
+      const alpha = ease((now - 21.2) / 1.0);
+      if (alpha <= 0) return;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      ctx.fillStyle = `rgba(8,10,12,${0.72 * alpha})`;
+      ctx.fillRect(0, 0, W, H);
+
+      drawWindow(50, 145, 980, 540, "moonwell_patchbay.edn", palette.blue);
+      const x = 88;
+      const y = 224;
+      const lines = [
+        '; Ice yield and power economics.',
+        '(on "moonwell.*.env.ice"',
+        '  (do',
+        '    (debounce! :ms 2500 (subject-append "settled") payload)',
+        '    (aggregate! :ms 300000 (subject-append "avg5m") :avg payload-float)',
+        '    (bar! :ms 60000 payload-float)))'
+      ];
+
+      const highlight = 0.35 + 0.18 * Math.sin(now * 4);
+      const codeFontSize = 18;
+      const lineHeight = 27;
+      const wrapWidth = 900;
+      const codeRows = ednRowCount(lines, wrapWidth, codeFontSize);
+      const highlightH = Math.max(198, codeRows * lineHeight + 36);
+      ctx.fillStyle = `rgba(146,214,196,${highlight})`;
+      roundRect(x - 18, y + 24, 916, highlightH, 8);
+      ctx.fill();
+
+      drawEdnLines(lines, x, y, codeFontSize, lineHeight, wrapWidth);
+
+      ctx.strokeStyle = palette.green;
+      ctx.lineWidth = 3;
+      roundRect(x - 22, y + 20, 924, highlightH + 8, 10);
+      ctx.stroke();
+
+      label("generated rule focus", 88, 638, 20, palette.green, "750");
+      label("raw stream -> settled values, five-minute average, one-minute bars", 300, 638, 18, palette.dim, "600");
+
+      drawWindow(50, 725, 980, 500, "Terminal", palette.green);
+      drawTerminalLines(explainLines, now, 88, 798, 9, 34, {
+        x: 78,
+        y: 780,
+        w: 920,
+        h: 390
+      }, 20, 850);
+      ctx.restore();
+    }
+
+    function drawFrame(now) {
+      ctx.fillStyle = palette.bg;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = "rgba(146,214,196,0.08)";
+      for (let i = 0; i < 70; i += 1) {
+        const x = (i * 217 + 73) % W;
+        const y = (i * 149 + 91) % H;
+        const twinkle = 0.35 + 0.65 * Math.sin(now * 0.8 + i);
+        ctx.globalAlpha = twinkle;
+        ctx.fillRect(x, y, 2, 2);
+      }
+      ctx.globalAlpha = 1;
+
+      label("MONOBLOK PATCH BAY DEMO", 50, 74, 36, palette.ink, "800");
+      label("from prompt to running patchbay telemetry in less than a minute", 52, 110, 20, palette.dim, "600");
+
+      drawWindow(50, 145, 980, 285, "Terminal", palette.green);
+      drawTerminalLines(codexLines, now, 82, 208, 9, 25, {
+        x: 78,
+        y: 190,
+        w: 910,
+        h: 210
+      }, 17, 850);
+
+      drawWindow(50, 760, 450, 500, "NATS Publisher", palette.blue);
+      drawTerminalLines(pumpLines, now, 76, 822, 13, 25, {
+        x: 68,
+        y: 804,
+        w: 402,
+        h: 382
+      }, 15, 380);
+
+      drawWindow(550, 760, 480, 500, "NATS Subscribers", palette.yellow);
+      drawTerminalLines(subLines, now, 576, 822, 16, 23, {
+        x: 568,
+        y: 804,
+        w: 420,
+        h: 382
+      }, 14, 392);
+      drawAlarmCue(now);
+
+      drawPatchbay(now);
+      drawLiveBars(now);
+      drawExplanationBeat(now);
+    }
+
+    function tick(ms) {
+      const now = ((ms - startMs) / 1000) % 30.0;
+      drawFrame(now);
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function restart() {
+      startMs = performance.now();
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function startRecording() {
+      if (!canvas.captureStream || !window.MediaRecorder) {
+        alert("This browser does not support canvas MediaRecorder export.");
+        return;
+      }
+      restart();
+      recordedChunks = [];
+      downloadLink.hidden = true;
+      const stream = canvas.captureStream(24);
+      const preferredType = "video/webm;codecs=vp9";
+      const fallbackType = "video/webm";
+      const options = MediaRecorder.isTypeSupported(preferredType)
+        ? { mimeType: preferredType }
+        : { mimeType: fallbackType };
+      recorder = new MediaRecorder(stream, options);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordedChunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        downloadLink.href = url;
+        downloadLink.download = "moonwell-linkedin-demo.webm";
+        downloadLink.hidden = false;
+        recordButton.disabled = false;
+        recordButton.textContent = "Record WebM";
+      };
+      recorder.start();
+      recordButton.disabled = true;
+      recordButton.textContent = "Recording...";
+      window.setTimeout(() => {
+        if (recorder && recorder.state === "recording") recorder.stop();
+      }, 30000);
+    }
+
+    restartButton.addEventListener("click", restart);
+    recordButton.addEventListener("click", startRecording);
+    restart();
+  </script>
+</body>
+</html>
