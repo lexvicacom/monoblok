@@ -255,7 +255,7 @@ Release binaries are built natively per arch by `.github/workflows/release.yml` 
 
 ## AI
 
-It's 2026, Claude and Codex help me a lot. This is something of a _scarlet letter_ to many - [some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
+It's 2026, Claude and Codex help me a lot. [Some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
 
 ## License
 
