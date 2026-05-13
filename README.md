@@ -1,21 +1,17 @@
 # monoblok
 
-monoblok is a NATS-compatible signal conditioner, designed to take in publishes directly from NATS clients.
+If half your NATS subscribers exist to clean up the stream before the real work starts: rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts all come first. monoblok lets you declare that work once, as rules at the broker, instead of writing it N times in N services.
 
-monoblok accepts `PUB` / `SUB` commands, then runs each publish through **patchbay**: a small S-expression DSL for cleaning and reshaping streams. Rules can round, deduplicate, deadband, smooth, demux JSON, build OHLC bars, emit alerts, and forward selected subjects upstream.
-
-Use it in two ways:
-
-- **Standalone broker**: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
-- **Signal conditioning front door**: publishers send raw events to monoblok, monoblok cleans them, then exports selected subjects to a real NATS cluster.
+monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in patchbay, a small S-expression DSL.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
-Use monoblok to complement NATS when you've noticed that half your subscribers exist to tidy up the stream before the real work starts: rounding the value, dropping duplicates, smoothing spikes, splitting JSON frames, building the 1-minute bar, firing the alert when a threshold trips. 
+That work doesn't belong in every consumer. **Declare it once, as rules, in the broker:**
 
-With monoblok at hand, that work doesn't belong in every consumer. **Declare it once, in rules, at the broker.**
+- Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
+- Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
-[Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+ [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ## Public demo server
 
