@@ -4,14 +4,15 @@
 
 ## Rationale
 
-If half your NATS subscribers exist to clean up the stream before the real work starts: rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts all come first. monoblok lets you declare that work once, as rules at the broker, instead of writing it N times in N services.
+It is not uncommon for services to subscribe to NATS subjects to clean up and republish a raw stream before the real business starts: rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts. monoblok lets you declare that work once, as rules at the broker, instead of writing it N times in N services.
+
+**Declare it once, as rules, in the broker.**
 
 monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in patchbay, a small S-expression DSL.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
-That work doesn't belong in every consumer. **Declare it once, as rules, in the broker.**
-
+Common ways of running monoblok:
 - Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
