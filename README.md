@@ -1,5 +1,9 @@
 # monoblok
 
+> A NATS-core compatible messaging system that conditions subjects before subscribers see them.
+
+## Rationale
+
 If half your NATS subscribers exist to clean up the stream before the real work starts: rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts all come first. monoblok lets you declare that work once, as rules at the broker, instead of writing it N times in N services.
 
 monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in patchbay, a small S-expression DSL.
