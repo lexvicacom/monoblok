@@ -4,7 +4,7 @@
 
 ## Rationale
 
-It is not uncommon for services to subscribe to NATS subjects to clean up and republish a raw stream before the real business starts: rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts. monoblok lets you declare that work once, as rules at the broker, instead of writing it N times in N services.
+It is not uncommon for systems to contain some _caretaker_ services that subscribe to ingress NATS subjects to clean up and republish a raw stream before the real business starts. This might include rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts and so on. High velocity or miniscule changes don't always have value downstream. monoblok lets you declare that tidying work once, leveraging efficient implementations of common tasks as rules at the broker, instead of writing _rounding logic_ N times in N services.
 
 **Declare it once, as rules, in the broker.**
 
@@ -16,13 +16,15 @@ Common ways of running monoblok:
 - Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
- [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+Also see [tinyblok](https://github.com/lexvicacom/tinyblok) which is an implementation for microcontrollers.
 
- Also see [tinyblok](https://github.com/lexvicacom/tinyblok) which is an implementation for microcontrollers.
+monoblok is written in Zig and builds on Linux and macOS. It aims to be fast, even on entry level/shared hardware. Nothing scientific yet. There are some [benchmark scripts](./scripts) and [results](./bench-results).
+
+[Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ## Public demo server
 
-A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `demo.monoblok.host:4222`, with a bridged real NATS server on `demo.monoblok.host:4223`.
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `demo.monoblok.host:4222`, with a bridged NATS server on `demo.monoblok.host:4223`.
 
 ```sh
 nats -s demo.monoblok.host:4222 sub 'demo.sensors.>'
@@ -232,9 +234,9 @@ journalctl -u monoblok -f
 
 Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
 
-## Benchmarks
+## How fast is it?
 
-Getting meaningful numbers turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
+tl;dr: It's likely to be fast enough. Getting meaningful benchmarks turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
 
 The **shape** of the comparison vs. nats-server, though, is consistent across runs:
 
