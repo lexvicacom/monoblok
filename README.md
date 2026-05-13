@@ -6,8 +6,8 @@ monoblok accepts normal NATS-style `PUB` / `SUB` clients, then runs each publish
 
 Use it in two ways:
 
-- **Standalone broker** — clients connect directly to monoblok for lightweight NATS-core pub/sub with stream conditioning built in.
-- **Conditioning front door** — publishers send raw events to monoblok, monoblok cleans them, then exports selected subjects to a real NATS cluster.
+- **Standalone broker**: clients connect directly to monoblok for lightweight NATS-core pub/sub with stream conditioning built in.
+- **Conditioning front door**: publishers send raw events to monoblok, monoblok cleans them, then exports selected subjects to a real NATS cluster.
 
 The point is simple: declare the boring cleanup once, close to the source, instead of reimplementing it in every subscriber.
 
