@@ -1,4 +1,4 @@
-;; Public demo patchbay for monoblok.rtd.pub:4222.
+;; Public demo patchbay for demo.monoblok.host:4222.
 ;;
 ;; Everything is scoped under `demo.>` so visitors can't stomp on server
 ;; internals or each other's namespaces. Each rule below is an example

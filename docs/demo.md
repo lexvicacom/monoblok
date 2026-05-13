@@ -20,7 +20,7 @@ the demo server as a context once, then select it and forget about
 the URL:
 
 ```
-nats context save monoblok-demo --server nats://monoblok.rtd.pub:4222
+nats context save monoblok-demo --server nats://demo.monoblok.host:4222
 nats context select monoblok-demo
 ```
 
@@ -172,7 +172,7 @@ nats sub '$LVC.demo.sensors.temp'   # -> prints "23.5" on subscribe
    :export   ("demo.sensors.*.spike" "demo.alerts.>"))
 ```
 
-You can connect to `monoblock.rtd.pub:4443` which is a real NATS to observe the above being relayed.
+You can connect to `demo.monoblok.host:4223` which is a real NATS to observe the above being relayed.
 
 ```
 nats -s 127.0.0.1:4223 sub "demo.sensors.*.spike"

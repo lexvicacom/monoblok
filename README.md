@@ -19,7 +19,7 @@ monoblok can help if:
 
 ## Try it out with no install
 
-A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://monoblok.rtd.pub:4222`, with a bridged real NATS server on `nats://monoblok.rtd.pub:4223`. Point any `nats` CLI at the first and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://demo.monoblok.host:4222`, with a bridged real NATS server on `nats://demo.monoblok.host:4223`. Point any `nats` CLI at the first and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
 
 ## Install
 
