@@ -13,6 +13,8 @@ That work doesn't belong in every consumer. **Declare it once, as rules, in the 
 
  [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
+ Also see [tinyblok](https://github.com/lexvicacom/tinyblok) which is an implementation for microcontrollers.
+
 ## Public demo server
 
 A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `demo.monoblok.host:4222`, with a bridged real NATS server on `demo.monoblok.host:4223`.
