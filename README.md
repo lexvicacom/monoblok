@@ -2,24 +2,28 @@
 
 Use monoblok as a small NATS-core broker, or put it in front of NATS when the raw stream is too noisy.
 
-monoblok is a tiny NATS-compatible stream conditioner and broker: publishers send raw events, **patchbay** rules clean and reshape them once, and subscribers receive stable derived streams. It speaks enough of the [NATS](https://nats.io) protocol to be useful, so publishers PUB to it and subscribers SUB from it like any NATS server. For smaller scenarios, monoblok can be the broker your clients connect to directly. For larger systems, it can sit in front of a real NATS cluster and export only the cleaned stream.
+monoblok accepts normal NATS-style `PUB` / `SUB` clients, then runs each publish through **patchbay**: a small S-expression DSL for cleaning and reshaping streams. Rules can round, deduplicate, deadband, smooth, demux JSON, build OHLC bars, emit alerts, and forward selected subjects upstream.
 
-The patchbay DSL rounds, deduplicates, deadbands, smooths, demuxes JSON, and builds OHLC bars. The _conditioning_ is declared once, instead of being re-implemented by every consumer.
+Use it in two ways:
+
+- **Standalone broker** — clients connect directly to monoblok for lightweight NATS-core pub/sub with stream conditioning built in.
+- **Conditioning front door** — publishers send raw events to monoblok, monoblok cleans them, then exports selected subjects to a real NATS cluster.
+
+The point is simple: declare the boring cleanup once, close to the source, instead of reimplementing it in every subscriber.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
->The suggested topology is to run monoblok as a _conditioning twig_: it cleans and shapes local streams, then exports the results directly to a NATS cluster, or through a real NATS leaf, via the bridge. [tinyblok](https://github.com/lexvicacom/tinyblok) can sit even further out, running the same patchbay DSL on ESP32 chips. **Conditioning at the edge, analysis in the cloud.**
+Reach for real NATS when you need clustering, JetStream, auth, TLS termination, or a durable system of record. monoblok is for the edge of the stream: noisy sensors, telemetry, market data, dashboards, derived alerts, last-value replay, and cheap data reduction before the cloud.
 
-For smaller scenarios, NATS is optional: every monoblok process is a NATS core broker, so you can run one directly in the cloud and point clients straight at it. Absolutely reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
+Use it anywhere the _same old processing/cleaning code_ gets monotonous to write across consumers. **It reduces downstream work.** [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
-Use it anywhere the _same old processing/cleaning code_ gets monotonous to write across consumers: cheap sensors with noisy readings, market data feeds, telemetry. **It reduces downstream work.** [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+monoblok is useful when:
 
-monoblok can help if:
-
-- you have noisy numeric streams (sensors, tickers, telemetry) and every consumer is reimplementing the same round/dedupe/deadband/smooth code
-- you want a small box at the edge that cleans data, saving paying to ship the noise
-- you want last-value replay (`$LVC.*`) so a late subscriber sees current state immediately, without standing up a separate cache
-- you want OHLC bars, moving stats, or windowed aggregates declared once in a config file rather than coded per consumer
+- noisy numeric streams need round / squelch / deadband / smooth before anyone consumes them
+- JSON frames need breaking into scalar subjects
+- late subscribers need the current value immediately via `$LVC.*`
+- OHLC bars, moving stats, alerts, or windowed aggregates should be declared once
+- only cleaned subjects should be bridged into a real NATS deployment
 
 ## Try it out with no install
 
@@ -141,10 +145,20 @@ Absent `(lvc ...)`, LVC is off and the publish path does no cache work. `--no-lv
 
 ## NATS support
 
-### As a NATS core server
+monoblok implements the NATS core pieces it needs to behave like a small broker.
 
-Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers.
-Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
+| Feature | Support |
+|---|---|
+| `PUB` / `SUB` / `UNSUB` / `MSG` | yes |
+| wildcards | yes |
+| request/reply | yes |
+| queue groups | yes |
+| headers | yes |
+| `$LVC.*` last-value replay | yes, monoblok extension |
+| bridge to real NATS | export-only |
+| TLS/auth on the local server | no; put it behind NLB/HAProxy/nginx or bridge to real NATS |
+| JetStream | no |
+| clustering | no |
 
 ### As a bridging client to a NATS server
 
@@ -179,6 +193,8 @@ monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
 
 `--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
 whose filter no longer matches at its recorded position is skipped with a warning.
+
+Patchbay state is usually per rule and per subject. Avoid unbounded subject tokens such as timestamps, user IDs, or raw device-generated strings unless you intend to create state for each one.
 
 ## Design
 
