@@ -1,29 +1,49 @@
 # monoblok
 
-monoblok is a messaging broker with built-in _processing_. It speaks enough of the [NATS](https://nats.io) protocol to be useful. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented by every consumer.
+> A NATS-core compatible messaging system that conditions subjects before subscribers see them.
+
+## Rationale
+
+It is not uncommon for systems to contain some _caretaker_ services that subscribe to ingress NATS subjects to clean up and republish a raw stream before the real business starts. This might include rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts and so on. High velocity or miniscule changes don't always have value downstream. monoblok lets you declare that tidying work once, leveraging efficient implementations of common tasks as rules at the broker, instead of writing _rounding logic_ N times in N services.
+
+**Declare it once, as rules, in the broker.**
+
+monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in patchbay, a small S-expression DSL.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
->The suggested topology is to run monoblok as a _conditioning twig_: it cleans and shapes local streams, then exports the results directly to a NATS cluster, or through a real NATS leaf, via the bridge. [tinyblok](https://github.com/lexvicacom/tinyblok) can sit even further out, running the same patchbay DSL on ESP32 chips. **Conditioning at the edge, analysis in the cloud.**
+Common ways of running monoblok:
+- Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
+- Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
-For smaller scenarios, NATS is optional: every monoblok process is a NATS core broker, so you can run one directly in the cloud and point clients straight at it. Absolutely reach for real NATS when you want clustering, JetStream, or a long-lived system of record; monoblok stays focused on conditioning the stream.
+Also see [tinyblok](https://github.com/lexvicacom/tinyblok) which is an implementation for microcontrollers.
 
-Use it anywhere the _same old processing/cleaning code_ gets monotonous to write across consumers: cheap sensors with noisy readings, market data feeds, telemetry. **It reduces downstream work.** [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+monoblok is written in Zig and builds on Linux and macOS. It aims to be fast, even on entry level/shared hardware. Nothing scientific yet. There are some [benchmark scripts](./scripts) and [results](./bench-results).
 
-monoblok can help if:
+[Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
-- you have noisy numeric streams (sensors, tickers, telemetry) and every consumer is reimplementing the same round/dedupe/deadband/smooth code
-- you want a small box at the edge that cleans data, saving paying to ship the noise
-- you want last-value replay (`$LVC.*`) so a late subscriber sees current state immediately, without standing up a separate cache
-- you want OHLC bars, moving stats, or windowed aggregates declared once in a config file rather than coded per consumer
+## Public demo server
 
-## Try it out with no install
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `demo.monoblok.host:4222`, with a bridged NATS server on `demo.monoblok.host:4223`.
 
-A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://demo.monoblok.host:4222`, with a bridged real NATS server on `nats://demo.monoblok.host:4223`. Point any `nats` CLI at the first and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
+```sh
+nats -s demo.monoblok.host:4222 sub 'demo.sensors.>'
+(new terminal)
+nats -s demo.monoblok.host:4223 sub '>'
+(new terminal)
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.001
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.002
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 2331.104
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.104
+```
+
+Conditioned values are visible on the first subscription. As the `2331.104` value breaches a threshold, it is also exported to NATS so is visible on the second subscription.
+
+See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
 
 ## Install
 
-One-liner for Mac/Linux: downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
+This downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
@@ -57,7 +77,7 @@ JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subject
 
 Time-windowed `bar!` closes and `moving-* :ms` evictions are driven by one libxev timer per active slot, scheduled at the slot's exact next deadline; a quiet feed still flushes its bar at the window boundary, with no periodic walker.
 
-The repository root [`patchbay.edn`](./patchbay.edn) is the short default tour: routing, filtering, numeric cleanup, LVC, JSON demux, and commented pointers to bars and bridging. Full reference and worked examples live in [docs/patchbay.md](./docs/patchbay.md). One-line summary of every form in the [cheatsheet](./docs/patchbay-cheatsheet.md). Runnable end-to-end demos are in [`examples/`](./examples/); each `.edn` has a matching `.sh` that starts monoblok, publishes a sequence, subscribes in parallel, and prints publishes vs deliveries. Larger, weirder Codex-generated patchbays live in [`advanced-examples/`](./advanced-examples/).
+The root [`patchbay.edn`](./patchbay.edn) is the short tour. Full syntax lives in [docs/patchbay.md](./docs/patchbay.md), with a one-line operator summary in [docs/patchbay-cheatsheet.md](./docs/patchbay-cheatsheet.md). Runnable examples live in [`examples/`](./examples/).
 
 | file                                              | what it shows                                                   |
 |---------------------------------------------------|-----------------------------------------------------------------|
@@ -75,7 +95,7 @@ The repository root [`patchbay.edn`](./patchbay.edn) is the short default tour: 
 | [`mixer.edn`](./examples/mixer.edn)               | mixer mode: one process fronts N workers, sharded by first token (run with `python3 examples/mixer.py`) |
 
 
-### Testing
+### Validate and debug rules
 
 Run a patchbay directly with `monoblok examples/<file>.edn` or `.json`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
@@ -137,10 +157,20 @@ Absent `(lvc ...)`, LVC is off and the publish path does no cache work. `--no-lv
 
 ## NATS support
 
-### As a NATS core server
+monoblok implements the NATS core pieces it needs to behave like a small broker.
 
-Supported: PUB / SUB / UNSUB / MSG, wildcards, request/reply, queue groups, headers.
-Out of scope: TLS (use an NLB/HAProxy/nginx?), auth, JetStream, clustering et al. I think this fits the spirit of monoblok.
+| Feature | Support |
+|---|---|
+| `PUB` / `SUB` / `UNSUB` / `MSG` | yes |
+| wildcards | yes |
+| request/reply | yes |
+| queue groups | yes |
+| headers | yes |
+| `$LVC.*` last-value replay | yes, monoblok extension |
+| bridge to real NATS | export-only |
+| TLS/auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
+| JetStream | no |
+| clustering | no |
 
 ### As a bridging client to a NATS server
 
@@ -176,6 +206,8 @@ monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
 `--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic background dump (atomic temp-file + rename, on a worker thread). `SIGINT` / `SIGTERM` always writes a final snapshot before exiting. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
 whose filter no longer matches at its recorded position is skipped with a warning.
 
+Patchbay state is usually per rule and per subject. Avoid unbounded subject tokens such as timestamps, user IDs, or raw device-generated strings unless you intend to create state for each one.
+
 ## Design
 
 Each monoblok process owns one `xev.Loop` that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `write` per connection per publish.
@@ -202,9 +234,9 @@ journalctl -u monoblok -f
 
 Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
 
-## Benchmarks
+## How fast is it?
 
-Getting meaningful numbers turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
+tl;dr: It's likely to be fast enough. Getting meaningful benchmarks turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
 
 The **shape** of the comparison vs. nats-server, though, is consistent across runs:
 
@@ -226,7 +258,7 @@ Release binaries are built natively per arch by `.github/workflows/release.yml` 
 
 ## AI
 
-It's 2026, Claude and Codex help me a lot. This is something of a _scarlet letter_ to many - [some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
+It's 2026, Claude and Codex help me a lot. [Some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
 
 ## License
 
