@@ -1,6 +1,8 @@
 # monoblok
 
-monoblok is a messaging broker with built-in _processing_. It speaks enough of the [NATS](https://nats.io) protocol to be useful. Publishers PUB to it like any NATS server; a small S-expression DSL called **patchbay** rounds, deduplicates, deadbands, smooths, demuxes JSON, builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented by every consumer.
+Put monoblok in front of NATS when the raw stream is too noisy.
+
+monoblok is a tiny NATS-compatible stream conditioner: publishers send raw events, **patchbay** rules clean and reshape them once, and subscribers receive stable derived streams. It speaks enough of the [NATS](https://nats.io) protocol to be useful: publishers PUB to it like any NATS server; a small S-expression DSL rounds, deduplicates, deadbands, smooths, demuxes JSON, and builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented by every consumer.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
