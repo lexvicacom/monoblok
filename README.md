@@ -15,7 +15,7 @@ The point is simple: declare the boring cleanup once, close to the source, inste
 
 Reach for real NATS when you need clustering, JetStream, auth, TLS termination, or a durable system of record. monoblok is for the edge of the stream: noisy sensors, telemetry, market data, dashboards, derived alerts, last-value replay, and cheap data reduction before the cloud.
 
-Use it anywhere the _same old processing/cleaning code_ gets monotonous to write across consumers. **It reduces downstream work.** [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+[Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 monoblok is useful when:
 
@@ -27,7 +27,16 @@ monoblok is useful when:
 
 ## Try it out with no install
 
-A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://demo.monoblok.host:4222`, with a bridged real NATS server on `nats://demo.monoblok.host:4223`. Point any `nats` CLI at the first and start publishing. See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://demo.monoblok.host:4222`, with a bridged real NATS server on `nats://demo.monoblok.host:4223`.
+
+```sh
+nats sub 'demo.sensors.>' --server nats://demo.monoblok.host:4222
+nats pub demo.sensors.temp 21.001 --server nats://demo.monoblok.host:4222
+nats pub demo.sensors.temp 21.002 --server nats://demo.monoblok.host:4222
+nats pub demo.sensors.temp 21.104 --server nats://demo.monoblok.host:4222
+```
+
+See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
 
 ## Install
 
@@ -65,7 +74,7 @@ JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subject
 
 Time-windowed `bar!` closes and `moving-* :ms` evictions are driven by one libxev timer per active slot, scheduled at the slot's exact next deadline; a quiet feed still flushes its bar at the window boundary, with no periodic walker.
 
-The repository root [`patchbay.edn`](./patchbay.edn) is the short default tour: routing, filtering, numeric cleanup, LVC, JSON demux, and commented pointers to bars and bridging. Full reference and worked examples live in [docs/patchbay.md](./docs/patchbay.md). One-line summary of every form in the [cheatsheet](./docs/patchbay-cheatsheet.md). Runnable end-to-end demos are in [`examples/`](./examples/); each `.edn` has a matching `.sh` that starts monoblok, publishes a sequence, subscribes in parallel, and prints publishes vs deliveries. Larger, weirder Codex-generated patchbays live in [`advanced-examples/`](./advanced-examples/).
+The root [`patchbay.edn`](./patchbay.edn) is the short tour. Full syntax lives in [docs/patchbay.md](./docs/patchbay.md), with a one-line operator summary in [docs/patchbay-cheatsheet.md](./docs/patchbay-cheatsheet.md). Runnable examples live in [`examples/`](./examples/).
 
 | file                                              | what it shows                                                   |
 |---------------------------------------------------|-----------------------------------------------------------------|
@@ -83,7 +92,7 @@ The repository root [`patchbay.edn`](./patchbay.edn) is the short default tour: 
 | [`mixer.edn`](./examples/mixer.edn)               | mixer mode: one process fronts N workers, sharded by first token (run with `python3 examples/mixer.py`) |
 
 
-### Testing
+### Validate and debug rules
 
 Run a patchbay directly with `monoblok examples/<file>.edn` or `.json`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
@@ -156,7 +165,7 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | headers | yes |
 | `$LVC.*` last-value replay | yes, monoblok extension |
 | bridge to real NATS | export-only |
-| TLS/auth on the local server | no; put it behind NLB/HAProxy/nginx or bridge to real NATS |
+| TLS/auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
 | JetStream | no |
 | clustering | no |
 
