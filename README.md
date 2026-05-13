@@ -36,7 +36,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
-Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail. EDN is the canonical hand-written format. `.json` patchbay files are accepted as a compatibility layer for tooling and JSON-first users, but if you're editing by hand it is worth embracing the S-expression form; editors handle it well. In VS Code, [Calva](https://calva.io/) gives Clojure/EDN syntax highlighting and paren help, and Parinfer-style editing makes indentation drive the parentheses. In Emacs, use `clojure-mode`/CIDER or `clojure-ts-mode`, with Parinfer/paredit/smartparens if you want structural editing.
+Top-level forms are `(on SUBJECT-FILTER BODY)`. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility.
 
 ```edn
 (on "sensors.*"
