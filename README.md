@@ -1,46 +1,41 @@
 # monoblok
 
-Use monoblok as a small NATS-core broker, or put it in front of NATS when the raw stream is too noisy.
+monoblok is a NATS-compatible signal conditioner, designed to take in publishes directly from NATS clients.
 
-monoblok accepts normal NATS-style `PUB` / `SUB` clients, then runs each publish through **patchbay**: a small S-expression DSL for cleaning and reshaping streams. Rules can round, deduplicate, deadband, smooth, demux JSON, build OHLC bars, emit alerts, and forward selected subjects upstream.
+monoblok accepts `PUB` / `SUB` commands, then runs each publish through **patchbay**: a small S-expression DSL for cleaning and reshaping streams. Rules can round, deduplicate, deadband, smooth, demux JSON, build OHLC bars, emit alerts, and forward selected subjects upstream.
 
 Use it in two ways:
 
-- **Standalone broker**: clients connect directly to monoblok for lightweight NATS-core pub/sub with stream conditioning built in.
-- **Conditioning front door**: publishers send raw events to monoblok, monoblok cleans them, then exports selected subjects to a real NATS cluster.
-
-The point is simple: declare the boring cleanup once, close to the source, instead of reimplementing it in every subscriber.
+- **Standalone broker**: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
+- **Signal conditioning front door**: publishers send raw events to monoblok, monoblok cleans them, then exports selected subjects to a real NATS cluster.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
-Reach for real NATS when you need clustering, JetStream, auth, TLS termination, or a durable system of record. monoblok is for the edge of the stream: noisy sensors, telemetry, market data, dashboards, derived alerts, last-value replay, and cheap data reduction before the cloud.
+Use monoblok to complement NATS when you've noticed that half your subscribers exist to tidy up the stream before the real work starts: rounding the value, dropping duplicates, smoothing spikes, splitting JSON frames, building the 1-minute bar, firing the alert when a threshold trips. 
+
+With monoblok at hand, that work doesn't belong in every consumer. **Declare it once, in rules, at the broker.**
 
 [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
-monoblok is useful when:
+## Public demo server
 
-- noisy numeric streams need round / squelch / deadband / smooth before anyone consumes them
-- JSON frames need breaking into scalar subjects
-- late subscribers need the current value immediately via `$LVC.*`
-- OHLC bars, moving stats, alerts, or windowed aggregates should be declared once
-- only cleaned subjects should be bridged into a real NATS deployment
-
-## Try it out with no install
-
-A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `nats://demo.monoblok.host:4222`, with a bridged real NATS server on `nats://demo.monoblok.host:4223`.
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `demo.monoblok.host:4222`, with a bridged real NATS server on `demo.monoblok.host:4223`.
 
 ```sh
-nats sub 'demo.sensors.>' --server nats://demo.monoblok.host:4222
-nats pub demo.sensors.temp 21.001 --server nats://demo.monoblok.host:4222
-nats pub demo.sensors.temp 21.002 --server nats://demo.monoblok.host:4222
-nats pub demo.sensors.temp 21.104 --server nats://demo.monoblok.host:4222
+nats -s demo.monoblok.host:4222 sub 'demo.sensors.>'
+(new terminal)
+nats -s demo.monoblok.host:4223 sub '>'
+(new terminal)
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.001
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.002
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.104
 ```
 
 See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
 
 ## Install
 
-One-liner for Mac/Linux: downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
+This downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
