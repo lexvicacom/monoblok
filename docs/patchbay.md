@@ -23,6 +23,48 @@ resolved by the evaluator.
 That's the whole grammar. The rest of this doc is just which
 operators exist and what they do.
 
+### JSON patchbay files
+
+EDN is the canonical notation for hand-written patchbays. Files ending
+in `.json` are also accepted, but treat that as a compatibility layer:
+useful for generated patchbays, web UIs, config systems, and users who
+need JSON as an affordance. If you're editing rules directly, consider
+embracing the S-expression form. It is terser, supports comments, and
+keeps symbols distinct from strings without escape hatches. VS Code's
+[Calva](https://calva.io/) gives good Clojure/EDN highlighting, bracket
+matching, paren coloring, and Parinfer-style editing. In Emacs,
+`clojure-mode`/CIDER works well; `clojure-ts-mode` is the newer
+tree-sitter option. Parinfer, paredit, and smartparens are all good ways
+to make S-expressions feel less manual.
+
+JSON is read into the same patchbay AST, not a separate DSL: arrays are
+forms and the first array item is always the operator symbol. In
+argument positions, plain objects become keyword options, and the bound
+names `"subject"`, `"payload"`, `"payload-float"`, and `"payload-int"`
+become symbols in rule expressions.
+
+```json
+[
+  ["on", "sensors.*",
+    ["->", "payload-float", ["round", 1], ["squelch"], ["publish!", ["subject-append", "stable"]]]],
+
+  ["on", "market.*", {"reentrant": true},
+    ["bar!", 60, "payload-float"]],
+
+  ["bridge", {
+    "servers": ["nats://127.0.0.1:4223"],
+    "export": ["sensors.*.stable"]
+  }]
+]
+```
+
+Other strings in argument positions are string literals. Use
+`{"str":"payload"}` if you really need the literal string `"payload"` in
+a rule body, `{"kw":"ms"}` for a standalone keyword, and `{"vec":[...]}`
+when a rule body needs a literal vector. See
+[`examples/demo.json`](../examples/demo.json) for a fuller conversion of
+[`examples/demo.edn`](../examples/demo.edn).
+
 ### EDN is the notation; the patchbay is the evaluator
 
 Patchbay files are valid EDN, which is why `.edn` editor tooling

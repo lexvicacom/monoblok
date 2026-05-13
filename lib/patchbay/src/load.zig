@@ -29,6 +29,10 @@ pub fn loadRules(arena: Allocator, source: []const u8) LoadError![]Rule {
 /// per-form, not per-byte.
 pub fn loadRulesReporting(arena: Allocator, source: []const u8, parse_err_offset: *usize) LoadError![]Rule {
     const forms = try sexpr.parseAllReporting(arena, source, parse_err_offset);
+    return loadRulesFromForms(arena, forms);
+}
+
+pub fn loadRulesFromForms(arena: Allocator, forms: []const sexpr.Value) LoadError![]Rule {
     var out: std.ArrayList(Rule) = .empty;
     for (forms) |f| {
         if (f != .list) return error.InvalidRuleForm;

@@ -8,11 +8,13 @@
 //!   - `sexpr`    s-expression parser, used by callers that want to share
 //!                the same source file for their own top-level forms
 //!                (monoblok's bridge config, for example)
+//!   - `json_reader` alternate JSON reader for the same form AST
 
 pub const eval = @import("eval.zig");
 pub const builtins = @import("builtins.zig");
 pub const subject = @import("subject.zig");
 pub const sexpr = @import("sexpr.zig");
+pub const json_reader = @import("json_reader.zig");
 pub const kernel = @import("kernel.zig");
 
 test {
@@ -20,5 +22,6 @@ test {
     _ = builtins;
     _ = subject;
     _ = sexpr;
+    _ = json_reader;
     _ = kernel;
 }

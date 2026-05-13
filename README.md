@@ -36,7 +36,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
-Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail.
+Top-level forms are `(on SUBJECT-FILTER BODY)`; `BODY` is evaluated whenever an incoming subject matches `SUBJECT-FILTER`. Wildcards are NATS-style: `*` is one token, `>` is the tail. EDN is the canonical hand-written format. `.json` patchbay files are accepted as a compatibility layer for tooling and JSON-first users, but if you're editing by hand it is worth embracing the S-expression form; editors handle it well. In VS Code, [Calva](https://calva.io/) gives Clojure/EDN syntax highlighting and paren help, and Parinfer-style editing makes indentation drive the parentheses. In Emacs, use `clojure-mode`/CIDER or `clojure-ts-mode`, with Parinfer/paredit/smartparens if you want structural editing.
 
 ```edn
 (on "sensors.*"
@@ -77,7 +77,7 @@ The repository root [`patchbay.edn`](./patchbay.edn) is the short default tour: 
 
 ### Testing
 
-Run a patchbay directly with `monoblok examples/<file>.edn`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
+Run a patchbay directly with `monoblok examples/<file>.edn` or `.json`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
 For quick patchbay debugging, `--soundcheck` runs the same evaluator without opening a NATS socket. It reads newline-delimited `SUBJECT|payload` rows on stdin, passes inputs through stdout, and prints any `publish!` emissions. Time-based patchbay ops use the normal libxev clock path; after stdin closes, pending timers stay alive briefly unless you set `--soundcheck-linger-ms 0`.
 
