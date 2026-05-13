@@ -6,7 +6,7 @@ monoblok speaks NATS. Point your NATS clients at it and the conditioning happens
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
-That work doesn't belong in every consumer. **Declare it once, as rules, in the broker:**
+That work doesn't belong in every consumer. **Declare it once, as rules, in the broker.**
 
 - Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
@@ -24,8 +24,11 @@ nats -s demo.monoblok.host:4223 sub '>'
 (new terminal)
 nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.001
 nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.002
+nats -s demo.monoblok.host:4222 pub demo.sensors.temp 2331.104
 nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.104
 ```
+
+Conditioned values are visible on the first subscription. As the `2331.104` value breaches a threshold, it is also exported to NATS so is visible on the second subscription.
 
 See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
 
