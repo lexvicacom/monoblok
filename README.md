@@ -1,8 +1,10 @@
 # monoblok
 
-Put monoblok in front of NATS when the raw stream is too noisy.
+Use monoblok as a small NATS-core broker, or put it in front of NATS when the raw stream is too noisy.
 
-monoblok is a tiny NATS-compatible stream conditioner: publishers send raw events, **patchbay** rules clean and reshape them once, and subscribers receive stable derived streams. It speaks enough of the [NATS](https://nats.io) protocol to be useful: publishers PUB to it like any NATS server; a small S-expression DSL rounds, deduplicates, deadbands, smooths, demuxes JSON, and builds OHLC bars; subscribers (or a real upstream NATS cluster, via the bridge) get the cleaned stream. The _conditioning_ is declared once, instead of being re-implemented by every consumer.
+monoblok is a tiny NATS-compatible stream conditioner and broker: publishers send raw events, **patchbay** rules clean and reshape them once, and subscribers receive stable derived streams. It speaks enough of the [NATS](https://nats.io) protocol to be useful, so publishers PUB to it and subscribers SUB from it like any NATS server. For smaller scenarios, monoblok can be the broker your clients connect to directly. For larger systems, it can sit in front of a real NATS cluster and export only the cleaned stream.
+
+The patchbay DSL rounds, deduplicates, deadbands, smooths, demuxes JSON, and builds OHLC bars. The _conditioning_ is declared once, instead of being re-implemented by every consumer.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
