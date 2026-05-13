@@ -144,19 +144,32 @@ pub fn main(init: std.process.Init) !void {
     if (mixer_path) |mp| return mixer_main(gpa, arena, fsio, mp);
 
     const patchbay_src: ?[]u8 = if (patchbay_path) |path| try readFile(fsio, arena, path) else null;
+    const patchbay_forms: ?[]const sexpr.Value = if (patchbay_src) |src| blk: {
+        const path = patchbay_path.?;
+        if (std.mem.endsWith(u8, path, ".json")) {
+            break :blk patchbay.json_reader.parseAll(arena, src) catch |err| {
+                std.debug.print("monoblok: {s}: JSON patchbay parse error: {s}\n", .{ path, @errorName(err) });
+                std.process.exit(2);
+            };
+        }
+
+        var parse_err_offset: usize = 0;
+        break :blk sexpr.parseAllReporting(arena, src, &parse_err_offset) catch |err| switch (err) {
+            error.UnexpectedEof,
+            error.UnexpectedRParen,
+            error.UnexpectedRBracket,
+            error.MismatchedBracket,
+            error.UnterminatedString,
+            error.InvalidEscape,
+            error.InvalidNumber,
+            => fatalParseError(path, src, parse_err_offset, err),
+            else => return err,
+        };
+    } else null;
 
     const loaded_rules: []rules.Rule = blk: {
-        if (patchbay_src) |src| {
-            var parse_err_offset: usize = 0;
-            break :blk rules.loadRulesReporting(arena, src, &parse_err_offset) catch |err| switch (err) {
-                error.UnexpectedEof,
-                error.UnexpectedRParen,
-                error.UnterminatedString,
-                error.InvalidEscape,
-                error.InvalidNumber,
-                => fatalParseError(patchbay_path.?, src, parse_err_offset, err),
-                else => return err,
-            };
+        if (patchbay_forms) |forms| {
+            break :blk try rules.loadRulesFromForms(arena, forms);
         }
         break :blk &.{};
     };
@@ -173,8 +186,8 @@ pub fn main(init: std.process.Init) !void {
         }
         fatal("patchbay validation failed");
     }
-    const lvc_filters = if (patchbay_src) |src|
-        try lvc_config.loadFilters(arena, src)
+    const lvc_filters = if (patchbay_forms) |forms|
+        try lvc_config.loadFiltersFromForms(arena, forms)
     else
         &.{};
     if (validate_only) {
@@ -244,8 +257,8 @@ pub fn main(init: std.process.Init) !void {
     // Bridge config comes from the top-level `(bridge ...)` form in the
     // patchbay file.
     var bridge_runtime: ?bridge.Bridge = null;
-    if (patchbay_src) |src| {
-        const cfg_opt = bridge.loadConfig(arena, src) catch |err| blk: {
+    if (patchbay_forms) |forms| {
+        const cfg_opt = bridge.loadConfigFromForms(arena, forms) catch |err| blk: {
             std.log.warn("bridge: config parse failed: {s}", .{@errorName(err)});
             break :blk null;
         };
@@ -471,10 +484,11 @@ fn printUsage() void {
         \\A NATS-compatible server with an S-expression routing and signal conditioning DSL ("patchbay").
         \\
         \\Options:
-        \\  PATCHBAY         Path to patchbay file. The first non-flag
-        \\                   argument is treated as the patchbay path, so
-        \\                   `monoblok patchbay.edn` and `monoblok
-        \\                   --validate patchbay.edn` both work.
+        \\  PATCHBAY         Path to patchbay file (.edn or .json). The
+        \\                   first non-flag argument is treated as the
+        \\                   patchbay path, so `monoblok patchbay.edn`
+        \\                   and `monoblok --validate patchbay.json`
+        \\                   both work.
         \\  --port PORT      TCP port to listen on (default 4222). Pass 0 to
         \\                   disable TCP (in which case --unix-socket must
         \\                   be given).

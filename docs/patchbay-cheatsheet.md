@@ -10,6 +10,28 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 | `(lvc [FILTER ...])` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings. Legacy `(lvc FILTER ...)` is accepted. |
 | `(bridge :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. See bridge keywords below. |
 
+## EDN / JSON side by side
+
+EDN is canonical for hand-written patchbays. Files ending in `.json`
+are accepted as a compatibility layer for tooling, generated configs,
+web UIs, and JSON-first users. If you're editing rules directly,
+consider embracing the S-expression form: it is terser, supports
+comments, and editor support is good (`Calva` plus Parinfer-style
+editing in VS Code; `clojure-mode`/CIDER or `clojure-ts-mode` plus
+Parinfer/paredit/smartparens in Emacs). JSON maps to the same form AST:
+arrays are calls, the first array item is always the operator symbol,
+object arguments become keyword options, and
+`"subject"` / `"payload"` / `"payload-float"` / `"payload-int"` become
+symbols in rule expressions.
+
+| EDN | JSON |
+|-----|------|
+| `(lvc ["demo.>"])` | `["lvc", "demo.>"]` |
+| `(on "sensors.*" (publish! "out" payload))` | `["on", "sensors.*", ["publish!", "out", "payload"]]` |
+| `(moving-avg :ms 5000 payload-float)` | `["moving-avg", {"ms":5000}, "payload-float"]` |
+| `(on "MARKET.*" :reentrant true (bar! 60 payload-float))` | `["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "payload-float"]]` |
+| `(bridge :servers ["nats://127.0.0.1:4223"] :export ["demo.>"])` | `["bridge", {"servers":["nats://127.0.0.1:4223"], "export":["demo.>"]}]` |
+
 ## Bound symbols
 
 | symbol | value |

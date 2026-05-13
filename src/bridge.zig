@@ -60,6 +60,10 @@ pub const Config = struct {
 /// Returns null if absent. Errors on a second bridge form or malformed keys.
 pub fn loadConfig(arena: Allocator, source: []const u8) ConfigError!?Config {
     const forms = try sexpr.parseAll(arena, source);
+    return loadConfigFromForms(arena, forms);
+}
+
+pub fn loadConfigFromForms(arena: Allocator, forms: []const sexpr.Value) ConfigError!?Config {
     var found: ?Config = null;
     for (forms) |f| {
         if (f != .list or f.list.len == 0) continue;

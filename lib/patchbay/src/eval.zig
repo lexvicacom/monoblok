@@ -30,6 +30,7 @@ pub const LoadError = load.LoadError;
 pub const ValidateFailure = load.ValidateFailure;
 pub const loadRules = load.loadRules;
 pub const loadRulesReporting = load.loadRulesReporting;
+pub const loadRulesFromForms = load.loadRulesFromForms;
 pub const deinitRules = load.deinitRules;
 pub const validate = load.validate;
 pub const isLiteralFilter = load.isLiteralFilter;

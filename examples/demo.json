@@ -1,0 +1,85 @@
+[
+  ["lvc", "demo.>"],
+
+  [
+    "on",
+    "demo.sensors.*",
+    ["->", "payload-float", ["round", 1], ["squelch"], ["publish!", ["subject-append", "stable"]]]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    ["->", "payload-float", ["deadband", 0.5], ["publish!", ["subject-append", "delta"]]]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    ["->", "payload-float", ["moving-avg", 10], ["deadband", 1.0], ["publish!", ["subject-append", "smoothed"]]]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    ["->", "payload-float", ["moving-avg", {"ms": 5000}], ["publish!", ["subject-append", "avg5s"]]]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    ["->", ["delta", "payload-float"], ["squelch"], ["publish!", ["subject-append", "delta-abs"]]]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    [
+      "transition",
+      [">", "payload-float", 28.0],
+      ["publish!", ["subject-append", "alert"], "hot"],
+      ["publish!", ["subject-append", "ok"], "cool"]
+    ]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    [
+      "when",
+      [">", "payload-float", 40.0],
+      ["->", "payload", ["hold-off", 2000], ["publish!", ["subject-append", "overload"]]]
+    ]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    ["->", ["rising-edge", [">", "payload-float", 50.0]], ["publish!", ["subject-append", "spike"]]]
+  ],
+
+  [
+    "on",
+    "demo.log.*",
+    [
+      "when",
+      ["contains?", "payload", "alert"],
+      ["publish!", "demo.alerts", ["str-concat", "[", ["subject-token", 1], "] ", "payload"]]
+    ]
+  ],
+
+  [
+    "on",
+    "demo.sensors.*",
+    ["count!", ["rising-edge", [">", "payload-float", 50.0]]]
+  ],
+
+  [
+    "bridge",
+    {
+      "servers": ["nats://127.0.0.1:4223"],
+      "name": "monoblok-prod-1",
+      "export": ["demo.sensors.*.spike", "demo.alerts.>"]
+    }
+  ]
+]

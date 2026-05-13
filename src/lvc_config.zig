@@ -15,6 +15,13 @@ pub const ConfigError = error{
 /// Returns an empty slice when LVC is not configured.
 pub fn loadFilters(arena: Allocator, source: []const u8) ConfigError![]const router_mod.Router.LvcFilter {
     const forms = try sexpr.parseAll(arena, source);
+    return loadFiltersFromForms(arena, forms);
+}
+
+pub fn loadFiltersFromForms(
+    arena: Allocator,
+    forms: []const sexpr.Value,
+) ConfigError![]const router_mod.Router.LvcFilter {
     var out: std.ArrayList(router_mod.Router.LvcFilter) = .empty;
 
     for (forms) |f| {
