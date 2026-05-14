@@ -9,12 +9,21 @@
 
 ; Opt in to last-value-cache streams for all subjects. Narrow this to the
 ; subject families you actually want retained in production.
+; nats pub foo 1
+; ...
+; nats sub '$LVC.foo' => 1
+; nats pub foo 2
+; ..
+; => 2
+
 (lvc [">"])
 
-; Fan high temperature readings out to a dedicated sub-subject.
+; It is recommended you nats sub '>' to see the outputs of the below
+;
+; Fan high temperature readings out to a dedicated sub-subject. nats pub sensors.temp 40
 (on "sensors.*"
   (when (> payload-float 30.0)
-    (publish! (subject-append "high") payload)))
+    (publish! (subject-append "high") payload))) ; => sensors.temp.high
 
 ; Mirror anything mentioning "alert" to events.alerts.
 (on ">"
