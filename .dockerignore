@@ -1,0 +1,16 @@
+.git
+.github
+.zig-cache
+zig-cache
+dist
+docs
+examples
+advanced-examples
+bench-results
+vendor
+lib
+src
+scripts
+README.md
+*.png
+*.gif
