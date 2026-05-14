@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Build monoblok and bundle it into a release tarball under dist/.
 #
-# Usage: scripts/package.sh VERSION PLATFORM
+# Usage: scripts/package.sh VERSION PLATFORM [VARIANT]
 #   VERSION   eg "v0.0.10" or a short sha
 #   PLATFORM  eg "linux-x86_64", "linux-aarch64", "macos-aarch64"
+#   VARIANT   optional: "default" or "epoll" (Linux only)
 #
 # Called from .github/workflows/release.yml; safe to run locally too.
 
@@ -11,6 +12,18 @@ set -eu
 
 VERSION="$1"
 PLATFORM="$2"
+VARIANT="${3:-default}"
+
+case "$VARIANT" in
+    default) suffix="" ; build_args="" ;;
+    epoll)
+        case "$PLATFORM" in
+            linux-*) suffix="-epoll"; build_args="-Dforce-epoll=true" ;;
+            *) echo "epoll variant is only valid for Linux platforms" >&2; exit 2 ;;
+        esac
+        ;;
+    *) echo "unknown VARIANT: $VARIANT" >&2; exit 2 ;;
+esac
 
 # Pin the CPU baseline per platform. Without this Zig defaults to the host
 # CPU, and GitHub's ubuntu-22.04-arm runner is a Cobalt-100 (Neoverse-N2-class
@@ -24,11 +37,11 @@ case "$PLATFORM" in
     *) echo "unknown PLATFORM: $PLATFORM" >&2; exit 2 ;;
 esac
 
-name="monoblok-${VERSION}-${PLATFORM}"
+name="monoblok-${VERSION}-${PLATFORM}${suffix}"
 
 # Fresh zig-out so we don't ship stale bits if a previous run failed halfway.
 rm -rf zig-out
-zig build --release=safe $target_args
+zig build --release=safe $target_args $build_args
 
 mkdir -p "dist/${name}"
 cp zig-out/bin/monoblok "dist/${name}/"

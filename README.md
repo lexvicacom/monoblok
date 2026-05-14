@@ -248,7 +248,7 @@ Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/pa
 
 ### Container
 
-Linux release builds also publish a multi-arch image to GitHub Container Registry:
+Linux release builds also publish a multi-arch image to GitHub Container Registry. The image uses the epoll Linux build so it runs under standard container seccomp profiles:
 
 ```sh
 docker run --rm -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
@@ -275,20 +275,6 @@ docker run --rm \
 
 For orchestrators, use the same file shape: mount a ConfigMap, Docker config, or other one-file config source at `/etc/monoblok/patchbay.edn`. The runtime image intentionally has no shell or package manager, so inline patchbay strings are best written to a file by the host/orchestrator before starting the container rather than expanded inside the image.
 
-If the container exits immediately with `error: PermissionDenied` on Docker 29.x (seen on Ubuntu 24.04), the default seccomp profile is blocking the `io_uring_*` syscalls that libxev uses by default. Two ways to fix it:
-
-```sh
-# Option 1: bring your own seccomp profile (ships with the repo)
-docker run --rm --security-opt seccomp=./seccomp/monoblok.json -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
-
-# Option 2: rebuild with libxev forced to epoll, no seccomp flag needed
-zig build --release=safe -Dforce-epoll=true
-```
-
-`-Dforce-epoll=true` is a Linux-only flag (silently ignored elsewhere) that swaps libxev's default io_uring backend for epoll. Epoll is decades old, allowed by every container seccomp profile, and for monoblok's pub/sub workload the throughput difference vs io_uring is small. For a quick local test, `--security-opt seccomp=unconfined` also works but disables seccomp entirely. Older Docker versions (and Docker 25+ on most hosts) allow io_uring under the default profile, so this only applies to the specific Docker/kernel combination above.
-
-The io_uring blast radius here is low: monoblok is a single-purpose NATS daemon with no untrusted code paths, and an attacker who has already compromised the daemon has easier targets than chasing a kernel io_uring bug. The seccomp profile is the simplest fix and works with the published image. If your host policy disallows io_uring on principle (many hardened distros do), the epoll build is the cleaner answer because it removes the syscalls from the binary entirely (you'll need to build and publish your own image, however).
-
 ## How fast is it?
 
 tl;dr: It's likely to be fast enough. Getting meaningful benchmarks turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
@@ -309,7 +295,7 @@ zig build --release=safe
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
 ```
 
-Release binaries are built natively per arch by `.github/workflows/release.yml` on three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), `macos-latest` (aarch64). Cross compiling in a Linux x86_64 runner ought to be possible, but currently this breaks ARM builds. As it's not costly to run a tiny codebase like this through GHA on native targets, I just left it alone. YMMV.
+Release binaries are built natively per arch by `.github/workflows/release.yml` on three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), `macos-latest` (aarch64). Linux release tarballs without a suffix use libxev's default io_uring backend; Linux `-epoll` tarballs and container images are built with `-Dforce-epoll=true`. Cross compiling in a Linux x86_64 runner ought to be possible, but currently this breaks ARM builds. As it's not costly to run a tiny codebase like this through GHA on native targets, I just left it alone. YMMV.
 
 ## AI
 
