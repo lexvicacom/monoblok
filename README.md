@@ -18,7 +18,7 @@ Common ways of running monoblok:
 - Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
-[![monoblok deployment modes](./docs/infographic.png)](./docs/infographic.png)
+![monoblok deployment modes](./docs/infographic.png)
 
 monoblok is written in Zig and builds on Linux and macOS. It aims to be **fast**, even on entry level/shared hardware. There are no scientific measurements yet. There are some [benchmark scripts](./scripts) and [results](./bench-results).
 
