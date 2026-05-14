@@ -51,7 +51,12 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Build + package
-        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
+        run: |
+          set -eu
+          bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
+          case "${{ matrix.platform }}" in
+            linux-*) bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}" epoll ;;
+          esac
 
       - name: Resolve container metadata
         if: startsWith(matrix.platform, 'linux-')
