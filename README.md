@@ -50,6 +50,7 @@ See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth su
 
 ## Install
 
+### Binary (macOS/Linux)
 This script downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
 
 You can run it with:
@@ -60,6 +61,14 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/st
 
 Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
+### Docker (linux)
+
+```sh
+docker run --rm -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
+```
+The image includes the root `patchbay.edn` as `/etc/monoblok/patchbay.edn` as a starting point.
+
+See the [Container](#container) section for info on use with orchestrators and `seccomp`.
 
 ## patchbay
 
@@ -176,7 +185,7 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | `PUB` / `SUB` / `UNSUB` / `MSG` | yes |
 | wildcards | yes |
 | request/reply | yes |
-| queue groups | yes |
+| queue groups | no |
 | headers | yes |
 | `$LVC.*` last-value replay | yes, monoblok extension |
 | bridge to real NATS | export-only |
