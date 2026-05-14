@@ -1,84 +1,112 @@
 # Monoblok C Spike
 
-Experimental C23/libuv spike for the smallest Monoblok-shaped NATS server:
+C23/libuv port spike. Build with CMake from the repository root.
 
-- accepts TCP clients
-- parses `CONNECT`, `PING`, `SUB`, and `PUB`
-- fans out literal-subject publishes to subscribers
-- serializes writes through one guarded `uv_write_t` per connection
-
-It also contains a standalone C port of the patchbay s-expression parser:
-
-- arena-owned parse result
-- lists `(...)`, vectors `[...]`, strings, symbols, keywords, booleans, nil,
-  and numbers
-- lists are always call forms: they must be non-empty and headed by a symbol;
-  use vectors for sequence data
-- `pb-dump` helper for inspecting parsed forms
-
-The C patchbay slice also includes a small pure evaluator for early forms:
-bound symbols, `do`, `if`, `when`, `not`, comparisons, arithmetic,
-`and`, `or`, `->`, `str-concat`, `contains?`, affix checks, numeric helpers,
-subject helpers, simple stateful gates/counters, `json-get`, `json-demux!`,
-and `publish!` via callback. `monoblok-c --soundcheck PATCHBAY` runs that
-subset over stdin rows shaped as `SUBJECT|payload`.
-
-Language model for this spike:
-
-- `(...)` is a call form. The head is always a symbol.
-- `[...]` is data. Vector elements evaluate and return a vector.
-- JSON patchbay files use arrays as call forms and `{"vec":[...]}` as vector
-  data. Plain objects in form arguments expand to keyword/value pairs for
-  config-shaped forms.
-- Special forms are named explicitly (`if`, `when`, `do`) and are the only
-  lazy forms.
-- Side effects go through callbacks (`publish!`); pure forms stay ordinary
-  value-returning calls.
-- Do not add quote/macro/list-as-data compatibility paths. Prefer one obvious
-  way to write each thing.
-
-This is not feature parity with the Zig daemon. It intentionally omits full
-patchbay parity, LVC, snapshots, mixer, bridge, `UNSUB`, queue groups, wildcard
-subjects, headers, auth, and TLS.
-
-## Dependencies
-
-The preferred layout is vendored:
+## Configure
 
 ```sh
-git clone https://github.com/libuv/libuv.git c-spike/vendor/libuv
-git clone https://github.com/ibireme/yyjson.git c-spike/vendor/yyjson
-```
-
-If `vendor/libuv` is absent, CMake falls back to system libuv through
-`pkg-config`. yyjson is used as vendored source for JSON patchbay loading and
-JSON payload operations.
-
-## Commands
-
-```sh
-cmake -S c-spike -B c-spike/build -DCMAKE_BUILD_TYPE=Release
-cmake --build c-spike/build
-ctest --test-dir c-spike/build --output-on-failure
-cmake --build c-spike/build --target smoke
-./c-spike/build/pb-dump patchbay.edn
-./c-spike/build/monoblok-c --version
-./c-spike/build/monoblok-c --validate c-spike/examples/strict-vectors.edn
-./c-spike/build/monoblok-c --validate c-spike/examples/strict-vectors.json
-printf 'sensors.temp|31\n' | ./c-spike/build/monoblok-c --soundcheck c-spike/examples/strict-vectors.edn
-printf 'sensors.temp|{"temp":31,"status":"warm"}\n' | ./c-spike/build/monoblok-c --soundcheck c-spike/examples/strict-vectors.json
-```
-
-Sanitizers:
-
-```sh
+cmake -S c-spike -B c-spike/build
+cmake -S c-spike -B c-spike/build-release -DCMAKE_BUILD_TYPE=Release
 cmake -S c-spike -B c-spike/build-asan -DMB_ASAN=ON
-cmake --build c-spike/build-asan
-ctest --test-dir c-spike/build-asan --output-on-failure
 ```
 
-Run manually:
+Useful cache variables:
+
+- `CMAKE_BUILD_TYPE=Debug|Release|RelWithDebInfo|MinSizeRel`
+- `MB_ASAN=ON` enables AddressSanitizer and UBSan.
+- `MONOBLOK_C_VERSION=...` sets the version string compiled into `monoblok-c`.
+
+`vendor/libuv` is used when present. Otherwise CMake looks for system libuv via
+`pkg-config`. `vendor/yyjson` is built directly.
+
+## CMake Targets
+
+Primary:
 
 ```sh
+cmake --build c-spike/build                  # default build
+cmake --build c-spike/build --target monoblok-c
+cmake --build c-spike/build --target bench-patchbay
+cmake --build c-spike/build --target pb-dump
+```
+
+Tests:
+
+```sh
+cmake --build c-spike/build --target unit-tests
+cmake --build c-spike/build --target sexpr-tests
+cmake --build c-spike/build --target eval-tests
+cmake --build c-spike/build --target json-tests
+cmake --build c-spike/build --target program-tests
+ctest --test-dir c-spike/build --output-on-failure
+```
+
+Smoke and checks:
+
+```sh
+cmake --build c-spike/build --target smoke
+cmake --build c-spike/build --target soundcheck
+cmake --build c-spike/build --target tidy       # if clang-tidy was found
+```
+
+Libraries:
+
+```sh
+cmake --build c-spike/build --target monoblok_core
+cmake --build c-spike/build --target patchbay_sexpr
+cmake --build c-spike/build --target yyjson
+cmake --build c-spike/build --target uv_a
+```
+
+List generated targets:
+
+```sh
+cmake --build c-spike/build --target help
+```
+
+## Run
+
+```sh
+./c-spike/build/monoblok-c --help
+./c-spike/build/monoblok-c --version
 ./c-spike/build/monoblok-c --host 127.0.0.1 --port 4222
+./c-spike/build/monoblok-c --host 127.0.0.1 --port 4222 --no-lvc
+./c-spike/build/monoblok-c --host 127.0.0.1 --port 4222 --patchbay patchbay.edn
+./c-spike/build/monoblok-c --validate patchbay.edn
+./c-spike/build/monoblok-c --soundcheck patchbay.edn
+```
+
+## Patchbay Helpers
+
+```sh
+./c-spike/build/pb-dump patchbay.edn
+printf 'sensors.temp|31\n' | ./c-spike/build/monoblok-c --soundcheck patchbay.edn
+```
+
+## Benchmarks
+
+Patchbay evaluator microbench:
+
+```sh
+cmake --build c-spike/build-release --target bench-patchbay
+./c-spike/build-release/bench-patchbay pass 1 1000000
+./c-spike/build-release/bench-patchbay gate 1 1000000
+./c-spike/build-release/bench-patchbay window 1 1000000
+./c-spike/build-release/bench-patchbay json 1 1000000
+./c-spike/build-release/bench-patchbay mixed 1 1000000
+```
+
+Modes match the Zig bench shape:
+
+- `pass`: dispatch plus `publish!`
+- `gate`: `payload-float`, `squelch`, `publish!`
+- `window`: `payload-float`, `moving-avg`, `publish!`
+- `json`: `json-demux!` over a tiny object
+- `mixed`: load `./patchbay.edn`
+
+NATS CLI comparison script:
+
+```sh
+NATS_URL=nats://127.0.0.1:42230 BENCH_COOLDOWN_S=0 \
+  bash c-spike/scripts/bench-with-nats-server.sh
 ```

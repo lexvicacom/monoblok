@@ -24,6 +24,7 @@ typedef struct pb_program {
 } pb_program;
 
 bool pb_program_load_file(pb_program *program, const char *path);
+bool pb_program_load_source(pb_program *program, const char *label, const char *source, size_t source_len);
 void pb_program_free(pb_program *program);
 bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
                              uint64_t now_ms, int64_t wall_ms);

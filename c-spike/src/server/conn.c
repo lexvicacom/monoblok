@@ -1,5 +1,6 @@
 #include "conn.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,21 @@ void mb_conn_begin_close(mb_conn *conn) {
     }
 }
 
+static size_t pending_bytes(const mb_conn *conn) {
+    return conn->router_conn.out.len + conn->in_flight.len;
+}
+
+static bool close_if_slow_consumer(mb_conn *conn) {
+    const size_t pending = pending_bytes(conn);
+    if (pending <= MB_MAX_PENDING) {
+        return false;
+    }
+    fprintf(stderr, "warn: conn %" PRIu64 " slow consumer, closing: pending=%zuB cap=%zuB\n",
+            conn->client_id, pending, (size_t)MB_MAX_PENDING);
+    mb_conn_begin_close(conn);
+    return true;
+}
+
 static void handle_op(mb_conn *conn, mb_op op) {
     switch (op.kind) {
     case MB_OP_CONNECT:
@@ -56,7 +72,9 @@ static void handle_op(mb_conn *conn, mb_op op) {
         }
         break;
     case MB_OP_SUB:
-        if (!mb_router_subscribe(&conn->server->router, &conn->router_conn, op.subject, op.sid)) {
+        if (mb_router_subject_has_lvc_prefix(op.subject) && !conn->server->lvc_enabled) {
+            mb_write_err(&conn->router_conn.out, "$LVC is disabled");
+        } else if (!mb_router_subscribe(&conn->server->router, &conn->router_conn, op.subject, op.sid)) {
             mb_write_err(&conn->router_conn.out, "Subscribe Failed");
         }
         break;
@@ -64,9 +82,17 @@ static void handle_op(mb_conn *conn, mb_op op) {
         mb_router_unsubscribe(&conn->server->router, &conn->router_conn, op.sid,
                               op.max_msgs, op.has_max_msgs);
         break;
-    case MB_OP_PUB:
-        if (!mb_router_publish(&conn->server->router, op.subject, op.payload)) {
+    case MB_OP_PUB: {
+        bool published = false;
+        if (mb_router_subject_has_lvc_prefix(op.subject)) {
+            mb_write_err(&conn->router_conn.out, "$LVC is read-only");
+        } else if (!mb_router_publish(&conn->server->router, op.subject, op.payload)) {
             mb_write_err(&conn->router_conn.out, "Publish Failed");
+        } else {
+            published = true;
+        }
+        if (!published) {
+            break;
         }
         uv_update_time(&conn->server->loop);
         if (!pb_program_eval_publish(conn->server->program, &conn->server->router, op.subject, op.payload,
@@ -75,6 +101,7 @@ static void handle_op(mb_conn *conn, mb_op op) {
         }
         mb_server_reschedule_patchbay_clock(conn->server);
         break;
+    }
     }
 }
 
@@ -147,12 +174,10 @@ static void write_cb(uv_write_t *req, int status) {
 
 void mb_conn_kick_write(void *ctx) {
     mb_conn *conn = ctx;
-    if (conn->closing || conn->write_pending || conn->router_conn.out.len == 0) {
+    if (conn->closing) {
         return;
     }
-    if (conn->router_conn.out.len + conn->in_flight.len > MB_MAX_PENDING) {
-        mb_write_err(&conn->router_conn.out, "Slow Consumer");
-        mb_conn_begin_close(conn);
+    if (close_if_slow_consumer(conn) || conn->write_pending || conn->router_conn.out.len == 0) {
         return;
     }
 

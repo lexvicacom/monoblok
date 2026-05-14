@@ -90,6 +90,10 @@ add_executable(program-tests test/program_unit.c)
 target_link_libraries(program-tests PRIVATE monoblok_core patchbay_sexpr ${MB_MATH_LIB})
 target_compile_options(program-tests PRIVATE ${MB_WARNINGS})
 
+add_executable(bench-patchbay src/bench_patchbay.c)
+target_link_libraries(bench-patchbay PRIVATE monoblok_core patchbay_sexpr ${MB_MATH_LIB})
+target_compile_options(bench-patchbay PRIVATE ${MB_WARNINGS})
+
 add_executable(pb-dump src/patchbay/pb_dump.c)
 target_link_libraries(pb-dump PRIVATE patchbay_sexpr)
 target_compile_options(pb-dump PRIVATE ${MB_WARNINGS})

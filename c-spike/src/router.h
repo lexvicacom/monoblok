@@ -4,6 +4,8 @@
 #include "buf.h"
 #include "proto.h"
 
+#define MB_LVC_PREFIX "$LVC."
+
 // Router-facing connection state; server owns transport and kicks writes.
 typedef struct mb_router_conn {
     mb_buf out;
@@ -22,6 +24,7 @@ typedef struct mb_subscription {
     size_t delivered;
     size_t max_msgs;
     bool has_max_msgs;
+    bool is_lvc;
 } mb_subscription;
 
 // Small growable bucket of subscriptions sharing a routing key.
@@ -45,6 +48,13 @@ typedef struct mb_wildcard_bucket {
     mb_sub_list subs;
 } mb_wildcard_bucket;
 
+// Last-value cache entry. Payload buffer is reused when a subject is updated.
+typedef struct mb_lvc_entry {
+    uint8_t *subject;
+    size_t subject_len;
+    mb_buf payload;
+} mb_lvc_entry;
+
 // Zig-shaped routing index: literals, first-token wildcards, and global wildcards.
 typedef struct mb_router {
     mb_literal_bucket *literal;
@@ -57,13 +67,19 @@ typedef struct mb_router {
     mb_router_conn **kick_scratch;
     size_t kick_cap;
     size_t sub_count;
+    mb_lvc_entry *lvc;
+    size_t lvc_len;
+    size_t lvc_cap;
+    bool lvc_enabled;
 } mb_router;
 
 void mb_router_init(mb_router *router);
+void mb_router_set_lvc_enabled(mb_router *router, bool enabled);
 void mb_router_free(mb_router *router);
 bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subject, mb_slice sid);
 void mb_router_unsubscribe(mb_router *router, mb_router_conn *conn, mb_slice sid, size_t max_msgs, bool has_max_msgs);
 void mb_router_remove_all_for(mb_router *router, mb_router_conn *conn);
 bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload);
+bool mb_router_subject_has_lvc_prefix(mb_slice subject);
 
 #endif

@@ -65,11 +65,12 @@ static void make_server_id(char out[35]) {
     out[34] = '\0';
 }
 
-bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program) {
-    *server = (mb_server){.host = host, .port = port, .program = program};
+bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program, bool lvc_enabled) {
+    *server = (mb_server){.host = host, .port = port, .program = program, .lvc_enabled = lvc_enabled};
     make_server_id(server->server_id);
     server->next_client_id = 1;
     mb_router_init(&server->router);
+    mb_router_set_lvc_enabled(&server->router, lvc_enabled);
     if (uv_loop_init(&server->loop) != 0) {
         return false;
     }

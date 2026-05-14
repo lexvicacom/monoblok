@@ -22,6 +22,7 @@ static void usage(const char *argv0) {
         "  --patchbay FILE      Explicit patchbay path.\n"
         "  --host HOST          TCP listen host (default 127.0.0.1).\n"
         "  --port PORT          TCP listen port (default 4222).\n"
+        "  --no-lvc             Disable $LVC.* last-value cache streams.\n"
         "  --io-uring           Enable libuv io_uring paths on Linux.\n"
         "  --no-io-uring        Disable libuv io_uring paths on Linux (default).\n"
         "  --validate           Parse and subset-lint the patchbay, then exit.\n"
@@ -120,6 +121,7 @@ int main(int argc, char **argv) {
     bool soundcheck = false;
     bool soundcheck_label = false;
     bool validate = false;
+    bool lvc_enabled = true;
     io_uring_mode io_uring = IO_URING_DEFAULT;
 
     for (int i = 1; i < argc; i += 1) {
@@ -137,6 +139,8 @@ int main(int argc, char **argv) {
             io_uring = IO_URING_ENABLE;
         } else if (strcmp(argv[i], "--no-io-uring") == 0) {
             io_uring = IO_URING_DISABLE;
+        } else if (strcmp(argv[i], "--no-lvc") == 0) {
+            lvc_enabled = false;
         } else if (strcmp(argv[i], "--soundcheck") == 0) {
             soundcheck = true;
         } else if (strcmp(argv[i], "--soundcheck-label") == 0) {
@@ -193,11 +197,11 @@ int main(int argc, char **argv) {
     if (io_uring_status != NULL) {
         fprintf(stderr, "info: libuv io_uring: %s\n", io_uring_status);
     }
-    fprintf(stderr, "info: lvc: disabled\n");
+    fprintf(stderr, "info: lvc: %s\n", lvc_enabled ? "enabled" : "disabled");
 
     banner("server");
     mb_server server;
-    if (!mb_server_init(&server, host, (unsigned int)port, program_ptr)) {
+    if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_enabled)) {
         pb_program_free(&program);
         return 1;
     }

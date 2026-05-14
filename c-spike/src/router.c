@@ -28,6 +28,17 @@ static bool sid_eq(const mb_subscription *sub, mb_slice sid) {
     return slice_eq_bytes(sub->sid, sub->sid_len, sid);
 }
 
+bool mb_router_subject_has_lvc_prefix(mb_slice subject) {
+    static const char prefix[] = MB_LVC_PREFIX;
+    const size_t prefix_len = sizeof prefix - 1;
+    return subject.len >= prefix_len && memcmp(subject.ptr, prefix, prefix_len) == 0;
+}
+
+static mb_slice lvc_inner_subject(mb_slice subject) {
+    static const char prefix[] = MB_LVC_PREFIX;
+    return (mb_slice){.ptr = subject.ptr + sizeof(prefix) - 1, .len = subject.len - (sizeof(prefix) - 1)};
+}
+
 static bool sub_list_append(mb_sub_list *list, mb_subscription sub) {
     if (list->len == list->cap) {
         const size_t next = list->cap == 0 ? 8 : list->cap * 2;
@@ -230,7 +241,70 @@ static bool already_kicked(mb_router_conn **kicked, size_t len, mb_router_conn *
 }
 
 void mb_router_init(mb_router *router) {
-    *router = (mb_router){0};
+    *router = (mb_router){.lvc_enabled = true};
+}
+
+void mb_router_set_lvc_enabled(mb_router *router, bool enabled) {
+    router->lvc_enabled = enabled;
+}
+
+static void lvc_entry_free(mb_lvc_entry *entry) {
+    free(entry->subject);
+    mb_buf_free(&entry->payload);
+    *entry = (mb_lvc_entry){0};
+}
+
+static mb_lvc_entry *lvc_entry_find(mb_router *router, mb_slice subject) {
+    for (size_t i = 0; i < router->lvc_len; i += 1) {
+        if (slice_eq_bytes(router->lvc[i].subject, router->lvc[i].subject_len, subject)) {
+            return &router->lvc[i];
+        }
+    }
+    return NULL;
+}
+
+static bool lvc_store(mb_router *router, mb_slice subject, mb_slice payload) {
+    if (!router->lvc_enabled || mb_router_subject_has_lvc_prefix(subject)) {
+        return true;
+    }
+    mb_lvc_entry *entry = lvc_entry_find(router, subject);
+    if (entry == NULL) {
+        if (router->lvc_len == router->lvc_cap) {
+            const size_t next = router->lvc_cap == 0 ? 16 : router->lvc_cap * 2;
+            mb_lvc_entry *items = realloc(router->lvc, next * sizeof items[0]);
+            if (items == NULL) {
+                return false;
+            }
+            router->lvc = items;
+            router->lvc_cap = next;
+        }
+        entry = &router->lvc[router->lvc_len];
+        *entry = (mb_lvc_entry){0};
+        if (!dup_slice(subject, &entry->subject, &entry->subject_len)) {
+            return false;
+        }
+        router->lvc_len += 1;
+    }
+    mb_buf_clear(&entry->payload);
+    return mb_buf_append(&entry->payload, payload.ptr, payload.len);
+}
+
+static bool emit_cached(mb_router *router, mb_router_conn *conn, mb_slice filter, mb_slice sid) {
+    if (!router->lvc_enabled) {
+        return false;
+    }
+    for (size_t i = 0; i < router->lvc_len; i += 1) {
+        mb_lvc_entry *entry = &router->lvc[i];
+        const mb_slice subject = {.ptr = entry->subject, .len = entry->subject_len};
+        if (!subject_matches(filter, subject)) {
+            continue;
+        }
+        const mb_slice payload = {.ptr = entry->payload.ptr, .len = entry->payload.len};
+        if (!mb_write_msg_prefixed(&conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void mb_router_free(mb_router *router) {
@@ -245,17 +319,26 @@ void mb_router_free(mb_router *router) {
     free(router->literal);
     free(router->wildcard);
     free(router->kick_scratch);
+    for (size_t i = 0; i < router->lvc_len; i += 1) {
+        lvc_entry_free(&router->lvc[i]);
+    }
+    free(router->lvc);
     sub_list_free(&router->wildcard_global);
     *router = (mb_router){0};
 }
 
 bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subject, mb_slice sid) {
+    const bool is_lvc = mb_router_subject_has_lvc_prefix(subject);
+    const mb_slice match_subject = is_lvc ? lvc_inner_subject(subject) : subject;
+    if (is_lvc && (!router->lvc_enabled || match_subject.len == 0)) {
+        return false;
+    }
     if (!ensure_kick_capacity(router, router->sub_count + 1)) {
         return false;
     }
 
-    mb_subscription sub = {.conn = conn};
-    if (!dup_slice(subject, &sub.subject, &sub.subject_len)) {
+    mb_subscription sub = {.conn = conn, .is_lvc = is_lvc};
+    if (!dup_slice(match_subject, &sub.subject, &sub.subject_len)) {
         return false;
     }
     if (!dup_slice(sid, &sub.sid, &sub.sid_len)) {
@@ -264,11 +347,11 @@ bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subje
     }
 
     bool ok = false;
-    if (is_literal_filter(subject)) {
-        mb_literal_bucket *bucket = literal_bucket(router, subject, true);
+    if (is_literal_filter(match_subject)) {
+        mb_literal_bucket *bucket = literal_bucket(router, match_subject, true);
         ok = bucket != NULL && sub_list_append(&bucket->subs, sub);
     } else {
-        const mb_slice first = first_token(subject);
+        const mb_slice first = first_token(match_subject);
         if (is_wildcard_token(first)) {
             ok = sub_list_append(&router->wildcard_global, sub);
         } else {
@@ -281,6 +364,10 @@ bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subje
         return false;
     }
     router->sub_count += 1;
+    if (is_lvc && !emit_cached(router, conn, match_subject, sid)) {
+        mb_router_unsubscribe(router, conn, sid, 0, false);
+        return false;
+    }
     return true;
 }
 
@@ -370,14 +457,16 @@ static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice
             continue;
         }
         const mb_slice sid = {.ptr = sub->sid, .len = sub->sid_len};
-        if (!mb_write_msg(&sub->conn->out, subject, sid, payload)) {
+        const bool wrote = sub->is_lvc
+            ? mb_write_msg_prefixed(&sub->conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload)
+            : mb_write_msg(&sub->conn->out, subject, sid, payload);
+        if (!wrote) {
             return false;
         }
         sub->delivered += 1;
         if (sub->conn->kick_fn != NULL && !already_kicked(kicked, *kicked_len, sub->conn)) {
             kicked[*kicked_len] = sub->conn;
             *kicked_len += 1;
-            sub->conn->kick_fn(sub->conn->kick_ctx);
         }
         if (sub->has_max_msgs && sub->delivered >= sub->max_msgs) {
             sub_list_remove_at(list, i);
@@ -390,25 +479,37 @@ static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice
 }
 
 bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload) {
+    if (mb_router_subject_has_lvc_prefix(subject) || !lvc_store(router, subject, payload)) {
+        return false;
+    }
     if (router->kick_cap < router->sub_count) {
         return false;
     }
     mb_router_conn **kicked = router->kick_scratch;
     size_t kicked_len = 0;
+    bool ok = true;
 
     mb_literal_bucket *lit = literal_bucket(router, subject, false);
     if (lit != NULL && !deliver_matching_list(router, &lit->subs, subject, payload, false, kicked, &kicked_len)) {
-        return false;
+        ok = false;
     }
 
-    const mb_slice first = first_token(subject);
-    mb_wildcard_bucket *wild = wildcard_bucket(router, first, false);
-    if (wild != NULL && !deliver_matching_list(router, &wild->subs, subject, payload, true, kicked, &kicked_len)) {
-        return false;
+    if (ok) {
+        const mb_slice first = first_token(subject);
+        mb_wildcard_bucket *wild = wildcard_bucket(router, first, false);
+        if (wild != NULL && !deliver_matching_list(router, &wild->subs, subject, payload, true, kicked, &kicked_len)) {
+            ok = false;
+        }
     }
-    if (!deliver_matching_list(router, &router->wildcard_global, subject, payload, true, kicked, &kicked_len)) {
-        return false;
+    if (ok && !deliver_matching_list(router, &router->wildcard_global, subject, payload, true, kicked, &kicked_len)) {
+        ok = false;
     }
 
-    return true;
+    for (size_t i = 0; i < kicked_len; i += 1) {
+        mb_router_conn *conn = kicked[i];
+        if (!conn->closed && conn->kick_fn != NULL) {
+            conn->kick_fn(conn->kick_ctx);
+        }
+    }
+    return ok;
 }

@@ -62,5 +62,7 @@ bool mb_write_pong(mb_buf *out);
 bool mb_write_info(mb_buf *out, const mb_info *info);
 bool mb_write_err(mb_buf *out, const char *msg);
 bool mb_write_msg(mb_buf *out, mb_slice subject, mb_slice sid, mb_slice payload);
+bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
+                           mb_slice subject, mb_slice sid, mb_slice payload);
 
 #endif

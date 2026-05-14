@@ -304,7 +304,13 @@ bool mb_write_err(mb_buf *out, const char *msg) {
 }
 
 bool mb_write_msg(mb_buf *out, mb_slice subject, mb_slice sid, mb_slice payload) {
+    return mb_write_msg_prefixed(out, "", 0, subject, sid, payload);
+}
+
+bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
+                           mb_slice subject, mb_slice sid, mb_slice payload) {
     return mb_buf_append(out, "MSG ", 4) &&
+           mb_buf_append(out, prefix, prefix_len) &&
            mb_buf_append(out, subject.ptr, subject.len) &&
            mb_buf_append_byte(out, ' ') &&
            mb_buf_append(out, sid.ptr, sid.len) &&

@@ -197,6 +197,46 @@ static void test_router_wildcards(void) {
     mb_router_free(&router);
 }
 
+static void test_router_lvc_replay(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_publish(&router, lit("foo"), lit("cached")));
+    CHECK(mb_router_subscribe(&router, &conn, lit("$LVC.foo"), lit("11")));
+    check_buf_eq(&conn.out, "MSG $LVC.foo 11 6\r\ncached\r\n");
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+}
+
+static void test_router_lvc_live_wildcard(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit("$LVC.sensors.*"), lit("7")));
+    CHECK(mb_router_publish(&router, lit("sensors.temp"), lit("31")));
+    check_buf_eq(&conn.out, "MSG $LVC.sensors.temp 7 2\r\n31\r\n");
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+}
+
+static void test_router_lvc_rejects_writes(void) {
+    mb_router router;
+    mb_router_init(&router);
+    CHECK(!mb_router_publish(&router, lit("$LVC.foo"), lit("bad")));
+    mb_router_free(&router);
+}
+
+static void test_router_lvc_disabled(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_set_lvc_enabled(&router, false);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_publish(&router, lit("foo"), lit("cached")));
+    CHECK(!mb_router_subscribe(&router, &conn, lit("$LVC.foo"), lit("1")));
+    CHECK(conn.out.len == 0);
+    mb_router_free(&router);
+}
+
 static void test_router_unsubscribe(void) {
     mb_router router;
     mb_router_init(&router);
@@ -220,6 +260,34 @@ static void test_router_auto_unsubscribe(void) {
     CHECK(mb_router_publish(&router, lit("foo"), lit("b")));
     CHECK(router.sub_count == 0);
     check_buf_eq(&conn.out, "MSG foo 1 1\r\na\r\nMSG foo 1 1\r\nb\r\n");
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+}
+
+typedef struct kick_probe {
+    mb_router_conn *conn;
+    int kicks;
+} kick_probe;
+
+static void kick_after_full_fanout(void *ctx) {
+    kick_probe *probe = ctx;
+    probe->kicks += 1;
+    check_buf_eq(&probe->conn->out, "MSG foo 1 2\r\nhi\r\nMSG foo 2 2\r\nhi\r\n");
+    probe->conn->closed = true;
+}
+
+static void test_router_kicks_after_fanout(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    kick_probe probe = {.conn = &conn};
+    conn.kick_fn = kick_after_full_fanout;
+    conn.kick_ctx = &probe;
+    CHECK(mb_router_subscribe(&router, &conn, lit("foo"), lit("1")));
+    CHECK(mb_router_subscribe(&router, &conn, lit("foo"), lit("2")));
+    CHECK(mb_router_publish(&router, lit("foo"), lit("hi")));
+    CHECK(probe.kicks == 1);
+    CHECK(conn.closed);
     mb_buf_free(&conn.out);
     mb_router_free(&router);
 }
@@ -253,8 +321,13 @@ int main(void) {
     test_router_two_subs();
     test_router_non_match();
     test_router_wildcards();
+    test_router_lvc_replay();
+    test_router_lvc_live_wildcard();
+    test_router_lvc_rejects_writes();
+    test_router_lvc_disabled();
     test_router_unsubscribe();
     test_router_auto_unsubscribe();
+    test_router_kicks_after_fanout();
     test_router_remove_conn();
     puts("unit tests passed");
     return 0;

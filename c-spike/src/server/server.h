@@ -22,9 +22,10 @@ typedef struct mb_server {
     const char *host;
     unsigned int port;
     bool patchbay_timer_started;
+    bool lvc_enabled;
 } mb_server;
 
-bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program);
+bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program, bool lvc_enabled);
 int mb_server_run(mb_server *server);
 void mb_server_close(mb_server *server);
 int64_t mb_wall_clock_ms(void);

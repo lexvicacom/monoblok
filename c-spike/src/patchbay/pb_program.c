@@ -145,19 +145,12 @@ static void scan_clock_forms(pb_program *program, pb_value v) {
     }
 }
 
-bool pb_program_load_file(pb_program *program, const char *path) {
+static bool load_source(pb_program *program, const char *label, const char *source, size_t source_len, bool log) {
     *program = (pb_program){0};
-    char *source = NULL;
-    size_t source_len = 0;
-    if (!read_file(path, &source, &source_len)) {
-        return false;
-    }
-
-    const pb_parse_result parsed = pb_parse_patchbay_source(&program->parse_arena, path, source, source_len);
-    free(source);
+    const pb_parse_result parsed = pb_parse_patchbay_source(&program->parse_arena, label, source, source_len);
     if (parsed.err != PB_PARSE_OK) {
-        fprintf(stderr, "patchbay: parse error: %s at byte %zu\n",
-                pb_parse_error_name(parsed.err), parsed.err_offset);
+        fprintf(stderr, "patchbay: parse error in %s: %s at byte %zu\n",
+                label, pb_parse_error_name(parsed.err), parsed.err_offset);
         pb_program_free(program);
         return false;
     }
@@ -168,14 +161,33 @@ bool pb_program_load_file(pb_program *program, const char *path) {
         }
         scan_clock_forms(program, parsed.forms.items[i]);
     }
-    fprintf(stderr, "info: loaded %zu patchbay form(s)\n", program->len);
-    if (program->uses_wall_clock) {
-        fprintf(stderr, "info: patchbay wallclock: enabled\n");
-    }
-    if (program->uses_clock_timer) {
-        fprintf(stderr, "info: patchbay clock: enabled (one-shot deadlines)\n");
+    if (log) {
+        fprintf(stderr, "info: loaded %zu patchbay form(s)\n", program->len);
+        if (program->uses_wall_clock) {
+            fprintf(stderr, "info: patchbay wallclock: enabled\n");
+        }
+        if (program->uses_clock_timer) {
+            fprintf(stderr, "info: patchbay clock: enabled (one-shot deadlines)\n");
+        }
     }
     return true;
+}
+
+bool pb_program_load_source(pb_program *program, const char *label, const char *source, size_t source_len) {
+    return load_source(program, label, source, source_len, false);
+}
+
+bool pb_program_load_file(pb_program *program, const char *path) {
+    char *source = NULL;
+    size_t source_len = 0;
+    if (!read_file(path, &source, &source_len)) {
+        *program = (pb_program){0};
+        return false;
+    }
+
+    const bool ok = load_source(program, path, source, source_len, true);
+    free(source);
+    return ok;
 }
 
 void pb_program_free(pb_program *program) {
