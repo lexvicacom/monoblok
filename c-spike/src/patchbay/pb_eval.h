@@ -1,0 +1,75 @@
+#ifndef PB_EVAL_H
+#define PB_EVAL_H
+
+#include "pb_sexpr.h"
+
+typedef enum pb_eval_error {
+    PB_EVAL_OK,
+    PB_EVAL_OOM,
+    PB_EVAL_UNKNOWN_SYMBOL,
+    PB_EVAL_TYPE,
+    PB_EVAL_ARITY,
+    PB_EVAL_INVALID_SUBJECT,
+    PB_EVAL_PUBLISH_FAILED,
+} pb_eval_error;
+
+typedef bool (*pb_publish_fn)(void *ctx, pb_slice subject, pb_slice payload);
+
+typedef enum pb_eval_state_kind {
+    PB_EVAL_STATE_EMPTY,
+    PB_EVAL_STATE_NUMBER,
+    PB_EVAL_STATE_BYTES,
+    PB_EVAL_STATE_RING,
+} pb_eval_state_kind;
+
+// Long-lived per-(rule, op, subject) slot for simple stateful forms.
+typedef struct pb_eval_state_entry {
+    size_t rule_id;
+    char *op;
+    size_t op_len;
+    char *subject;
+    size_t subject_len;
+    pb_eval_state_kind kind;
+    double number;
+    char *bytes;
+    size_t bytes_len;
+    size_t bytes_cap;
+    double *ring_values;
+    uint64_t *ring_times_ms;
+    size_t ring_cap;
+    size_t ring_len;
+    size_t ring_start;
+    double ring_sum;
+    uint64_t ring_window_ms;
+    bool ring_time_window;
+} pb_eval_state_entry;
+
+// Stateful patchbay storage owned by the caller and reused across publishes.
+typedef struct pb_eval_state {
+    pb_eval_state_entry *items;
+    size_t len;
+    size_t cap;
+} pb_eval_state;
+
+// Per-evaluation bindings and effect hooks; scratch allocations use arena.
+typedef struct pb_eval_ctx {
+    pb_arena *arena;
+    pb_eval_state *state;
+    size_t rule_id;
+    pb_slice subject;
+    pb_slice payload;
+    pb_publish_fn publish;
+    void *publish_ctx;
+} pb_eval_ctx;
+
+// Evaluator return value; value is meaningful only when err is PB_EVAL_OK.
+typedef struct pb_eval_result {
+    pb_eval_error err;
+    pb_value value;
+} pb_eval_result;
+
+pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr);
+void pb_eval_state_free(pb_eval_state *state);
+const char *pb_eval_error_name(pb_eval_error err);
+
+#endif
