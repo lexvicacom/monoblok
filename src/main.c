@@ -202,6 +202,8 @@ int main(int argc, char **argv) {
 
     const char *io_uring_status = configure_libuv_io_uring(io_uring);
 
+    banner("server");
+
     pb_program program = {0};
     pb_program *program_ptr = NULL;
     if (patchbay_path != NULL) {
@@ -226,7 +228,6 @@ int main(int argc, char **argv) {
 
     mb_bridge bridge = {0};
 
-    banner("server");
     mb_server server;
     if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_runtime_enabled, snapshot_path,
                         snapshot_every_ms, trace)) {
