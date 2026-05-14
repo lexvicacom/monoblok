@@ -72,7 +72,7 @@ add_library(patchbay_sexpr STATIC ${PB_CORE})
 target_include_directories(patchbay_sexpr PUBLIC src)
 target_include_directories(patchbay_sexpr PUBLIC src/patchbay)
 target_include_directories(patchbay_sexpr PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/generated)
-target_link_libraries(patchbay_sexpr PUBLIC yyjson)
+target_link_libraries(patchbay_sexpr PUBLIC yyjson monoblok_core ${MB_MATH_LIB})
 target_compile_options(patchbay_sexpr PRIVATE ${MB_WARNINGS})
 
 add_executable(sexpr-tests test/sexpr_unit.c)
@@ -80,23 +80,23 @@ target_link_libraries(sexpr-tests PRIVATE patchbay_sexpr)
 target_compile_options(sexpr-tests PRIVATE ${MB_WARNINGS})
 
 add_executable(eval-tests test/eval_unit.c)
-target_link_libraries(eval-tests PRIVATE patchbay_sexpr ${MB_MATH_LIB})
+target_link_libraries(eval-tests PRIVATE patchbay_sexpr)
 target_compile_options(eval-tests PRIVATE ${MB_WARNINGS})
 
 add_executable(json-tests test/json_unit.c)
-target_link_libraries(json-tests PRIVATE patchbay_sexpr ${MB_MATH_LIB})
+target_link_libraries(json-tests PRIVATE patchbay_sexpr)
 target_compile_options(json-tests PRIVATE ${MB_WARNINGS})
 
 add_executable(program-tests test/program_unit.c)
-target_link_libraries(program-tests PRIVATE monoblok_core patchbay_sexpr ${MB_MATH_LIB})
+target_link_libraries(program-tests PRIVATE patchbay_sexpr)
 target_compile_options(program-tests PRIVATE ${MB_WARNINGS})
 
 add_executable(snapshot-tests test/snapshot_unit.c src/snapshot.c)
-target_link_libraries(snapshot-tests PRIVATE monoblok_core patchbay_sexpr ${MB_MATH_LIB})
+target_link_libraries(snapshot-tests PRIVATE patchbay_sexpr)
 target_compile_options(snapshot-tests PRIVATE ${MB_WARNINGS})
 
 add_executable(bench-patchbay src/bench_patchbay.c)
-target_link_libraries(bench-patchbay PRIVATE monoblok_core patchbay_sexpr ${MB_MATH_LIB})
+target_link_libraries(bench-patchbay PRIVATE patchbay_sexpr)
 target_compile_options(bench-patchbay PRIVATE ${MB_WARNINGS})
 
 add_executable(pb-dump src/patchbay/pb_dump.c)
@@ -144,7 +144,7 @@ add_executable(monoblok
   src/main.c
   src/server/server.c
 )
-target_link_libraries(monoblok PRIVATE monoblok_core patchbay_sexpr ${MB_UV_TARGET} ${MB_NATS_TARGET} ${MB_MATH_LIB})
+target_link_libraries(monoblok PRIVATE patchbay_sexpr ${MB_UV_TARGET} ${MB_NATS_TARGET})
 target_compile_options(monoblok PRIVATE ${MB_WARNINGS})
 target_include_directories(monoblok PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_include_directories(monoblok PRIVATE src/server src/patchbay)
