@@ -13,6 +13,7 @@ typedef struct mb_conn mb_conn;
 typedef struct mb_server {
     uv_loop_t loop;
     uv_tcp_t listener;
+    uv_timer_t patchbay_timer;
     mb_router router;
     pb_program *program;
     mb_conn *conns;
@@ -20,10 +21,13 @@ typedef struct mb_server {
     uint64_t next_client_id;
     const char *host;
     unsigned int port;
+    bool patchbay_timer_started;
 } mb_server;
 
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program);
 int mb_server_run(mb_server *server);
 void mb_server_close(mb_server *server);
+int64_t mb_wall_clock_ms(void);
+void mb_server_reschedule_patchbay_clock(mb_server *server);
 
 #endif

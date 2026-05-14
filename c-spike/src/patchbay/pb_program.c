@@ -2,6 +2,7 @@
 
 #include "pb_program.h"
 
+#include "pb_eval_internal.h"
 #include "pb_json.h"
 
 #include <stdio.h>
@@ -9,8 +10,15 @@
 #include <string.h>
 
 typedef struct publish_ctx {
+    pb_program *program;
     mb_router *router;
+    uint64_t now_ms;
+    int64_t wall_ms;
+    size_t depth;
+    bool reentrant;
 } publish_ctx;
+
+enum { PB_PROGRAM_MAX_REENTRY_DEPTH = 8 };
 
 static bool slice_eq(pb_slice s, const char *lit) {
     const size_t n = strlen(lit);
@@ -108,6 +116,35 @@ static bool load_on_form(pb_program *program, pb_value form) {
     return rule_vec_append(program, rule);
 }
 
+static bool value_head_eq(pb_value v, const char *lit) {
+    return v.kind == PB_LIST &&
+           v.seq.len > 0 &&
+           v.seq.items[0].kind == PB_SYMBOL &&
+           slice_eq(v.seq.items[0].text, lit);
+}
+
+static bool call_has_ms_window(pb_value v) {
+    return v.kind == PB_LIST &&
+           v.seq.len >= 3 &&
+           v.seq.items[1].kind == PB_KEYWORD &&
+           slice_eq(v.seq.items[1].text, "ms");
+}
+
+static void scan_clock_forms(pb_program *program, pb_value v) {
+    if (value_head_eq(v, "now")) {
+        program->uses_wall_clock = true;
+    }
+    if ((value_head_eq(v, "bar!") || value_head_eq(v, "bar") || value_head_eq(v, "moving-avg")) &&
+        call_has_ms_window(v)) {
+        program->uses_clock_timer = true;
+    }
+    if (v.kind == PB_LIST || v.kind == PB_VECTOR) {
+        for (size_t i = 0; i < v.seq.len; i += 1) {
+            scan_clock_forms(program, v.seq.items[i]);
+        }
+    }
+}
+
 bool pb_program_load_file(pb_program *program, const char *path) {
     *program = (pb_program){0};
     char *source = NULL;
@@ -129,8 +166,15 @@ bool pb_program_load_file(pb_program *program, const char *path) {
             pb_program_free(program);
             return false;
         }
+        scan_clock_forms(program, parsed.forms.items[i]);
     }
     fprintf(stderr, "info: loaded %zu patchbay form(s)\n", program->len);
+    if (program->uses_wall_clock) {
+        fprintf(stderr, "info: patchbay wallclock: enabled\n");
+    }
+    if (program->uses_clock_timer) {
+        fprintf(stderr, "info: patchbay clock: enabled (one-shot deadlines)\n");
+    }
     return true;
 }
 
@@ -179,43 +223,161 @@ static bool token_match(pb_slice filter, pb_slice subject) {
     }
 }
 
+static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice subject, pb_slice payload,
+                                uint64_t now_ms, int64_t wall_ms, size_t depth);
+
 static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     publish_ctx *p = ctx;
-    return mb_router_publish(p->router,
-                             (mb_slice){.ptr = (const uint8_t *)subject.ptr, .len = subject.len},
-                             (mb_slice){.ptr = (const uint8_t *)payload.ptr, .len = payload.len});
+    if (!mb_router_publish(p->router,
+                           (mb_slice){.ptr = (const uint8_t *)subject.ptr, .len = subject.len},
+                           (mb_slice){.ptr = (const uint8_t *)payload.ptr, .len = payload.len})) {
+        return false;
+    }
+    if (!p->reentrant) {
+        return true;
+    }
+    if (p->depth >= PB_PROGRAM_MAX_REENTRY_DEPTH) {
+        fprintf(stderr, "patchbay: reentry depth cap reached\n");
+        return true;
+    }
+    return eval_publish_slices(p->program, p->router, subject, payload, p->now_ms, p->wall_ms, p->depth + 1);
 }
 
-bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload) {
+static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice subject, pb_slice payload,
+                                uint64_t now_ms, int64_t wall_ms, size_t depth) {
     if (program == NULL || program->len == 0) {
         return true;
     }
 
-    const pb_slice pb_subject = {.ptr = (const char *)subject.ptr, .len = subject.len};
-    const pb_slice pb_payload = {.ptr = (const char *)payload.ptr, .len = payload.len};
-    publish_ctx pub = {.router = router};
     bool ok = true;
-
     for (size_t i = 0; i < program->len; i += 1) {
         pb_rule *rule = &program->rules[i];
-        if (!token_match(rule->filter, pb_subject)) {
+        if (!token_match(rule->filter, subject)) {
             continue;
         }
+        publish_ctx pub = {
+            .program = program,
+            .router = router,
+            .now_ms = now_ms,
+            .wall_ms = wall_ms,
+            .depth = depth,
+            .reentrant = rule->reentrant,
+        };
         pb_eval_ctx ctx = {
             .arena = &program->scratch,
             .state = &rule->state,
             .rule_id = i,
-            .subject = pb_subject,
-            .payload = pb_payload,
+            .now_ms = now_ms,
+            .wall_ms = wall_ms,
+            .subject = subject,
+            .payload = payload,
             .publish = publish_cb,
             .publish_ctx = &pub,
         };
         const pb_eval_result r = pb_eval(&ctx, rule->body);
-        pb_arena_reset(&program->scratch);
         if (r.err != PB_EVAL_OK) {
             fprintf(stderr, "patchbay: rule %zu eval failed: %s\n", i, pb_eval_error_name(r.err));
             ok = false;
         }
     }
     return ok;
+}
+
+bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
+                             uint64_t now_ms, int64_t wall_ms) {
+    if (program == NULL || program->len == 0) {
+        return true;
+    }
+    const bool outer = program->eval_depth == 0;
+    program->eval_depth += 1;
+    const bool ok = eval_publish_slices(program, router,
+                                        (pb_slice){.ptr = (const char *)subject.ptr, .len = subject.len},
+                                        (pb_slice){.ptr = (const char *)payload.ptr, .len = payload.len},
+                                        now_ms, wall_ms, 0);
+    program->eval_depth -= 1;
+    if (outer) {
+        pb_arena_reset(&program->scratch);
+    }
+    return ok;
+}
+
+bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms) {
+    if (program == NULL || program->len == 0) {
+        return true;
+    }
+
+    const bool outer = program->eval_depth == 0;
+    program->eval_depth += 1;
+    bool ok = true;
+    for (size_t rule_idx = 0; rule_idx < program->len; rule_idx += 1) {
+        pb_rule *rule = &program->rules[rule_idx];
+        for (size_t state_idx = 0; state_idx < rule->state.len; state_idx += 1) {
+            pb_eval_state_entry *entry = &rule->state.items[state_idx];
+            publish_ctx pub = {
+                .program = program,
+                .router = router,
+                .now_ms = now_ms,
+                .wall_ms = wall_ms,
+                .depth = 0,
+                .reentrant = rule->reentrant,
+            };
+            pb_eval_ctx ctx = {
+                .arena = &program->scratch,
+                .state = &rule->state,
+                .rule_id = rule_idx,
+                .now_ms = now_ms,
+                .wall_ms = wall_ms,
+                .subject = {.ptr = entry->subject, .len = entry->subject_len},
+                .payload = {.ptr = "", .len = 0},
+                .publish = publish_cb,
+                .publish_ctx = &pub,
+            };
+            const pb_eval_result r = pb_eval_tick_state_entry(&ctx, entry);
+            if (r.err != PB_EVAL_OK) {
+                fprintf(stderr, "patchbay: rule %zu clock tick failed: %s\n",
+                        rule_idx, pb_eval_error_name(r.err));
+                ok = false;
+            }
+        }
+    }
+    program->eval_depth -= 1;
+    if (outer) {
+        pb_arena_reset(&program->scratch);
+    }
+    return ok;
+}
+
+static bool entry_deadline(const pb_eval_state_entry *entry, uint64_t *out_ms) {
+    if (entry->kind == PB_EVAL_STATE_RING && entry->ring_time_window && entry->ring_len > 0) {
+        const size_t idx = entry->ring_start;
+        *out_ms = entry->ring_times_ms[idx] + entry->ring_window_ms;
+        return true;
+    }
+    if (entry->kind == PB_EVAL_STATE_BAR && entry->bar_time_window && entry->bar_count > 0) {
+        *out_ms = entry->bar_window_start_ms + entry->bar_window_ms;
+        return true;
+    }
+    return false;
+}
+
+bool pb_program_next_clock_deadline(const pb_program *program, uint64_t *out_ms) {
+    bool found = false;
+    uint64_t best = 0;
+    if (program == NULL || !program->uses_clock_timer) {
+        return false;
+    }
+    for (size_t rule_idx = 0; rule_idx < program->len; rule_idx += 1) {
+        const pb_rule *rule = &program->rules[rule_idx];
+        for (size_t state_idx = 0; state_idx < rule->state.len; state_idx += 1) {
+            uint64_t deadline = 0;
+            if (entry_deadline(&rule->state.items[state_idx], &deadline) && (!found || deadline < best)) {
+                best = deadline;
+                found = true;
+            }
+        }
+    }
+    if (found) {
+        *out_ms = best;
+    }
+    return found;
 }

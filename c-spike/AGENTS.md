@@ -47,6 +47,14 @@ ctest --test-dir c-spike/build-asan --output-on-failure
 - Server owns connection lifetime and write completions.
 - Protocol parsing is slice-based and allocation-free.
 - Patchbay parse trees and temporary eval values live in arenas.
+- Long-lived patchbay state is owned by `pb_eval_state`; be explicit about
+  string/ring ownership and free every heap field in `state_entry_free`.
+- Avoid surprise publish-time allocation. Allocate on connection open, SUB,
+  UNSUB, patchbay/config load, or first state-slot creation; reuse read/write
+  buffers and per-publish scratch arenas.
+- On Linux, libuv uses epoll for the event loop. The spike disables libuv's
+  optional io_uring paths by default for seccomp-friendly containers; use
+  `--io-uring` or `UV_USE_IO_URING=1` to opt in before loop creation.
 
 ## Patchbay Model
 
@@ -59,6 +67,14 @@ ctest --test-dir c-spike/build-asan --output-on-failure
   `json-demux!`).
 - If an evaluator form is not implemented, validation should fail rather than
   silently accepting it.
+- `moving-avg` supports count windows and `:ms` windows, but time windows evict
+  on the next matching publish only. There is not yet a timer-driven clock
+  walker for quiet-stream expiry, `bar!`, or LVC.
+- Re-entry is intentionally not implemented in the C spike yet. Do not make
+  `:reentrant true` recurse until there is a small, bounded model for it.
+- Negative numeric literals and negative payloads are valid. When testing with
+  `nats pub`, pass negative bodies after `--`, for example
+  `nats pub sensors.temp -- -5`.
 
 ## C Style
 
@@ -71,3 +87,7 @@ ctest --test-dir c-spike/build-asan --output-on-failure
   non-obvious protocol behavior.
 - Do not let vendored code inherit project warning flags.
 - Keep dependencies small and easy to audit.
+- `pb_eval.c` is allowed to contain evaluator dispatch and binding semantics,
+  but do not keep adding large builtin bodies there. The next substantial
+  patchbay growth should split pure builtins and stateful/window forms into
+  separate C modules.

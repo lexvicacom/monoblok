@@ -33,14 +33,26 @@ static void check_text(pb_slice s, const char *want) {
     CHECK(memcmp(s.ptr, want, s.len) == 0);
 }
 
+static pb_eval_result eval_src_with_payload_state_clock(pb_arena *arena, pb_eval_state *state,
+                                                        const char *src, const char *payload,
+                                                        uint64_t now_ms, int64_t wall_ms, published *pub);
+
 static pb_eval_result eval_src_with_payload_and_state(pb_arena *arena, pb_eval_state *state,
                                                       const char *src, const char *payload, published *pub) {
+    return eval_src_with_payload_state_clock(arena, state, src, payload, 0, 0, pub);
+}
+
+static pb_eval_result eval_src_with_payload_state_clock(pb_arena *arena, pb_eval_state *state,
+                                                        const char *src, const char *payload,
+                                                        uint64_t now_ms, int64_t wall_ms, published *pub) {
     pb_parse_result parsed = pb_parse_all(arena, src, strlen(src));
     CHECK(parsed.err == PB_PARSE_OK);
     CHECK(parsed.forms.len == 1);
     pb_eval_ctx ctx = {
         .arena = arena,
         .state = state,
+        .now_ms = now_ms,
+        .wall_ms = wall_ms,
         .subject = {.ptr = "sensors.temp", .len = 12},
         .payload = {.ptr = payload, .len = strlen(payload)},
         .publish = publish_cb,
@@ -67,6 +79,13 @@ static void test_bound_symbols_and_math(void) {
     CHECK(r.err == PB_EVAL_OK);
     CHECK(r.value.kind == PB_NUMBER);
     CHECK(fabs(r.value.number - 50.0) < 0.00001);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload(&arena, "(+ payload-float 8)", "-5", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(r.value.kind == PB_NUMBER);
+    CHECK(fabs(r.value.number - 3.0) < 0.00001);
     pb_arena_free(&arena);
 }
 
@@ -210,6 +229,115 @@ static void test_stateful_helpers(void) {
     check_text(pub.payloads[0], "1");
     pb_arena_free(&arena);
 
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(moving-avg 3 payload-float)", "10", &pub);
+    CHECK(r.err == PB_EVAL_OK && r.value.kind == PB_NUMBER);
+    CHECK(fabs(r.value.number - 10.0) < 0.00001);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(moving-avg 3 payload-float)", "20", &pub);
+    CHECK(r.err == PB_EVAL_OK && r.value.kind == PB_NUMBER);
+    CHECK(fabs(r.value.number - 15.0) < 0.00001);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(moving-avg :ms 5000 payload-float)", "20", &pub);
+    CHECK(r.err == PB_EVAL_OK && r.value.kind == PB_NUMBER);
+    CHECK(fabs(r.value.number - 20.0) < 0.00001);
+    pb_arena_free(&arena);
+
+    pb_eval_state_free(&state);
+}
+
+static void test_now_and_bar(void) {
+    pb_eval_state state = {0};
+    published pub = {0};
+
+    pb_arena arena = {0};
+    pb_eval_result r = eval_src_with_payload_state_clock(&arena, &state, "(now :date)", "0", 0, 1777903425000, &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    check_text(r.value.text, "2026-05-04");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! 3 payload-float)", "10", 0, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 0);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! 3 payload-float)", "12", 0, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 0);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! 3 payload-float)", "9", 0, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 4);
+    check_text(pub.subjects[0], "sensors.temp.bar.open");
+    check_text(pub.payloads[0], "10");
+    check_text(pub.subjects[1], "sensors.temp.bar.high");
+    check_text(pub.payloads[1], "12");
+    check_text(pub.subjects[2], "sensors.temp.bar.low");
+    check_text(pub.payloads[2], "9");
+    check_text(pub.subjects[3], "sensors.temp.bar.close");
+    check_text(pub.payloads[3], "9");
+    pb_arena_free(&arena);
+
+    pub = (published){0};
+    pb_eval_state_free(&state);
+    state = (pb_eval_state){0};
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! :ms 1000 payload-float)", "10", 1100, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 0);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! :ms 1000 payload-float)", "12", 1300, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 0);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! :ms 1000 payload-float)", "15", 2100, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 4);
+    check_text(pub.payloads[0], "10");
+    check_text(pub.payloads[1], "12");
+    check_text(pub.payloads[2], "10");
+    check_text(pub.payloads[3], "12");
+    pb_arena_free(&arena);
+
+    pub = (published){0};
+    pb_eval_state_free(&state);
+    state = (pb_eval_state){0};
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! :ms 1000 payload-float)", "10", 1100, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && state.len == 1);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state, "(bar! :ms 1000 payload-float)", "12", 1300, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 0);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pb_eval_ctx tick_ctx = {
+        .arena = &arena,
+        .state = &state,
+        .now_ms = 2000,
+        .subject = {.ptr = "sensors.temp", .len = 12},
+        .payload = {.ptr = "", .len = 0},
+        .publish = publish_cb,
+        .publish_ctx = &pub,
+    };
+    r = pb_eval_tick_state_entry(&tick_ctx, &state.items[0]);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 4);
+    check_text(pub.payloads[0], "10");
+    check_text(pub.payloads[1], "12");
+    check_text(pub.payloads[2], "10");
+    check_text(pub.payloads[3], "12");
+    pb_arena_free(&arena);
+
     pb_eval_state_free(&state);
 }
 
@@ -262,6 +390,7 @@ int main(void) {
     test_publish();
     test_thread_and_numeric_helpers();
     test_stateful_helpers();
+    test_now_and_bar();
     test_json_get();
     test_json_demux();
     puts("eval tests passed");

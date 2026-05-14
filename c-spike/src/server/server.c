@@ -5,6 +5,36 @@
 #include <stdio.h>
 #include <stdint.h>
 
+int64_t mb_wall_clock_ms(void) {
+    uv_timeval64_t tv = {0};
+    if (uv_gettimeofday(&tv) != 0) {
+        return 0;
+    }
+    return tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+static void on_patchbay_timer(uv_timer_t *timer) {
+    mb_server *server = timer->data;
+    uv_update_time(&server->loop);
+    (void)pb_program_tick(server->program, &server->router, uv_now(&server->loop), mb_wall_clock_ms());
+    mb_server_reschedule_patchbay_clock(server);
+}
+
+void mb_server_reschedule_patchbay_clock(mb_server *server) {
+    if (!server->patchbay_timer_started) {
+        return;
+    }
+    uint64_t deadline = 0;
+    if (!pb_program_next_clock_deadline(server->program, &deadline)) {
+        uv_timer_stop(&server->patchbay_timer);
+        return;
+    }
+    uv_update_time(&server->loop);
+    const uint64_t now = uv_now(&server->loop);
+    const uint64_t due = deadline <= now ? 0 : deadline - now;
+    (void)uv_timer_start(&server->patchbay_timer, on_patchbay_timer, due, 0);
+}
+
 static void on_connection(uv_stream_t *listener, int status) {
     mb_server *server = listener->data;
     if (status < 0) {
@@ -47,6 +77,13 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         return false;
     }
     server->listener.data = server;
+    if (program != NULL && program->uses_clock_timer) {
+        if (uv_timer_init(&server->loop, &server->patchbay_timer) != 0) {
+            return false;
+        }
+        server->patchbay_timer.data = server;
+        server->patchbay_timer_started = true;
+    }
 
     struct sockaddr_in addr;
     const int ip_rc = uv_ip4_addr(host, (int)port, &addr);
@@ -78,6 +115,9 @@ void mb_server_close(mb_server *server) {
     }
     if (!uv_is_closing((uv_handle_t *)&server->listener)) {
         uv_close((uv_handle_t *)&server->listener, NULL);
+    }
+    if (server->patchbay_timer_started && !uv_is_closing((uv_handle_t *)&server->patchbay_timer)) {
+        uv_close((uv_handle_t *)&server->patchbay_timer, NULL);
     }
     uv_run(&server->loop, UV_RUN_DEFAULT);
     uv_loop_close(&server->loop);

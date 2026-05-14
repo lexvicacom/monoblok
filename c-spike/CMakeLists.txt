@@ -46,6 +46,7 @@ set(MB_CORE
 
 set(PB_CORE
   src/patchbay/pb_arena.c
+  src/patchbay/pb_builtins.c
   src/patchbay/pb_eval.c
   src/patchbay/pb_json.c
   src/patchbay/pb_program.c
@@ -85,6 +86,10 @@ add_executable(json-tests test/json_unit.c)
 target_link_libraries(json-tests PRIVATE patchbay_sexpr ${MB_MATH_LIB})
 target_compile_options(json-tests PRIVATE ${MB_WARNINGS})
 
+add_executable(program-tests test/program_unit.c)
+target_link_libraries(program-tests PRIVATE monoblok_core patchbay_sexpr ${MB_MATH_LIB})
+target_compile_options(program-tests PRIVATE ${MB_WARNINGS})
+
 add_executable(pb-dump src/patchbay/pb_dump.c)
 target_link_libraries(pb-dump PRIVATE patchbay_sexpr)
 target_compile_options(pb-dump PRIVATE ${MB_WARNINGS})
@@ -94,6 +99,7 @@ add_test(NAME unit COMMAND unit-tests)
 add_test(NAME sexpr COMMAND sexpr-tests)
 add_test(NAME eval COMMAND eval-tests)
 add_test(NAME json COMMAND json-tests)
+add_test(NAME program COMMAND program-tests)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libuv/CMakeLists.txt")
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)

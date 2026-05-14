@@ -68,9 +68,12 @@ static void handle_op(mb_conn *conn, mb_op op) {
         if (!mb_router_publish(&conn->server->router, op.subject, op.payload)) {
             mb_write_err(&conn->router_conn.out, "Publish Failed");
         }
-        if (!pb_program_eval_publish(conn->server->program, &conn->server->router, op.subject, op.payload)) {
+        uv_update_time(&conn->server->loop);
+        if (!pb_program_eval_publish(conn->server->program, &conn->server->router, op.subject, op.payload,
+                                     uv_now(&conn->server->loop), mb_wall_clock_ms())) {
             mb_write_err(&conn->router_conn.out, "Patchbay Failed");
         }
+        mb_server_reschedule_patchbay_clock(conn->server);
         break;
     }
 }

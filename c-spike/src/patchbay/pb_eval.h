@@ -3,6 +3,8 @@
 
 #include "pb_sexpr.h"
 
+#include <stdint.h>
+
 typedef enum pb_eval_error {
     PB_EVAL_OK,
     PB_EVAL_OOM,
@@ -20,6 +22,7 @@ typedef enum pb_eval_state_kind {
     PB_EVAL_STATE_NUMBER,
     PB_EVAL_STATE_BYTES,
     PB_EVAL_STATE_RING,
+    PB_EVAL_STATE_BAR,
 } pb_eval_state_kind;
 
 // Long-lived per-(rule, op, subject) slot for simple stateful forms.
@@ -42,6 +45,15 @@ typedef struct pb_eval_state_entry {
     double ring_sum;
     uint64_t ring_window_ms;
     bool ring_time_window;
+    double bar_open;
+    double bar_high;
+    double bar_low;
+    double bar_last_close;
+    uint32_t bar_count;
+    uint32_t bar_cap;
+    uint64_t bar_window_ms;
+    uint64_t bar_window_start_ms;
+    bool bar_time_window;
 } pb_eval_state_entry;
 
 // Stateful patchbay storage owned by the caller and reused across publishes.
@@ -56,6 +68,8 @@ typedef struct pb_eval_ctx {
     pb_arena *arena;
     pb_eval_state *state;
     size_t rule_id;
+    uint64_t now_ms;
+    int64_t wall_ms;
     pb_slice subject;
     pb_slice payload;
     pb_publish_fn publish;
@@ -69,6 +83,7 @@ typedef struct pb_eval_result {
 } pb_eval_result;
 
 pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr);
+pb_eval_result pb_eval_tick_state_entry(pb_eval_ctx *ctx, pb_eval_state_entry *entry);
 void pb_eval_state_free(pb_eval_state *state);
 const char *pb_eval_error_name(pb_eval_error err);
 
