@@ -1,6 +1,8 @@
 # monoblok
 
 > A NATS-core compatible messaging system that conditions subjects before subscribers see them.
+> 
+> Fix raw input streams once, not in every subscriber.
 
 ## Rationale
 
@@ -16,15 +18,18 @@ Common ways of running monoblok:
 - Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
-Also see [tinyblok](https://github.com/lexvicacom/tinyblok) which is an implementation for microcontrollers.
+monoblok is written in Zig and builds on Linux and macOS. It aims to be **fast**, even on entry level/shared hardware. There are no scientific measurements yet. There are some [benchmark scripts](./scripts) and [results](./bench-results).
 
-monoblok is written in Zig and builds on Linux and macOS. It aims to be fast, even on entry level/shared hardware. Nothing scientific yet. There are some [benchmark scripts](./scripts) and [results](./bench-results).
+[tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation of the same idea, but for microcontrollers.
+
 
 [Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ## Public demo server
 
-A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `demo.monoblok.host:4222`, with a bridged NATS server on `demo.monoblok.host:4223`.
+A [public demo server](https://alexjreid.dev/posts/monoblok-demo/) runs on `demo.monoblok.host:4222`, with a bridged NATS server on `demo.monoblok.host:4223`. All you need is the NATS CLI. The loaded patchbay is [`demo.edn`](./examples/demo.edn) - if this makes no sense, don't worry, patchbay will be introduced later in this document.
+
+Open a few terminals:
 
 ```sh
 nats -s demo.monoblok.host:4222 sub 'demo.sensors.>'
@@ -37,13 +42,15 @@ nats -s demo.monoblok.host:4222 pub demo.sensors.temp 2331.104
 nats -s demo.monoblok.host:4222 pub demo.sensors.temp 21.104
 ```
 
-Conditioned values are visible on the first subscription. As the `2331.104` value breaches a threshold, it is also exported to NATS so is visible on the second subscription.
+Conditioned values are visible on the first subscription, as well as the input to `demo.sensors.temp` due to our subscription filter. As the `2331.104` value breaches a threshold, it is also exported to NATS so is visible on the second subscription.
 
 See [docs/demo.md](./docs/demo.md) for the loaded patchbay and subjects worth subscribing to.
 
 ## Install
 
-This downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
+This script downloads and unpacks the latest release into the current directory. See [scripts/start.sh](./scripts/start.sh)
+
+You can run it with:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
@@ -58,6 +65,7 @@ patchbay is a small S-expression DSL describing how every incoming publish gets 
 
 Top-level forms are `(on SUBJECT-FILTER BODY)`. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility.
 
+
 ```edn
 (on "sensors.*"
   (when (> payload-float 30.0)
@@ -71,9 +79,11 @@ Top-level forms are `(on SUBJECT-FILTER BODY)`. Wildcards are NATS-style: `*` ma
       (publish! (subject-append "stable"))))
 ```
 
+The root [`patchbay.edn`](./patchbay.edn) is a short tour.
+
 The vocabulary is borrowed from electronics (`squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
 
-JSON frames like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep. The root [`patchbay.edn`](./patchbay.edn) includes a starter rule for this, while [`json-frames.edn`](./examples/json-frames.edn) shows the fuller version.
+JSON payloads like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep. The root [`patchbay.edn`](./patchbay.edn) includes a starter rule for this, while [`json-frames.edn`](./examples/json-frames.edn) shows the fuller version.
 
 Time-windowed `bar!` closes and `moving-* :ms` evictions are driven by one libxev timer per active slot, scheduled at the slot's exact next deadline; a quiet feed still flushes its bar at the window boundary, with no periodic walker.
 
@@ -254,7 +264,7 @@ zig build --release=safe
 ./zig-out/bin/monoblok --port 4222 --patchbay patchbay.edn
 ```
 
-Release binaries are built natively per arch by `.github/workflows/release.yml` on three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), `macos-latest` (aarch64).
+Release binaries are built natively per arch by `.github/workflows/release.yml` on three runners: `ubuntu-22.04` (x86_64), `ubuntu-22.04-arm` (aarch64), `macos-latest` (aarch64). Cross compiling in a Linux x86_64 runner ought to be possible, but currently this breaks ARM builds. As it's not costly to run a tiny codebase like this through GHA on native targets, I just left it alone. YMMV.
 
 ## AI
 
