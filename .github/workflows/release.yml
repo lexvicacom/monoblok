@@ -32,6 +32,7 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -52,6 +53,55 @@ jobs:
       - name: Build + package
         run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
 
+      - name: Resolve container metadata
+        if: startsWith(matrix.platform, 'linux-')
+        id: image
+        run: |
+          set -eu
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          case "${{ matrix.platform }}" in
+            linux-x86_64)
+              echo "platform=linux/amd64" >> "$GITHUB_OUTPUT"
+              echo "arch=amd64" >> "$GITHUB_OUTPUT"
+              ;;
+            linux-aarch64)
+              echo "platform=linux/arm64" >> "$GITHUB_OUTPUT"
+              echo "arch=arm64" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "unexpected Linux platform: ${{ matrix.platform }}" >&2
+              exit 2
+              ;;
+          esac
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        if: startsWith(matrix.platform, 'linux-')
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: startsWith(matrix.platform, 'linux-')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push container image
+        if: startsWith(matrix.platform, 'linux-')
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          platforms: ${{ steps.image.outputs.platform }}
+          push: true
+          tags: |
+            ${{ steps.image.outputs.image }}:${{ steps.ver.outputs.version }}-${{ steps.image.outputs.arch }}
+            ${{ steps.image.outputs.image }}:${{ github.sha }}-${{ steps.image.outputs.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+
       - name: Create release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -62,3 +112,54 @@ jobs:
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  container-manifest:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - name: Resolve version
+        id: ver
+        run: |
+          set -eu
+          ref="${GITHUB_REF##*/}"
+          case "$ref" in
+            v*) v="$ref" ;;
+            *)  v="${GITHUB_SHA::7}" ;;
+          esac
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch container tag
+        run: |
+          set -eu
+          image="${{ steps.ver.outputs.image }}"
+          version="${{ steps.ver.outputs.version }}"
+          docker buildx imagetools create \
+            -t "$image:$version" \
+            -t "$image:${GITHUB_SHA}" \
+            "$image:$version-amd64" \
+            "$image:$version-arm64"
+
+      - name: Move latest tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -eu
+          image="${{ steps.ver.outputs.image }}"
+          version="${{ steps.ver.outputs.version }}"
+          docker buildx imagetools create \
+            -t "$image:latest" \
+            "$image:$version-amd64" \
+            "$image:$version-arm64"

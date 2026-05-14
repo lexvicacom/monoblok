@@ -246,6 +246,35 @@ journalctl -u monoblok -f
 
 Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
 
+### Container
+
+Linux release builds also publish a multi-arch image to GitHub Container Registry:
+
+```sh
+docker run --rm -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
+```
+
+The image includes the root `patchbay.edn` as `/etc/monoblok/patchbay.edn` and uses that path by default. For real deployments, mount your patchbay over that single file:
+
+```sh
+docker run --rm \
+  -p 4222:4222 \
+  --mount type=bind,src="$PWD/patchbay.edn",dst=/etc/monoblok/patchbay.edn,readonly \
+  ghcr.io/lexvicacom/monoblok:latest
+```
+
+If you prefer a config directory, mount the directory and pass the patchbay path as normal CLI args:
+
+```sh
+docker run --rm \
+  -p 4222:4222 \
+  --mount type=bind,src="$PWD/config",dst=/config,readonly \
+  ghcr.io/lexvicacom/monoblok:latest \
+  --port 4222 --patchbay /config/prod.edn
+```
+
+For orchestrators, use the same file shape: mount a ConfigMap, Docker config, or other one-file config source at `/etc/monoblok/patchbay.edn`. The runtime image intentionally has no shell or package manager, so inline patchbay strings are best written to a file by the host/orchestrator before starting the container rather than expanded inside the image.
+
 ## How fast is it?
 
 tl;dr: It's likely to be fast enough. Getting meaningful benchmarks turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
