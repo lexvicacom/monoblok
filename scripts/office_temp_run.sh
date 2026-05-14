@@ -6,12 +6,12 @@ set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-MB_BIN="$ROOT/zig-out/bin/monoblok"
+MB_BIN="$ROOT/build/monoblok"
 PATCHBAY="$ROOT/examples/office-temp.edn"
 PORT=4333
 export NATS_URL="nats://127.0.0.1:$PORT"
 
-[ -x "$MB_BIN" ] || { echo "build first: zig build --release=safe"; exit 1; }
+[ -x "$MB_BIN" ] || { echo "build first: cmake --build build --target monoblok"; exit 1; }
 command -v nats >/dev/null 2>&1 || { echo "missing nats CLI"; exit 1; }
 
 SUB_LOG=/tmp/office_temp_sub.log

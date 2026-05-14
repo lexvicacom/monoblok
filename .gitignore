@@ -1,12 +1,11 @@
-zig-out
-dist
+build/
+build-*/
+vendor/libuv/build/
+vendor/nats.c/build/
+dist/
 .DS_Store
-.zig-cache
-zig-pkg
 *.core
 /core.*
 perf.data*
 *.prof
 .claude/settings.local.json
-AGENTS.md
-!*/AGENTS.md

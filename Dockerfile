@@ -1,6 +1,6 @@
 FROM cgr.dev/chainguard/glibc-dynamic:latest
 
-COPY zig-out/bin/monoblok /usr/local/bin/monoblok
+COPY build/monoblok /usr/local/bin/monoblok
 COPY patchbay.edn /etc/monoblok/patchbay.edn
 
 EXPOSE 4222

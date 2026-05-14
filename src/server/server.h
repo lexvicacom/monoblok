@@ -1,0 +1,40 @@
+#ifndef MB_SERVER_H
+#define MB_SERVER_H
+
+#include "router.h"
+#include "pb_program.h"
+
+#include <stdint.h>
+#include <uv.h>
+
+typedef struct mb_conn mb_conn;
+
+// Process-local server state owned by one uv loop thread.
+typedef struct mb_server {
+    uv_loop_t loop;
+    uv_tcp_t listener;
+    uv_timer_t patchbay_timer;
+    uv_timer_t snapshot_timer;
+    mb_router router;
+    pb_program *program;
+    mb_conn *conns;
+    char server_id[35];
+    uint64_t next_client_id;
+    const char *host;
+    unsigned int port;
+    const char *snapshot_path;
+    uint64_t snapshot_every_ms;
+    bool patchbay_timer_started;
+    bool snapshot_timer_started;
+    bool lvc_enabled;
+    bool trace;
+} mb_server;
+
+bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
+                    bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms, bool trace);
+int mb_server_run(mb_server *server);
+void mb_server_close(mb_server *server);
+int64_t mb_wall_clock_ms(void);
+void mb_server_reschedule_patchbay_clock(mb_server *server);
+
+#endif

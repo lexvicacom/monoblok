@@ -15,18 +15,18 @@
 # Usage: ./scripts/bench.sh
 #
 # NOTE: If numbers seem low, ensure you're running a release build:
-#   zig build --release=safe   (recommended, what release artifacts ship)
+#   cmake --build build --target monoblok   (recommended, what release artifacts ship)
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # Binary lives next to the script on deployed boxes (release tarballs);
-# fall back to zig-out/bin when run out of a source checkout.
+# fall back to cmake-out/bin when run out of a source checkout.
 if [ -x "$HERE/monoblok" ]; then
     MB_BIN="$HERE/monoblok"
     ROOT="$HERE"
 else
     ROOT="$(cd "$HERE/.." && pwd)"
-    MB_BIN="$ROOT/zig-out/bin/monoblok"
+    MB_BIN="$ROOT/build/monoblok"
 fi
 
 export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
@@ -37,7 +37,7 @@ command -v nats >/dev/null 2>&1 || { echo "missing: nats CLI (install from https
 
 if [ ! -x "$MB_BIN" ]; then
     echo "building..."
-    (cd "$ROOT" && zig build --release=safe) || exit 1
+    (cd "$ROOT" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null && cmake --build build --target monoblok) || exit 1
 fi
 
 cleanup() {
@@ -218,4 +218,4 @@ print_row "1 pub → 10 subs"     "$MB_5" "$MB_P_5" "$MB_50_5"
 print_row "1 pub → 50 subs"     "$MB_6" "$MB_P_6" "$MB_50_6"
 
 echo
-echo "NOTE: If numbers seem low, ensure a release build (zig build --release=safe)"
+echo "NOTE: If numbers seem low, ensure a release build (cmake --build build --target monoblok)"
