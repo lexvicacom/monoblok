@@ -67,7 +67,11 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 docker run --rm -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
 ```
 
-The image includes the root `patchbay.edn` as `/etc/monoblok/patchbay.edn` as a starting point. `monoblok` is the entrypoint so you can pass any parameters such as --port after the image name.
+This will start monoblok on port 4222. You can use the NATS CLI to pub and sub to it.
+
+The image includes the root [`patchbay.edn`](./patchbay.edn) as `/etc/monoblok/patchbay.edn` as a starting point. Read this file for guidance on where to publish and what to expect. 
+
+`monoblok` is the entrypoint so you can pass any parameters such as --port after the image name. 
 
 See the [Container](#container) section for info on use with orchestrators, ECR etc.
 
