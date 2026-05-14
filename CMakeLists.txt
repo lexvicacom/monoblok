@@ -146,6 +146,9 @@ add_executable(monoblok
 )
 target_link_libraries(monoblok PRIVATE patchbay_sexpr ${MB_UV_TARGET} ${MB_NATS_TARGET})
 target_compile_options(monoblok PRIVATE ${MB_WARNINGS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_compile_definitions(monoblok PRIVATE _GNU_SOURCE)
+endif()
 target_include_directories(monoblok PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_include_directories(monoblok PRIVATE src/server src/patchbay)
 
