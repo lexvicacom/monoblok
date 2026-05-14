@@ -4,6 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // -Dforce-epoll=true forces libxev to use the epoll backend on Linux
+    // instead of its io_uring default. Useful in container environments
+    // where seccomp blocks io_uring_* syscalls (e.g. Docker 29.x default).
+    // Silently ignored on non-Linux targets (kqueue / iocp stay the default).
+    const force_epoll_opt = b.option(bool, "force-epoll", "force libxev's epoll backend instead of io_uring (Linux only)") orelse false;
+    const target_os = target.result.os.tag;
+    const force_epoll = force_epoll_opt and target_os == .linux;
+
     const libxev_dep = b.dependency("libxev", .{
         .target = target,
         .optimize = optimize,
@@ -15,6 +23,19 @@ pub fn build(b: *std.Build) void {
     });
 
     const manifest_mod = b.createModule(.{ .root_source_file = b.path("build.zig.zon") });
+
+    // `xev_mod` is the module everything else imports as "xev". When
+    // force-epoll is set, route imports through a thin shim that re-exports
+    // libxev's epoll backend as if it were the default xev API.
+    const xev_mod = if (force_epoll) blk: {
+        const shim = b.createModule(.{
+            .root_source_file = b.path("src/xev_epoll.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        shim.addImport("xev", libxev_dep.module("xev"));
+        break :blk shim;
+    } else libxev_dep.module("xev");
 
     // Patchbay: the s-expression DSL evaluator, decoupled from the daemon.
     // Lives in lib/patchbay/ as a module so it can be embedded by other
@@ -36,7 +57,7 @@ pub fn build(b: *std.Build) void {
         // pays canary/guard-page overhead on every allocation).
         .link_libc = true,
         .imports = &.{
-            .{ .name = "xev", .module = libxev_dep.module("xev") },
+            .{ .name = "xev", .module = xev_mod },
             .{ .name = "manifest", .module = manifest_mod },
             .{ .name = "patchbay", .module = patchbay_mod },
             .{ .name = "nats", .module = nats_dep.module("nats") },
@@ -75,7 +96,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSafe,
         .link_libc = true,
         .imports = &.{
-            .{ .name = "xev", .module = libxev_dep.module("xev") },
+            .{ .name = "xev", .module = xev_mod },
             .{ .name = "manifest", .module = manifest_mod },
             .{ .name = "patchbay", .module = patchbay_mod },
             .{ .name = "nats", .module = nats_dep.module("nats") },
@@ -118,7 +139,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSafe,
         .link_libc = true,
         .imports = &.{
-            .{ .name = "xev", .module = libxev_dep.module("xev") },
+            .{ .name = "xev", .module = xev_mod },
             .{ .name = "manifest", .module = manifest_mod },
             .{ .name = "patchbay", .module = patchbay_mod },
             .{ .name = "nats", .module = nats_dep.module("nats") },
