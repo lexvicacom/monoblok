@@ -275,6 +275,14 @@ docker run --rm \
 
 For orchestrators, use the same file shape: mount a ConfigMap, Docker config, or other one-file config source at `/etc/monoblok/patchbay.edn`. The runtime image intentionally has no shell or package manager, so inline patchbay strings are best written to a file by the host/orchestrator before starting the container rather than expanded inside the image.
 
+If the container exits immediately with `error: PermissionDenied` on Docker 29.x (seen on Ubuntu 24.04), the default seccomp profile is blocking the `io_uring_*` syscalls that libxev needs. The repo ships a profile at `seccomp/monoblok.json` (the standard containers/common policy plus `io_uring_setup`, `io_uring_enter`, `io_uring_register`):
+
+```sh
+docker run --rm --security-opt seccomp=./seccomp/monoblok.json -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
+```
+
+For a quick local test, `--security-opt seccomp=unconfined` also works but disables seccomp entirely. Older Docker versions (and Docker 25+ on most hosts) allow these syscalls under the default profile, so this only applies to the specific Docker/kernel combination above.
+
 ## How fast is it?
 
 tl;dr: It's likely to be fast enough. Getting meaningful benchmarks turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
