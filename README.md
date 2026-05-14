@@ -275,6 +275,8 @@ docker run --rm \
 
 For orchestrators, use the same file shape: mount a ConfigMap, Docker config, or other one-file config source at `/etc/monoblok/patchbay.edn`. The runtime image intentionally has no shell or package manager, so inline patchbay strings are best written to a file by the host/orchestrator before starting the container rather than expanded inside the image.
 
+#### seccomp + io_uring fun
+
 If the container exits immediately with `error: PermissionDenied` on Docker 29.x (seen on Ubuntu 24.04), the default seccomp profile is blocking the `io_uring_*` syscalls that libxev uses by default. Two ways to fix it:
 
 ```sh
@@ -287,7 +289,7 @@ zig build --release=safe -Dforce-epoll=true
 
 `-Dforce-epoll=true` is a Linux-only flag (silently ignored elsewhere) that swaps libxev's default io_uring backend for epoll. Epoll is decades old, allowed by every container seccomp profile, and for monoblok's pub/sub workload the throughput difference vs io_uring is small. For a quick local test, `--security-opt seccomp=unconfined` also works but disables seccomp entirely. Older Docker versions (and Docker 25+ on most hosts) allow io_uring under the default profile, so this only applies to the specific Docker/kernel combination above.
 
-The io_uring blast radius here is low: monoblok is a single-purpose NATS daemon with no untrusted code paths, and an attacker who has already compromised the daemon has easier targets than chasing a kernel io_uring bug. The seccomp profile is the simplest fix and works with the published image. If your host policy disallows io_uring on principle (many hardened distros do), the epoll build is the cleaner answer because it removes the syscalls from the binary entirely (you'll need to build and publish your own image, however).
+**The io_uring blast radius here is low**: monoblok is a single-purpose NATS daemon with no untrusted code paths, and an attacker who has already compromised the daemon has easier targets than chasing a kernel io_uring bug. The seccomp profile is the simplest fix and works with the published image. If your host policy disallows io_uring on principle (as many hardened distros do), the epoll build is the cleaner answer because it removes the syscalls from the binary entirely (you'll need to build and publish your own image, however).
 
 ## How fast is it?
 
