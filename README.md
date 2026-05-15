@@ -42,6 +42,20 @@ Then run the unpacked binary:
 
 To add as a service on systemd Linux, the release tarball includes `install-systemd.sh`.
 
+## Container
+
+Pull the latest container image (arm64, x86_64 multi arch):
+
+```sh
+docker pull ghcr.io/lexvicacom/monoblok:latest
+```
+
+Run monoblok from the image:
+
+```sh
+docker run --rm -p 14222:14222 ghcr.io/lexvicacom/monoblok:latest --port 14222
+```
+
 ## Build locally
 
 ```sh
