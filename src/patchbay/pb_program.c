@@ -526,7 +526,8 @@ static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
         fprintf(stderr, "patchbay: reentry depth cap reached\n");
         return true;
     }
-    return eval_publish_slices(p->program, p->router, subject, payload, p->now_ms, p->wall_ms, p->depth + 1);
+    (void)eval_publish_slices(p->program, p->router, subject, payload, p->now_ms, p->wall_ms, p->depth + 1);
+    return true;
 }
 
 static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice subject, pb_slice payload,

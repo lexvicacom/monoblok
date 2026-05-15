@@ -85,6 +85,23 @@ static void test_reentry_runs_downstream_rules(void) {
     pb_program_free(&program);
 }
 
+static void test_reentry_eval_failure_does_not_fail_publish(void) {
+    pb_program program = {0};
+    load_program(&program, "(on \"a\" :reentrant true (publish! \"b\" payload))\n"
+                           "(on \"b\" (round payload))\n");
+
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+    CHECK(pb_program_eval_publish(&program, &router, lit("a"), lit("x"), 0, 0));
+    CHECK(buf_contains(&conn.out, "MSG b 1 1\r\nx\r\n"));
+
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
 static void test_reentry_depth_cap(void) {
     pb_program program = {0};
     load_program(&program, "(on \"loop.>\" :reentrant true\n"
@@ -155,6 +172,7 @@ static void test_bridge_requires_servers(void) {
 TEST_MAIN(program,
           test_reentry_is_opt_in,
           test_reentry_runs_downstream_rules,
+          test_reentry_eval_failure_does_not_fail_publish,
           test_reentry_depth_cap,
           test_lvc_filters_load,
           test_bridge_config_loads,

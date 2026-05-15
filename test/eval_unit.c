@@ -169,6 +169,27 @@ static void test_thread_and_numeric_helpers(void) {
     CHECK(r.value.kind == PB_NUMBER);
     CHECK(fabs(r.value.number - 52.6) < 0.00001);
     pb_arena_free(&arena);
+
+    pb_eval_state state = {0};
+    pub = (published){0};
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_and_state(&arena, &state,
+                                        "(-> payload-float (deadband 0.5) (round 1) (publish! \"stable\"))",
+                                        "10", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.payloads[0], "10");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_and_state(&arena, &state,
+                                        "(-> payload-float (deadband 0.5) (round 1) (publish! \"stable\"))",
+                                        "10.2", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(r.value.kind == PB_NIL);
+    CHECK(pub.count == 1);
+    pb_arena_free(&arena);
+    pb_eval_state_free(&state);
 }
 
 static void test_stateful_helpers(void) {
@@ -673,6 +694,29 @@ static void test_json_demux(void) {
     check_text(pub.payloads[0], "31.5");
     check_text(pub.subjects[1], "sensors.temp.state");
     check_text(pub.payloads[1], "warm");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload(&arena,
+                              "(json-demux! [\"sensor.thermal.temp\" \"temp\"] "
+                              "[\"sensor.atmo.pressure\" \"pressure\"] "
+                              "[\"sensor.atmo.dust\" \"dust\"] "
+                              "[\"sensor.prospect.ice\" \"ice\"] payload)",
+                              "{\"sensor\":{\"thermal\":{\"temp\":-142.1},"
+                              "\"atmo\":{\"pressure\":69.4,\"dust\":0.12},"
+                              "\"prospect\":{\"ice\":41.2}}}",
+                              &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 4);
+    check_text(pub.subjects[0], "sensors.temp.temp");
+    check_text(pub.payloads[0], "-142.1");
+    check_text(pub.subjects[1], "sensors.temp.pressure");
+    check_text(pub.payloads[1], "69.4");
+    check_text(pub.subjects[2], "sensors.temp.dust");
+    check_text(pub.payloads[2], "0.12");
+    check_text(pub.subjects[3], "sensors.temp.ice");
+    check_text(pub.payloads[3], "41.2");
     pb_arena_free(&arena);
 }
 

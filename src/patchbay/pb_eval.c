@@ -78,7 +78,19 @@ bool coerce_payload(pb_eval_ctx *ctx, pb_value v, pb_slice *out) {
     }
 
     char tmp[32];
-    const int n = snprintf(tmp, sizeof tmp, "%.17g", v.number);
+    int n = -1;
+    for (int precision = 15; precision <= 17; precision += 1) {
+        n = snprintf(tmp, sizeof tmp, "%.*g", precision, v.number);
+        if (n < 0 || (size_t)n >= sizeof tmp) {
+            return false;
+        }
+        errno = 0;
+        char *end = NULL;
+        const double roundtrip = strtod(tmp, &end);
+        if (errno == 0 && end == tmp + n && roundtrip == v.number) {
+            break;
+        }
+    }
     if (n < 0 || (size_t)n >= sizeof tmp) {
         return false;
     }
@@ -450,6 +462,9 @@ static pb_eval_result eval_thread(pb_eval_ctx *ctx, pb_values args) {
         return cur;
     }
     for (size_t i = 1; i < args.len; i += 1) {
+        if (cur.value.kind == PB_NIL) {
+            return cur;
+        }
         cur = eval_call_with_threaded(ctx, args.items[i], cur.value);
         if (cur.err != PB_EVAL_OK) {
             return cur;
