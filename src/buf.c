@@ -20,8 +20,11 @@ bool mb_buf_reserve(mb_buf *buf, size_t additional) {
         }
         next *= 2;
     }
+    if (next > SIZE_MAX / sizeof buf->ptr[0]) {
+        return false;
+    }
 
-    uint8_t *new_ptr = realloc(buf->ptr, next);
+    uint8_t *new_ptr = realloc(buf->ptr, next * sizeof buf->ptr[0]);
     if (new_ptr == NULL) {
         return false;
     }
@@ -71,4 +74,3 @@ void mb_buf_swap(mb_buf *a, mb_buf *b) {
     *a = *b;
     *b = tmp;
 }
-
