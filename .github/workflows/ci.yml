@@ -2,6 +2,10 @@ name: CI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - c
   pull_request:
     types:
       - opened
@@ -23,8 +27,6 @@ jobs:
         include:
           - platform: linux-x86_64
             runs-on: ubuntu-22.04
-          - platform: linux-aarch64
-            runs-on: ubuntu-22.04-arm
           - platform: macos-aarch64
             runs-on: macos-latest
     runs-on: ${{ matrix.runs-on }}
@@ -33,7 +35,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
-        run: cmake --build build
+        run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
@@ -41,21 +43,25 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install sanitizer dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - name: Configure ASan/UBSan
         run: cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DMB_ASAN=ON
       - name: Build ASan/UBSan
-        run: cmake --build build-asan
+        run: cmake --build build-asan --parallel
       - name: Test ASan/UBSan
         run: ctest --test-dir build-asan --output-on-failure
 
   smoke:
-    needs: test
+    needs:
+      - test
+      - sanitizer
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Install smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev netcat-openbsd
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Server smoke
-        run: cmake --build build --target smoke
+        run: cmake --build build --target smoke --parallel
