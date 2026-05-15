@@ -293,7 +293,15 @@ void mb_server_close(mb_server *server) {
     if (server->sigterm_started && !uv_is_closing((uv_handle_t *)&server->sigterm)) {
         uv_close((uv_handle_t *)&server->sigterm, NULL);
     }
+    if (server->snapshot_job != NULL) {
+        (void)uv_cancel((uv_req_t *)&server->snapshot_job->req);
+    }
     uv_run(&server->loop, UV_RUN_DEFAULT);
+    while (server->snapshot_job != NULL) {
+        if (uv_run(&server->loop, UV_RUN_DEFAULT) == 0) {
+            break;
+        }
+    }
     if (server->snapshot_path != NULL) {
         if (mb_snapshot_write(server->snapshot_path, &server->router, server->program)) {
             fprintf(stderr, "info: shutdown: snapshot written (%zu lvc) to %s\n",

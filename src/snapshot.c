@@ -221,7 +221,7 @@ static pb_eval_state_entry *append_state(pb_program *program, uint32_t rule_idx,
         return NULL;
     }
     pb_rule *rule = &program->rules[rule_idx];
-    if (!mb_slice_eq_bytes((const uint8_t *)rule->filter.ptr, rule->filter.len, filter))
+    if (!mb_slice_eq((mb_slice){.ptr = (const uint8_t *)rule->filter.ptr, .len = rule->filter.len}, filter))
     {
         return NULL;
     }

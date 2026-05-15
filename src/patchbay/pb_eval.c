@@ -6,11 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Evaluation is deliberately split between short-lived arena values and
-// long-lived per-(rule, op, subject) state slots. AST text belongs to the parse
-// arena, intermediate strings live in ctx->arena, and every heap field attached
-// to pb_eval_state_entry must be released by state_entry_free.
-
 pb_eval_result ok(pb_value v) {
     return (pb_eval_result){.err = PB_EVAL_OK, .value = v};
 }

@@ -36,18 +36,8 @@ static void check_text(pb_slice s, const char *want) {
     CHECK(memcmp(s.ptr, want, s.len) == 0);
 }
 
-static pb_eval_result eval_src_with_payload_state_clock(pb_arena *arena, pb_eval_state *state,
-                                                        const char *src, const char *payload,
-                                                        uint64_t now_ms, int64_t wall_ms, published *pub);
-
-static pb_eval_result eval_src_with_payload_and_state(pb_arena *arena, pb_eval_state *state,
-                                                      const char *src, const char *payload, published *pub) {
-    return eval_src_with_payload_state_clock(arena, state, src, payload, 0, 0, pub);
-}
-
-static pb_eval_result eval_src_with_payload_state_clock(pb_arena *arena, pb_eval_state *state,
-                                                        const char *src, const char *payload,
-                                                        uint64_t now_ms, int64_t wall_ms, published *pub) {
+static pb_eval_result eval_src_core(pb_arena *arena, pb_eval_state *state, const char *src, const char *payload,
+                                    uint64_t now_ms, int64_t wall_ms, published *pub) {
     pb_parse_result parsed = pb_parse_all(arena, src, strlen(src));
     CHECK(parsed.err == PB_PARSE_OK);
     CHECK(parsed.forms.len == 1);
@@ -64,15 +54,29 @@ static pb_eval_result eval_src_with_payload_state_clock(pb_arena *arena, pb_eval
     return pb_eval(&ctx, parsed.forms.items[0]);
 }
 
+static pb_eval_result eval_src_with_payload_state_clock(pb_arena *arena, pb_eval_state *state,
+                                                        const char *src, const char *payload,
+                                                        uint64_t now_ms, int64_t wall_ms, published *pub) {
+    return eval_src_core(arena, state, src, payload, now_ms, wall_ms, pub);
+}
+
+static pb_eval_result eval_src_with_payload_and_state(pb_arena *arena, pb_eval_state *state,
+                                                      const char *src, const char *payload, published *pub) {
+    return eval_src_core(arena, state, src, payload, 0, 0, pub);
+}
+
 static pb_eval_result eval_src_with_payload(pb_arena *arena, const char *src, const char *payload, published *pub) {
     pb_eval_state state = {0};
-    pb_eval_result r = eval_src_with_payload_and_state(arena, &state, src, payload, pub);
+    pb_eval_result r = eval_src_core(arena, &state, src, payload, 0, 0, pub);
     pb_eval_state_free(&state);
     return r;
 }
 
 static pb_eval_result eval_src(pb_arena *arena, const char *src, published *pub) {
-    return eval_src_with_payload(arena, src, "42", pub);
+    pb_eval_state state = {0};
+    pb_eval_result r = eval_src_core(arena, &state, src, "42", 0, 0, pub);
+    pb_eval_state_free(&state);
+    return r;
 }
 
 static void test_bound_symbols_and_math(void) {

@@ -5,11 +5,6 @@
 
 #include <stdlib.h>
 
-// Router state is mutated only from the server's libuv loop thread. It owns
-// subscription indexes, LVC storage, and bridge fanout hooks, but never owns
-// transports or uv handles; server/conn code owns connection lifetime and
-// drains mb_router_conn.out.
-
 static void free_sub(mb_subscription *sub) {
     free(sub->subject);
     free(sub->sid);
@@ -17,7 +12,7 @@ static void free_sub(mb_subscription *sub) {
 }
 
 static bool sid_eq(const mb_subscription *sub, mb_slice sid) {
-    return mb_slice_eq_bytes(sub->sid, sub->sid_len, sid);
+    return mb_slice_eq((mb_slice){.ptr = sub->sid, .len = sub->sid_len}, sid);
 }
 
 bool mb_router_subject_has_lvc_prefix(mb_slice subject) {
@@ -136,7 +131,7 @@ static bool ensure_kick_capacity(mb_router *router, size_t needed) {
 
 static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool create) {
     for (size_t i = 0; i < router->literal_len; i += 1) {
-        if (mb_slice_eq_bytes(router->literal[i].key, router->literal[i].key_len, key)) {
+        if (mb_slice_eq((mb_slice){.ptr = router->literal[i].key, .len = router->literal[i].key_len}, key)) {
             return &router->literal[i];
         }
     }
@@ -154,7 +149,7 @@ static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool c
 
 static mb_wildcard_bucket *wildcard_bucket(mb_router *router, mb_slice key, bool create) {
     for (size_t i = 0; i < router->wildcard_len; i += 1) {
-        if (mb_slice_eq_bytes(router->wildcard[i].key, router->wildcard[i].key_len, key)) {
+        if (mb_slice_eq((mb_slice){.ptr = router->wildcard[i].key, .len = router->wildcard[i].key_len}, key)) {
             return &router->wildcard[i];
         }
     }
@@ -249,7 +244,7 @@ static void lvc_entry_free(mb_lvc_entry *entry) {
 
 static mb_lvc_entry *lvc_entry_find(mb_router *router, mb_slice subject) {
     for (size_t i = 0; i < router->lvc_len; i += 1) {
-        if (mb_slice_eq_bytes(router->lvc[i].subject, router->lvc[i].subject_len, subject)) {
+        if (mb_slice_eq((mb_slice){.ptr = router->lvc[i].subject, .len = router->lvc[i].subject_len}, subject)) {
             return &router->lvc[i];
         }
     }

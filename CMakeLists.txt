@@ -12,7 +12,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(MB_ASAN "Build with AddressSanitizer and UBSan" OFF)
-option(MB_NATS_TLS "Build vendored nats.c with TLS/OpenSSL support" ON)
+option(MB_NATS_TLS "Build nats.c with TLS/OpenSSL support" ON)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)

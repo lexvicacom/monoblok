@@ -8,6 +8,7 @@
 #include "mb_version.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,8 +16,6 @@
 
 static void usage(const char *argv0) {
     printf("Usage: %s [PATCHBAY] [--host HOST] [--port PORT]\n"
-           "\n"
-           "A tiny C23/libuv monoblok daemon with a strict patchbay subset.\n"
            "\n"
            "Options:\n"
            "  PATCHBAY             Positional patchbay path for --validate/--soundcheck.\n"
@@ -41,16 +40,16 @@ static void version(void) {
     printf("monoblok %s\n", MB_VERSION);
 }
 
-static void banner(const char *mode) {
+static void banner(void) {
     printf("\n"
-           "    __  __   ___   _  _   ___   ___   _      ___   _  __\n"
-           "   |  \\/  | / _ \\ | \\| | / _ \\ | _ ) | |    / _ \\ | |/ /\n"
-           "   | |\\/| || (_) || .` || (_) || _ \\ | |__ | (_) || ' <\n"
-           "   |_|  |_| \\___/ |_|\\_| \\___/ |___/ |____| \\___/ |_|\\_\\\n"
+           " __  __  ___  _  _  ___  ___  _    ___  _  __\n"
+           "|  \\/  |/ _ \\| \\| |/ _ \\| _ )| |  / _ \\| |/ /\n"
+           "| |\\/| | (_) | .` | (_) | _ \\| |_| (_) | ' <\n"
+           "|_|  |_|\\___/|_|\\_|\\___/|___/|____\\___/|_|\\_\\\n"
            "\n"
-           "   monoblok %s - %s mode\n"
+           "monoblok v%s\n"
            "\n\n",
-           MB_VERSION, mode);
+           MB_VERSION);
 }
 
 static const char *backend_name(void) {
@@ -70,12 +69,6 @@ static const char *os_name(void) {
     return "macos";
 #elif defined(__linux__)
     return "linux";
-#elif defined(__FreeBSD__)
-    return "freebsd";
-#elif defined(__OpenBSD__)
-    return "openbsd";
-#elif defined(__NetBSD__)
-    return "netbsd";
 #else
     return "unknown";
 #endif
@@ -105,7 +98,7 @@ static const char *configure_libuv_io_uring(io_uring_mode mode) {
     const char *configured = getenv("UV_USE_IO_URING");
     if (configured == NULL) {
         if (setenv("UV_USE_IO_URING", "0", 0) == 0) {
-            return "disabled (default; set UV_USE_IO_URING=1 to opt in)";
+            return "disabled (default; set UV_USE_IO_URING=1 to enable)";
         }
         return "default";
     }
@@ -202,7 +195,7 @@ int main(int argc, char **argv) {
 
     const char *io_uring_status = configure_libuv_io_uring(io_uring);
 
-    banner("server");
+    banner();
 
     pb_program program = {0};
     pb_program *program_ptr = NULL;
@@ -212,7 +205,7 @@ int main(int argc, char **argv) {
         }
         program_ptr = &program;
     } else {
-        fprintf(stderr, "info: loaded 0 patchbay form(s)\n");
+        fprintf(stderr, "info: no patchbay forms loaded\n");
     }
     fprintf(stderr, "info: libuv backend: %s (os=%s)\n", backend_name(), os_name());
     if (io_uring_status != NULL) {
@@ -224,6 +217,16 @@ int main(int argc, char **argv) {
         fprintf(stderr, "warn: --no-lvc set: ignoring %zu configured LVC filter(s)\n", program.lvc.len);
     } else if (lvc_runtime_enabled) {
         fprintf(stderr, "info: lvc: configured %zu filter(s)\n", program.lvc.len);
+    }
+    if (snapshot_path != NULL) {
+        fprintf(stderr, "info: snapshot: enabled path=%s auto flush=%s", snapshot_path,
+                snapshot_every_ms == 0 ? "disabled" : "enabled");
+        if (snapshot_every_ms != 0) {
+            fprintf(stderr, " every=%" PRIu64 "s", snapshot_every_ms / 1000);
+        }
+        fprintf(stderr, "\n");
+    } else {
+        fprintf(stderr, "info: snapshot: disabled\n");
     }
 
     mb_bridge bridge = {0};
@@ -242,15 +245,20 @@ int main(int argc, char **argv) {
         }
         server.router.bridge_ctx = &bridge;
         server.router.bridge_fn = mb_bridge_publish;
-        fprintf(stderr, "info: bridge: connected (%zu server%s, %zu export filter%s)\n", program.bridge.servers_len,
+        fprintf(stderr, "info: bridge: connected to NATS (%zu server%s, %zu export filter%s)\n", program.bridge.servers_len,
                 program.bridge.servers_len == 1 ? "" : "s", program.bridge.exports_len,
                 program.bridge.exports_len == 1 ? "" : "s");
     } else {
         fprintf(stderr, "info: bridge: disabled\n");
     }
+
+    // block
     const int rc = mb_server_run(&server);
+
+    // bye
     mb_server_close(&server);
     mb_bridge_close(&bridge);
     pb_program_free(&program);
+
     return rc == 0 ? 0 : 1;
 }

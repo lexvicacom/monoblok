@@ -432,7 +432,7 @@ static bool load_source(pb_program *program, const char *label, const char *sour
         scan_clock_forms(program, parsed.forms.items[i]);
     }
     if (log) {
-        fprintf(stderr, "info: loaded %zu patchbay form(s)\n", program->len);
+        fprintf(stderr, "info: loaded %zu patchbay form(s) from %s\n", program->len, label);
         if (program->uses_wall_clock) {
             fprintf(stderr, "info: patchbay wallclock: enabled\n");
         }

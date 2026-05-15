@@ -155,7 +155,6 @@ static bool window_push(pb_eval_state_entry *slot, bool time_window, size_t coun
         if (!ring_push_time(slot, x, now_ms)) {
             return false;
         }
-        ring_evict_time(slot, cutoff);
     } else {
         if (slot->ring_cap == 0 && !ring_reserve(slot, count, false)) {
             return false;
@@ -335,7 +334,6 @@ static pb_eval_result retain_publish(pb_eval_ctx *ctx, const char *op, pb_eval_c
     if (slot == NULL) {
         return fail(PB_EVAL_OOM);
     }
-    slot->kind = PB_EVAL_STATE_CLOCK;
     slot->clock_kind = kind;
     slot->clock_interval_ms = ms;
     slot->clock_armed = true;
@@ -400,7 +398,6 @@ static pb_eval_result call_aggregate(pb_eval_ctx *ctx, pb_values args) {
         return fail(PB_EVAL_OOM);
     }
     if (slot->kind == PB_EVAL_STATE_EMPTY) {
-        slot->kind = PB_EVAL_STATE_CLOCK;
         slot->clock_kind = PB_EVAL_CLOCK_AGGREGATE;
         slot->clock_interval_ms = (uint64_t)ms_d;
         slot->clock_deadline_ms = ctx->now_ms + (uint64_t)ms_d;

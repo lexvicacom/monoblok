@@ -211,10 +211,6 @@ void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload) {
         bridge->dropped += 1;
         return;
     }
-    if (subject.len > SIZE_MAX - 1) {
-        bridge->dropped += 1;
-        return;
-    }
     if (bridge->subject_scratch_cap < subject.len + 1) {
         char *next = realloc(bridge->subject_scratch, subject.len + 1);
         if (next == NULL) {

@@ -7,10 +7,6 @@ bool mb_slice_eq(mb_slice a, mb_slice b) {
     return a.len == b.len && memcmp(a.ptr, b.ptr, a.len) == 0;
 }
 
-bool mb_slice_eq_bytes(const uint8_t *ptr, size_t len, mb_slice s) {
-    return len == s.len && memcmp(ptr, s.ptr, len) == 0;
-}
-
 bool mb_slice_has_prefix(mb_slice s, const char *prefix, size_t prefix_len) {
     return s.len >= prefix_len && memcmp(s.ptr, prefix, prefix_len) == 0;
 }
