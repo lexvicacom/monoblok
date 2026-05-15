@@ -615,8 +615,8 @@ when you later add or remove rules around it.
 Most off-the-shelf sensors and gateways emit JSON frames (`{"temp":12.04,"hum":80}`),
 not bare scalars. Two ops bridge that gap. Both accept top-level keys and
 dotted object paths up to four levels deep (`"a.b.c.d"`), but not arrays
-or full JSONPath. Both use Zig's `std.json.Scanner` so escapes and
-`\uXXXX` are handled correctly.
+or full JSONPath. Escapes and
+`\uXXXX` sequences are handled correctly.
 
 | form                          | what it does                                                                |
 |-------------------------------|-----------------------------------------------------------------------------|
