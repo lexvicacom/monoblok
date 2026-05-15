@@ -8,16 +8,20 @@
 #include <uv.h>
 
 typedef struct mb_conn mb_conn;
+typedef struct mb_snapshot_job mb_snapshot_job;
 
 // Process-local server state owned by one uv loop thread.
 typedef struct mb_server {
     uv_loop_t loop;
     uv_tcp_t listener;
+    uv_signal_t sigint;
+    uv_signal_t sigterm;
     uv_timer_t patchbay_timer;
     uv_timer_t snapshot_timer;
     mb_router router;
     pb_program *program;
     mb_conn *conns;
+    mb_snapshot_job *snapshot_job;
     char server_id[35];
     uint64_t next_client_id;
     const char *host;
@@ -26,6 +30,11 @@ typedef struct mb_server {
     uint64_t snapshot_every_ms;
     bool patchbay_timer_started;
     bool snapshot_timer_started;
+    bool sigint_started;
+    bool sigterm_started;
+    bool snapshot_write_pending;
+    bool snapshot_write_again;
+    bool closing;
     bool lvc_enabled;
     bool trace;
 } mb_server;

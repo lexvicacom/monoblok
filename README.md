@@ -44,17 +44,3 @@ Then run the unpacked binary:
 ```
 
 For Linux services, the release tarball includes `install-systemd.sh`.
-
-### Docker (arm64, x86_64)
-
-```sh
-docker run --rm -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
-```
-
-This will start monoblok on port 4222. You can use the NATS CLI to pub and sub to it.
-
-The image includes the root [`patchbay.edn`](../patchbay.edn) as `/etc/monoblok/patchbay.edn` as a starting point. Read this file for guidance on where to publish and what to expect. 
-
-`monoblok` is the entrypoint so you can pass any parameters such as --port after the image name. 
-
-See the [Container](#container) section for info on use with orchestrators, ECR etc.

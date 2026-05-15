@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Connection callbacks all run on the server loop thread. Each connection has
+// one uv_write_t; bytes accumulate in router_conn.out until kick_write swaps
+// them into in_flight, and the connection is freed only from uv_close's callback.
+
 static void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
     mb_conn *conn = handle->data;
     const size_t n = suggested_size < MB_READ_CHUNK ? suggested_size : MB_READ_CHUNK;
@@ -92,8 +96,18 @@ static void trace_op(mb_conn *conn, mb_op op) {
     }
 }
 
+static bool op_mutates_server_state(mb_op op) {
+    return op.kind == MB_OP_SUB || op.kind == MB_OP_UNSUB || op.kind == MB_OP_PUB;
+}
+
 static void handle_op(mb_conn *conn, mb_op op) {
     trace_op(conn, op);
+    if (conn->server->closing && op_mutates_server_state(op)) {
+        if (!mb_write_err(&conn->router_conn.out, "server shutting down")) {
+            mb_conn_begin_close(conn);
+        }
+        return;
+    }
     switch (op.kind) {
     case MB_OP_CONNECT:
         break;
@@ -104,9 +118,9 @@ static void handle_op(mb_conn *conn, mb_op op) {
         break;
     case MB_OP_SUB:
         if (mb_router_subject_has_lvc_prefix(op.subject) && !conn->server->lvc_enabled) {
-            mb_write_err(&conn->router_conn.out, "$LVC is disabled");
+            mb_write_err(&conn->router_conn.out, "$lvc is disabled");
         } else if (!mb_router_subscribe(&conn->server->router, &conn->router_conn, op.subject, op.sid)) {
-            mb_write_err(&conn->router_conn.out, "Subscribe Failed");
+            mb_write_err(&conn->router_conn.out, "subscribe failed");
         }
         break;
     case MB_OP_UNSUB:
@@ -116,9 +130,9 @@ static void handle_op(mb_conn *conn, mb_op op) {
     case MB_OP_PUB: {
         bool published = false;
         if (mb_router_subject_has_lvc_prefix(op.subject)) {
-            mb_write_err(&conn->router_conn.out, "$LVC is read-only");
+            mb_write_err(&conn->router_conn.out, "$lvc is read-only");
         } else if (!mb_router_publish(&conn->server->router, op.subject, op.payload)) {
-            mb_write_err(&conn->router_conn.out, "Publish Failed");
+            mb_write_err(&conn->router_conn.out, "publish failed");
         } else {
             published = true;
         }
@@ -128,7 +142,7 @@ static void handle_op(mb_conn *conn, mb_op op) {
         uv_update_time(&conn->server->loop);
         if (!pb_program_eval_publish(conn->server->program, &conn->server->router, op.subject, op.payload,
                                      uv_now(&conn->server->loop), mb_wall_clock_ms())) {
-            mb_write_err(&conn->router_conn.out, "Patchbay Failed");
+            mb_write_err(&conn->router_conn.out, "patchbay failed");
         }
         mb_server_reschedule_patchbay_clock(conn->server);
         break;
@@ -162,12 +176,12 @@ static void process_rx(mb_conn *conn) {
         if (result.status != MB_PARSE_OK) {
             if (result.status == MB_PARSE_CONTROL_LINE_TOO_LONG ||
                 result.status == MB_PARSE_PAYLOAD_TOO_LARGE) {
-                mb_write_err(&conn->router_conn.out, "Protocol Violation");
+                mb_write_err(&conn->router_conn.out, "protocol violation");
                 mb_conn_begin_close(conn);
                 return;
             }
             mb_write_err(&conn->router_conn.out,
-                         result.status == MB_PARSE_UNKNOWN ? "Unknown Protocol Operation" : "Invalid Operation");
+                         result.status == MB_PARSE_UNKNOWN ? "unknown protocol operation" : "invalid operation");
             const void *nlp = memchr(conn->rx.ptr + cursor, '\n', conn->rx.len - cursor);
             if (nlp == NULL) {
                 break;

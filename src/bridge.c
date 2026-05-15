@@ -211,17 +211,24 @@ void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload) {
         bridge->dropped += 1;
         return;
     }
-    char *subject_c = malloc(subject.len + 1);
-    if (subject_c == NULL) {
+    if (subject.len > SIZE_MAX - 1) {
         bridge->dropped += 1;
         return;
     }
-    memcpy(subject_c, subject.ptr, subject.len);
-    subject_c[subject.len] = '\0';
+    if (bridge->subject_scratch_cap < subject.len + 1) {
+        char *next = realloc(bridge->subject_scratch, subject.len + 1);
+        if (next == NULL) {
+            bridge->dropped += 1;
+            return;
+        }
+        bridge->subject_scratch = next;
+        bridge->subject_scratch_cap = subject.len + 1;
+    }
+    memcpy(bridge->subject_scratch, subject.ptr, subject.len);
+    bridge->subject_scratch[subject.len] = '\0';
 
     natsStatus status =
-        natsConnection_Publish((natsConnection *)bridge->conn, subject_c, payload.ptr, (int)payload.len);
-    free(subject_c);
+        natsConnection_Publish((natsConnection *)bridge->conn, bridge->subject_scratch, payload.ptr, (int)payload.len);
     if (status == NATS_OK) {
         bridge->published += 1;
         return;
@@ -238,6 +245,7 @@ void mb_bridge_close(mb_bridge *bridge) {
     if (bridge->conn != NULL) {
         natsConnection_Destroy((natsConnection *)bridge->conn);
     }
+    free(bridge->subject_scratch);
     if (bridge->started) {
         nats_Close();
     }

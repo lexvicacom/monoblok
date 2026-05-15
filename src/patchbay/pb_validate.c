@@ -193,7 +193,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
         .arena = &scratch,
         .state = &state,
         .rule_id = *rule_count - 1,
-        .subject = {.ptr = "x", .len = 1},
+        .subject = {.ptr = "x.y.z", .len = 5},
         .payload = {.ptr = "1", .len = 1},
         .publish = discard_publish,
     };

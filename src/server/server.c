@@ -6,6 +6,18 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <signal.h>
+#include <string.h>
+
+struct mb_snapshot_job {
+    uv_work_t req;
+    mb_server *server;
+    mb_buf snapshot;
+    char *path;
+    bool ok;
+};
+
+static void on_snapshot_timer(uv_timer_t *timer);
 
 int64_t mb_wall_clock_ms(void) {
     uv_timeval64_t tv = {0};
@@ -22,17 +34,91 @@ static void on_patchbay_timer(uv_timer_t *timer) {
     mb_server_reschedule_patchbay_clock(server);
 }
 
+static void snapshot_work_cb(uv_work_t *req) {
+    mb_snapshot_job *job = req->data;
+    job->ok = mb_snapshot_write_bytes(job->path, &job->snapshot);
+}
+
+static void snapshot_after_work_cb(uv_work_t *req, int status) {
+    mb_snapshot_job *job = req->data;
+    mb_server *server = job->server;
+    if (status == UV_ECANCELED) {
+        fprintf(stderr, "warn: snapshot: write canceled: %s\n", job->path);
+    } else if (job->ok) {
+        fprintf(stderr, "info: snapshot: wrote %zu lvc / rule-state to %s\n",
+                mb_router_lvc_count(&server->router), job->path);
+    } else {
+        fprintf(stderr, "warn: snapshot: write failed: %s\n", job->path);
+    }
+
+    mb_buf_free(&job->snapshot);
+    free(job->path);
+    free(job);
+    server->snapshot_job = NULL;
+    server->snapshot_write_pending = false;
+    if (!server->closing && server->snapshot_write_again) {
+        server->snapshot_write_again = false;
+        on_snapshot_timer(&server->snapshot_timer);
+    }
+}
+
 static void on_snapshot_timer(uv_timer_t *timer) {
     mb_server *server = timer->data;
-    if (server->snapshot_path == NULL) {
+    if (server->closing || server->snapshot_path == NULL) {
         return;
     }
-    if (mb_snapshot_write(server->snapshot_path, &server->router, server->program)) {
-        fprintf(stderr, "info: snapshot: wrote %zu lvc / rule-state to %s\n",
-                mb_router_lvc_count(&server->router), server->snapshot_path);
-    } else {
-        fprintf(stderr, "warn: snapshot: write failed: %s\n", server->snapshot_path);
+    if (server->snapshot_write_pending) {
+        server->snapshot_write_again = true;
+        return;
     }
+
+    mb_snapshot_job *job = calloc(1, sizeof *job);
+    if (job == NULL) {
+        fprintf(stderr, "warn: snapshot: allocate job failed: %s\n", server->snapshot_path);
+        return;
+    }
+    const size_t path_len = strlen(server->snapshot_path);
+    job->path = malloc(path_len + 1);
+    if (job->path == NULL) {
+        free(job);
+        fprintf(stderr, "warn: snapshot: allocate path failed: %s\n", server->snapshot_path);
+        return;
+    }
+    memcpy(job->path, server->snapshot_path, path_len + 1);
+    if (!mb_snapshot_build(&job->snapshot, &server->router, server->program)) {
+        fprintf(stderr, "warn: snapshot: build failed: %s\n", server->snapshot_path);
+        free(job->path);
+        free(job);
+        return;
+    }
+
+    job->req.data = job;
+    job->server = server;
+    server->snapshot_write_pending = true;
+    server->snapshot_job = job;
+    const int rc = uv_queue_work(&server->loop, &job->req, snapshot_work_cb, snapshot_after_work_cb);
+    if (rc != 0) {
+        server->snapshot_write_pending = false;
+        server->snapshot_job = NULL;
+        mb_buf_free(&job->snapshot);
+        free(job->path);
+        free(job);
+        fprintf(stderr, "warn: snapshot: queue failed: %s\n", uv_strerror(rc));
+    }
+}
+
+static void on_signal(uv_signal_t *handle, int signum) {
+    mb_server *server = handle->data;
+    fprintf(stderr, "info: received %s, shutting down\n", signum == SIGINT ? "SIGINT" : "SIGTERM");
+    server->closing = true;
+    server->snapshot_write_again = false;
+    if (server->sigint_started) {
+        uv_signal_stop(&server->sigint);
+    }
+    if (server->sigterm_started) {
+        uv_signal_stop(&server->sigterm);
+    }
+    uv_stop(&server->loop);
 }
 
 void mb_server_reschedule_patchbay_clock(mb_server *server) {
@@ -54,6 +140,9 @@ static void on_connection(uv_stream_t *listener, int status) {
     mb_server *server = listener->data;
     if (status < 0) {
         fprintf(stderr, "accept error: %s\n", uv_strerror(status));
+        return;
+    }
+    if (server->closing) {
         return;
     }
     if (!mb_conn_create(server, listener)) {
@@ -127,6 +216,22 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         return false;
     }
     server->listener.data = server;
+    if (uv_signal_init(&server->loop, &server->sigint) != 0) {
+        return false;
+    }
+    server->sigint.data = server;
+    if (uv_signal_start(&server->sigint, on_signal, SIGINT) != 0) {
+        return false;
+    }
+    server->sigint_started = true;
+    if (uv_signal_init(&server->loop, &server->sigterm) != 0) {
+        return false;
+    }
+    server->sigterm.data = server;
+    if (uv_signal_start(&server->sigterm, on_signal, SIGTERM) != 0) {
+        return false;
+    }
+    server->sigterm_started = true;
     if (program != NULL && program->uses_clock_timer) {
         if (uv_timer_init(&server->loop, &server->patchbay_timer) != 0) {
             return false;
@@ -168,14 +273,8 @@ int mb_server_run(mb_server *server) {
 }
 
 void mb_server_close(mb_server *server) {
-    if (server->snapshot_path != NULL) {
-        if (mb_snapshot_write(server->snapshot_path, &server->router, server->program)) {
-            fprintf(stderr, "info: shutdown: snapshot written (%zu lvc) to %s\n",
-                    mb_router_lvc_count(&server->router), server->snapshot_path);
-        } else {
-            fprintf(stderr, "warn: shutdown: snapshot write failed: %s\n", server->snapshot_path);
-        }
-    }
+    server->closing = true;
+    server->snapshot_write_again = false;
     while (server->conns != NULL) {
         mb_conn_begin_close(server->conns);
     }
@@ -188,7 +287,21 @@ void mb_server_close(mb_server *server) {
     if (server->snapshot_timer_started && !uv_is_closing((uv_handle_t *)&server->snapshot_timer)) {
         uv_close((uv_handle_t *)&server->snapshot_timer, NULL);
     }
+    if (server->sigint_started && !uv_is_closing((uv_handle_t *)&server->sigint)) {
+        uv_close((uv_handle_t *)&server->sigint, NULL);
+    }
+    if (server->sigterm_started && !uv_is_closing((uv_handle_t *)&server->sigterm)) {
+        uv_close((uv_handle_t *)&server->sigterm, NULL);
+    }
     uv_run(&server->loop, UV_RUN_DEFAULT);
+    if (server->snapshot_path != NULL) {
+        if (mb_snapshot_write(server->snapshot_path, &server->router, server->program)) {
+            fprintf(stderr, "info: shutdown: snapshot written (%zu lvc) to %s\n",
+                    mb_router_lvc_count(&server->router), server->snapshot_path);
+        } else {
+            fprintf(stderr, "warn: shutdown: snapshot write failed: %s\n", server->snapshot_path);
+        }
+    }
     uv_loop_close(&server->loop);
     mb_router_free(&server->router);
 }

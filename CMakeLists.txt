@@ -57,6 +57,7 @@ set(PB_CORE
   src/patchbay/pb_sexpr.c
   src/patchbay/pb_soundcheck.c
   src/patchbay/pb_validate.c
+  src/patchbay/pb_window_builtins.c
 )
 
 add_library(yyjson STATIC vendor/yyjson/src/yyjson.c)

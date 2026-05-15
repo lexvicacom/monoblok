@@ -140,6 +140,18 @@ static pb_eval_result call_round(pb_values args) {
     return ok((pb_value){.kind = PB_NUMBER, .number = round(x * factor) / factor});
 }
 
+static pb_eval_result call_quantize(pb_values args) {
+    if (args.len != 2) {
+        return fail(PB_EVAL_ARITY);
+    }
+    double step = 0;
+    double x = 0;
+    if (!as_number(args.items[0], &step) || !as_number(args.items[1], &x) || step <= 0) {
+        return fail(PB_EVAL_TYPE);
+    }
+    return ok((pb_value){.kind = PB_NUMBER, .number = round(x / step) * step});
+}
+
 static pb_eval_result call_clamp(pb_values args) {
     if (args.len != 3) {
         return fail(PB_EVAL_ARITY);
@@ -418,6 +430,61 @@ static pb_eval_result call_changed(pb_eval_ctx *ctx, pb_values args) {
         return fail(PB_EVAL_ARITY);
     }
     return stateful_changed(ctx, "changed?", args.items[0], true);
+}
+
+static pb_eval_result call_hold_off(pb_eval_ctx *ctx, pb_values args) {
+    if (args.len != 2) {
+        return fail(PB_EVAL_ARITY);
+    }
+    double window_ms = 0;
+    if (!as_number(args.items[0], &window_ms) || window_ms < 0 || floor(window_ms) != window_ms) {
+        return fail(PB_EVAL_TYPE);
+    }
+
+    pb_eval_state_entry *slot = state_slot(ctx, "hold-off");
+    if (slot == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+    if (slot->kind == PB_EVAL_STATE_EMPTY) {
+        slot->kind = PB_EVAL_STATE_NUMBER;
+        slot->number = (double)ctx->now_ms;
+        return ok(args.items[1]);
+    }
+    if (slot->kind != PB_EVAL_STATE_NUMBER) {
+        return fail(PB_EVAL_TYPE);
+    }
+
+    const double now_ms = (double)ctx->now_ms;
+    if (now_ms < slot->number || now_ms - slot->number < window_ms) {
+        return ok((pb_value){.kind = PB_NIL});
+    }
+    slot->number = now_ms;
+    return ok(args.items[1]);
+}
+
+static pb_eval_result call_edge(pb_eval_ctx *ctx, pb_values args, bool rising) {
+    if (args.len != 1) {
+        return fail(PB_EVAL_ARITY);
+    }
+
+    const bool cur = truthy(args.items[0]);
+    pb_eval_state_entry *slot = state_slot(ctx, rising ? "rising-edge" : "falling-edge");
+    if (slot == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+    if (slot->kind == PB_EVAL_STATE_EMPTY) {
+        slot->kind = PB_EVAL_STATE_NUMBER;
+        slot->number = cur ? 1.0 : 0.0;
+        return ok((pb_value){.kind = PB_NIL});
+    }
+    if (slot->kind != PB_EVAL_STATE_NUMBER) {
+        return fail(PB_EVAL_TYPE);
+    }
+
+    const bool prev = slot->number != 0.0;
+    slot->number = cur ? 1.0 : 0.0;
+    const bool fire = rising ? (!prev && cur) : (prev && !cur);
+    return ok(fire ? bool_value(true) : (pb_value){.kind = PB_NIL});
 }
 
 static pb_eval_result call_deadband(pb_eval_ctx *ctx, pb_values args) {
@@ -1063,6 +1130,7 @@ pb_eval_result pb_eval_call_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_val
     case PB_BUILTIN_JSON_GET: return call_json_get(ctx, args);
     case PB_BUILTIN_JSON_DEMUX: return call_json_demux(ctx, args);
     case PB_BUILTIN_ROUND: return call_round(args);
+    case PB_BUILTIN_QUANTIZE: return call_quantize(args);
     case PB_BUILTIN_CLAMP: return call_clamp(args);
     case PB_BUILTIN_MIN: return call_minmax(args, MINMAX_MIN);
     case PB_BUILTIN_MAX: return call_minmax(args, MINMAX_MAX);
@@ -1071,8 +1139,24 @@ pb_eval_result pb_eval_call_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_val
     case PB_BUILTIN_SQUELCH: return call_squelch(ctx, args);
     case PB_BUILTIN_DEADBAND: return call_deadband(ctx, args);
     case PB_BUILTIN_CHANGED: return call_changed(ctx, args);
+    case PB_BUILTIN_HOLD_OFF: return call_hold_off(ctx, args);
+    case PB_BUILTIN_RISING_EDGE: return call_edge(ctx, args, true);
+    case PB_BUILTIN_FALLING_EDGE: return call_edge(ctx, args, false);
     case PB_BUILTIN_DELTA: return call_delta(ctx, args);
     case PB_BUILTIN_COUNT: return call_count(ctx, args);
+    case PB_BUILTIN_MOVING_SUM:
+    case PB_BUILTIN_MOVING_MAX:
+    case PB_BUILTIN_MOVING_MIN:
+    case PB_BUILTIN_MEDIAN:
+    case PB_BUILTIN_PERCENTILE:
+    case PB_BUILTIN_STDDEV:
+    case PB_BUILTIN_VARIANCE:
+    case PB_BUILTIN_RATE:
+    case PB_BUILTIN_THROTTLE:
+    case PB_BUILTIN_DEBOUNCE:
+    case PB_BUILTIN_SAMPLE:
+    case PB_BUILTIN_AGGREGATE:
+        return pb_eval_call_window_builtin(ctx, builtin, args);
     case PB_BUILTIN_MOVING_AVG: return call_moving_avg(ctx, args);
     case PB_BUILTIN_BAR: return call_bar(ctx, args);
     case PB_BUILTIN_DO:
@@ -1081,12 +1165,17 @@ pb_eval_result pb_eval_call_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_val
     case PB_BUILTIN_AND:
     case PB_BUILTIN_OR:
     case PB_BUILTIN_THREAD:
+    case PB_BUILTIN_TRANSITION:
+    case PB_BUILTIN_DROPOUT:
         break;
     }
     return fail(PB_EVAL_UNKNOWN_SYMBOL);
 }
 
 pb_eval_result pb_eval_tick_state_entry(pb_eval_ctx *ctx, pb_eval_state_entry *entry) {
+    if (entry->kind == PB_EVAL_STATE_CLOCK) {
+        return pb_eval_tick_clock_state_entry(ctx, entry);
+    }
     if (entry->kind == PB_EVAL_STATE_RING && entry->ring_time_window && entry->ring_len > 0) {
         const uint64_t cutoff = ctx->now_ms > entry->ring_window_ms ? ctx->now_ms - entry->ring_window_ms : 0;
         ring_evict_time(entry, cutoff);

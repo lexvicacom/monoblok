@@ -395,8 +395,17 @@ static void scan_clock_forms(pb_program *program, pb_value v) {
     if (value_head_eq(v, "now")) {
         program->uses_wall_clock = true;
     }
-    if ((value_head_eq(v, "bar!") || value_head_eq(v, "bar") || value_head_eq(v, "moving-avg")) &&
+    if ((value_head_eq(v, "bar!") || value_head_eq(v, "bar") ||
+         value_head_eq(v, "moving-avg") || value_head_eq(v, "moving-sum") ||
+         value_head_eq(v, "moving-min") || value_head_eq(v, "moving-max") ||
+         value_head_eq(v, "median") || value_head_eq(v, "percentile") ||
+         value_head_eq(v, "stddev") || value_head_eq(v, "variance") ||
+         value_head_eq(v, "rate") || value_head_eq(v, "throttle")) &&
         call_has_ms_window(v)) {
+        program->uses_clock_timer = true;
+    }
+    if (value_head_eq(v, "dropout") || value_head_eq(v, "debounce!") ||
+        value_head_eq(v, "sample!") || value_head_eq(v, "aggregate!")) {
         program->uses_clock_timer = true;
     }
     if (v.kind == PB_LIST || v.kind == PB_VECTOR) {
@@ -630,6 +639,10 @@ static bool entry_deadline(const pb_eval_state_entry *entry, uint64_t *out_ms) {
     }
     if (entry->kind == PB_EVAL_STATE_BAR && entry->bar_time_window && entry->bar_count > 0) {
         *out_ms = entry->bar_window_start_ms + entry->bar_window_ms;
+        return true;
+    }
+    if (entry->kind == PB_EVAL_STATE_CLOCK && entry->clock_armed) {
+        *out_ms = entry->clock_deadline_ms;
         return true;
     }
     return false;

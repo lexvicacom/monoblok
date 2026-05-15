@@ -9,6 +9,8 @@
 typedef struct mb_bridge {
     void *conn;
     const pb_bridge_config *config;
+    char *subject_scratch;
+    size_t subject_scratch_cap;
     uint64_t published;
     uint64_t dropped;
     int last_status;

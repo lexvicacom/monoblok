@@ -23,7 +23,26 @@ typedef enum pb_eval_state_kind {
     PB_EVAL_STATE_BYTES,
     PB_EVAL_STATE_RING,
     PB_EVAL_STATE_BAR,
+    PB_EVAL_STATE_CLOCK,
 } pb_eval_state_kind;
+
+typedef enum pb_eval_clock_kind {
+    PB_EVAL_CLOCK_NONE,
+    PB_EVAL_CLOCK_DROPOUT,
+    PB_EVAL_CLOCK_DEBOUNCE,
+    PB_EVAL_CLOCK_SAMPLE,
+    PB_EVAL_CLOCK_AGGREGATE,
+} pb_eval_clock_kind;
+
+typedef enum pb_eval_metric_kind {
+    PB_EVAL_METRIC_NONE,
+    PB_EVAL_METRIC_AVG,
+    PB_EVAL_METRIC_SUM,
+    PB_EVAL_METRIC_MIN,
+    PB_EVAL_METRIC_MAX,
+    PB_EVAL_METRIC_COUNT,
+    PB_EVAL_METRIC_RATE,
+} pb_eval_metric_kind;
 
 // Long-lived per-(rule, op, subject) slot for simple stateful forms.
 typedef struct pb_eval_state_entry {
@@ -54,6 +73,17 @@ typedef struct pb_eval_state_entry {
     uint64_t bar_window_ms;
     uint64_t bar_window_start_ms;
     bool bar_time_window;
+    pb_eval_clock_kind clock_kind;
+    pb_eval_metric_kind metric_kind;
+    uint64_t clock_interval_ms;
+    uint64_t clock_deadline_ms;
+    bool clock_armed;
+    bool dropout_lost;
+    pb_value lost_form;
+    pb_value found_form;
+    char *emit_subject;
+    size_t emit_subject_len;
+    size_t emit_subject_cap;
 } pb_eval_state_entry;
 
 // Stateful patchbay storage owned by the caller and reused across publishes.

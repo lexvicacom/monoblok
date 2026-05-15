@@ -61,20 +61,6 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/st
 
 Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
-### Docker (arm64, x86_64)
-
-```sh
-docker run --rm -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
-```
-
-This will start monoblok on port 4222. You can use the NATS CLI to pub and sub to it.
-
-The image includes the root [`patchbay.edn`](../patchbay.edn) as `/etc/monoblok/patchbay.edn` as a starting point. Read this file for guidance on where to publish and what to expect. 
-
-`monoblok` is the entrypoint so you can pass any parameters such as --port after the image name. 
-
-See the [Container](#container) section for info on use with orchestrators, ECR etc.
-
 ## patchbay
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
@@ -256,35 +242,6 @@ journalctl -u monoblok -f
 ```
 
 Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/patchbay.edn`, snapshots under `/var/lib/monoblok/state.mblk` (every 10s plus on stop), and creates a `monoblok` system user.
-
-### Container
-
-Linux release builds also publish a multi-arch image to GitHub Container Registry. The image uses the epoll Linux build so it runs under standard container seccomp profiles:
-
-```sh
-docker run --rm -p 4222:4222 ghcr.io/lexvicacom/monoblok:latest
-```
-
-The image includes the root `patchbay.edn` as `/etc/monoblok/patchbay.edn` and uses that path by default. For real deployments, mount your patchbay over that single file:
-
-```sh
-docker run --rm \
-  -p 4222:4222 \
-  --mount type=bind,src="$PWD/patchbay.edn",dst=/etc/monoblok/patchbay.edn,readonly \
-  ghcr.io/lexvicacom/monoblok:latest
-```
-
-If you prefer a config directory, mount the directory and pass the patchbay path as normal CLI args:
-
-```sh
-docker run --rm \
-  -p 4222:4222 \
-  --mount type=bind,src="$PWD/config",dst=/config,readonly \
-  ghcr.io/lexvicacom/monoblok:latest \
-  --port 4222 --patchbay /config/prod.edn
-```
-
-For orchestrators, use the same file shape: mount a ConfigMap, Docker config, or other one-file config source at `/etc/monoblok/patchbay.edn`. The runtime image intentionally has no shell or package manager, so inline patchbay strings are best written to a file by the host/orchestrator before starting the container rather than expanded inside the image.
 
 ## How fast is it?
 

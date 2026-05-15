@@ -5,6 +5,11 @@
 
 #include <stdlib.h>
 
+// Router state is mutated only from the server's libuv loop thread. It owns
+// subscription indexes, LVC storage, and bridge fanout hooks, but never owns
+// transports or uv handles; server/conn code owns connection lifetime and
+// drains mb_router_conn.out.
+
 static void free_sub(mb_subscription *sub) {
     free(sub->subject);
     free(sub->sid);

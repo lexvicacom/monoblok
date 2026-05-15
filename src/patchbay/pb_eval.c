@@ -6,6 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Evaluation is deliberately split between short-lived arena values and
+// long-lived per-(rule, op, subject) state slots. AST text belongs to the parse
+// arena, intermediate strings live in ctx->arena, and every heap field attached
+// to pb_eval_state_entry must be released by state_entry_free.
+
 pb_eval_result ok(pb_value v) {
     return (pb_eval_result){.err = PB_EVAL_OK, .value = v};
 }
@@ -124,6 +129,8 @@ static const pb_builtin_entry BUILTINS[] = {
     {.name = "and", .builtin = PB_BUILTIN_AND, .special = true},
     {.name = "or", .builtin = PB_BUILTIN_OR, .special = true},
     {.name = "->", .builtin = PB_BUILTIN_THREAD, .special = true},
+    {.name = "transition", .builtin = PB_BUILTIN_TRANSITION, .special = true},
+    {.name = "dropout", .builtin = PB_BUILTIN_DROPOUT, .special = true},
     {.name = "now", .builtin = PB_BUILTIN_NOW},
     {.name = "not", .builtin = PB_BUILTIN_NOT},
     {.name = "=", .builtin = PB_BUILTIN_EQ},
@@ -147,6 +154,7 @@ static const pb_builtin_entry BUILTINS[] = {
     {.name = "json-get", .builtin = PB_BUILTIN_JSON_GET},
     {.name = "json-demux!", .builtin = PB_BUILTIN_JSON_DEMUX},
     {.name = "round", .builtin = PB_BUILTIN_ROUND},
+    {.name = "quantize", .builtin = PB_BUILTIN_QUANTIZE},
     {.name = "clamp", .builtin = PB_BUILTIN_CLAMP},
     {.name = "min", .builtin = PB_BUILTIN_MIN},
     {.name = "max", .builtin = PB_BUILTIN_MAX},
@@ -155,10 +163,25 @@ static const pb_builtin_entry BUILTINS[] = {
     {.name = "squelch", .builtin = PB_BUILTIN_SQUELCH},
     {.name = "deadband", .builtin = PB_BUILTIN_DEADBAND},
     {.name = "changed?", .builtin = PB_BUILTIN_CHANGED},
+    {.name = "hold-off", .builtin = PB_BUILTIN_HOLD_OFF},
+    {.name = "rising-edge", .builtin = PB_BUILTIN_RISING_EDGE},
+    {.name = "falling-edge", .builtin = PB_BUILTIN_FALLING_EDGE},
     {.name = "delta", .builtin = PB_BUILTIN_DELTA},
     {.name = "count!", .builtin = PB_BUILTIN_COUNT},
     {.name = "count", .builtin = PB_BUILTIN_COUNT},
     {.name = "moving-avg", .builtin = PB_BUILTIN_MOVING_AVG},
+    {.name = "moving-sum", .builtin = PB_BUILTIN_MOVING_SUM},
+    {.name = "moving-max", .builtin = PB_BUILTIN_MOVING_MAX},
+    {.name = "moving-min", .builtin = PB_BUILTIN_MOVING_MIN},
+    {.name = "median", .builtin = PB_BUILTIN_MEDIAN},
+    {.name = "percentile", .builtin = PB_BUILTIN_PERCENTILE},
+    {.name = "stddev", .builtin = PB_BUILTIN_STDDEV},
+    {.name = "variance", .builtin = PB_BUILTIN_VARIANCE},
+    {.name = "rate", .builtin = PB_BUILTIN_RATE},
+    {.name = "throttle", .builtin = PB_BUILTIN_THROTTLE},
+    {.name = "debounce!", .builtin = PB_BUILTIN_DEBOUNCE},
+    {.name = "sample!", .builtin = PB_BUILTIN_SAMPLE},
+    {.name = "aggregate!", .builtin = PB_BUILTIN_AGGREGATE},
     {.name = "bar!", .builtin = PB_BUILTIN_BAR},
     {.name = "bar", .builtin = PB_BUILTIN_BAR},
 };
@@ -178,6 +201,7 @@ static void state_entry_free(pb_eval_state_entry *e) {
     free(e->bytes);
     free(e->ring_values);
     free(e->ring_times_ms);
+    free(e->emit_subject);
     *e = (pb_eval_state_entry){0};
 }
 
@@ -253,6 +277,20 @@ bool state_set_bytes(pb_eval_state_entry *e, pb_slice bytes) {
     memcpy(e->bytes, bytes.ptr, bytes.len);
     e->bytes_len = bytes.len;
     e->kind = PB_EVAL_STATE_BYTES;
+    return true;
+}
+
+bool state_set_emit_subject(pb_eval_state_entry *e, pb_slice bytes) {
+    if (e->emit_subject_cap < bytes.len) {
+        char *next = realloc(e->emit_subject, bytes.len == 0 ? 1 : bytes.len);
+        if (next == NULL) {
+            return false;
+        }
+        e->emit_subject = next;
+        e->emit_subject_cap = bytes.len;
+    }
+    memcpy(e->emit_subject, bytes.ptr, bytes.len);
+    e->emit_subject_len = bytes.len;
     return true;
 }
 
@@ -425,6 +463,43 @@ static pb_eval_result eval_thread(pb_eval_ctx *ctx, pb_values args) {
     return cur;
 }
 
+static pb_eval_result eval_transition(pb_eval_ctx *ctx, pb_values args) {
+    if (args.len != 3) {
+        return fail(PB_EVAL_ARITY);
+    }
+
+    pb_eval_result cond = pb_eval(ctx, args.items[0]);
+    if (cond.err != PB_EVAL_OK) {
+        return cond;
+    }
+
+    const bool cur = truthy(cond.value);
+    pb_eval_state_entry *slot = state_slot(ctx, "transition");
+    if (slot == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+
+    if (slot->kind == PB_EVAL_STATE_EMPTY) {
+        slot->kind = PB_EVAL_STATE_NUMBER;
+        slot->number = cur ? 1.0 : 0.0;
+        return ok((pb_value){.kind = PB_NIL});
+    }
+
+    if (slot->kind != PB_EVAL_STATE_NUMBER) {
+        return fail(PB_EVAL_TYPE);
+    }
+
+    const bool prev = slot->number != 0.0;
+    slot->number = cur ? 1.0 : 0.0;
+    if (!prev && cur) {
+        return pb_eval(ctx, args.items[1]);
+    }
+    if (prev && !cur) {
+        return pb_eval(ctx, args.items[2]);
+    }
+    return ok((pb_value){.kind = PB_NIL});
+}
+
 static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
     const pb_slice head = call.items[0].text;
     const pb_values raw_args = {.items = call.items + 1, .len = call.len - 1};
@@ -441,6 +516,8 @@ static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
         case PB_BUILTIN_AND: return eval_and(ctx, raw_args);
         case PB_BUILTIN_OR: return eval_or(ctx, raw_args);
         case PB_BUILTIN_THREAD: return eval_thread(ctx, raw_args);
+        case PB_BUILTIN_TRANSITION: return eval_transition(ctx, raw_args);
+        case PB_BUILTIN_DROPOUT: return pb_eval_call_dropout(ctx, raw_args);
         default: return fail(PB_EVAL_UNKNOWN_SYMBOL);
         }
     }

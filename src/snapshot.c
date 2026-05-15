@@ -1,6 +1,8 @@
 #include "snapshot.h"
 
+#include "array.h"
 #include "fs.h"
+#include "slice.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -124,6 +126,16 @@ static bool skip_bytes(size_t len, size_t *pos, size_t n)
     return true;
 }
 
+static bool checked_field_bytes(uint32_t count, size_t elem_size, size_t *out)
+{
+    if (elem_size == 0 || count > SNAP_MAX_FIELD / elem_size)
+    {
+        return false;
+    }
+    *out = (size_t)count * elem_size;
+    return true;
+}
+
 static bool read_len_prefixed(const uint8_t *bytes, size_t len, size_t *pos, mb_slice *out)
 {
     uint32_t n = 0;
@@ -161,12 +173,18 @@ static bool skip_rule_state(const uint8_t *bytes, size_t len, size_t *pos)
         uint32_t cap = 0;
         uint32_t max_len = 0;
         uint32_t min_len = 0;
+        size_t cap_bytes = 0;
+        size_t max_bytes = 0;
+        size_t min_bytes = 0;
         return read_u32(bytes, len, pos, &cap) &&
-               skip_bytes(len, pos, 8 + 8 + (size_t)cap * 8) &&
+               checked_field_bytes(cap, 8, &cap_bytes) &&
+               skip_bytes(len, pos, 8 + 8 + cap_bytes) &&
                read_u32(bytes, len, pos, &max_len) &&
-               skip_bytes(len, pos, (size_t)max_len * 8) &&
+               checked_field_bytes(max_len, 8, &max_bytes) &&
+               skip_bytes(len, pos, max_bytes) &&
                read_u32(bytes, len, pos, &min_len) &&
-               skip_bytes(len, pos, (size_t)min_len * 8);
+               checked_field_bytes(min_len, 8, &min_bytes) &&
+               skip_bytes(len, pos, min_bytes);
     }
     case 0x04:
         return skip_bytes(len, pos, 8 + 8 + 8 + 4 + 4 + 8 + 8 + 8);
@@ -175,15 +193,11 @@ static bool skip_rule_state(const uint8_t *bytes, size_t len, size_t *pos)
         {
             return false;
         }
-        return skip_bytes(len, pos, (size_t)n * 16);
+        size_t sample_bytes = 0;
+        return checked_field_bytes(n, 16, &sample_bytes) && skip_bytes(len, pos, sample_bytes);
     default:
         return false;
     }
-}
-
-static bool slice_eq_pb(mb_slice a, pb_slice b)
-{
-    return a.len == b.len && memcmp(a.ptr, b.ptr, a.len) == 0;
 }
 
 static bool split_key(mb_slice key, mb_slice *op, mb_slice *subject)
@@ -200,36 +214,6 @@ static bool split_key(mb_slice key, mb_slice *op, mb_slice *subject)
     return false;
 }
 
-static bool heap_dup(mb_slice s, char **out, size_t *out_len)
-{
-    char *ptr = malloc(s.len == 0 ? 1 : s.len);
-    if (ptr == NULL)
-    {
-        return false;
-    }
-    memcpy(ptr, s.ptr, s.len);
-    *out = ptr;
-    *out_len = s.len;
-    return true;
-}
-
-static bool ensure_state_cap(pb_eval_state *state)
-{
-    if (state->len < state->cap)
-    {
-        return true;
-    }
-    const size_t next = state->cap == 0 ? 8 : state->cap * 2;
-    pb_eval_state_entry *items = realloc(state->items, next * sizeof items[0]);
-    if (items == NULL)
-    {
-        return false;
-    }
-    state->items = items;
-    state->cap = next;
-    return true;
-}
-
 static pb_eval_state_entry *append_state(pb_program *program, uint32_t rule_idx, mb_slice filter, mb_slice key)
 {
     if (program == NULL || rule_idx >= program->len)
@@ -237,26 +221,32 @@ static pb_eval_state_entry *append_state(pb_program *program, uint32_t rule_idx,
         return NULL;
     }
     pb_rule *rule = &program->rules[rule_idx];
-    if (!slice_eq_pb(filter, rule->filter))
+    if (!mb_slice_eq_bytes((const uint8_t *)rule->filter.ptr, rule->filter.len, filter))
     {
         return NULL;
     }
     mb_slice op = {0};
     mb_slice subject = {0};
-    if (!split_key(key, &op, &subject) || !ensure_state_cap(&rule->state))
+    if (!split_key(key, &op, &subject) ||
+        !mb_array_reserve((void **)&rule->state.items, &rule->state.cap, rule->state.len + 1,
+                          sizeof rule->state.items[0], 8))
     {
         return NULL;
     }
     pb_eval_state_entry *entry = &rule->state.items[rule->state.len];
     *entry = (pb_eval_state_entry){.rule_id = rule_idx};
-    if (!heap_dup(op, &entry->op, &entry->op_len) ||
-        !heap_dup(subject, &entry->subject, &entry->subject_len))
+    uint8_t *op_ptr = NULL;
+    uint8_t *subject_ptr = NULL;
+    if (!mb_slice_dup(op, &op_ptr, &entry->op_len) ||
+        !mb_slice_dup(subject, &subject_ptr, &entry->subject_len))
     {
-        free(entry->op);
-        free(entry->subject);
+        free(op_ptr);
+        free(subject_ptr);
         *entry = (pb_eval_state_entry){0};
         return NULL;
     }
+    entry->op = (char *)op_ptr;
+    entry->subject = (char *)subject_ptr;
     rule->state.len += 1;
     return entry;
 }
@@ -544,6 +534,10 @@ static bool append_rule_state(mb_buf *out, const pb_program *program)
         for (size_t state_idx = 0; state_idx < rule->state.len; state_idx += 1)
         {
             const pb_eval_state_entry *entry = &rule->state.items[state_idx];
+            if (entry->kind == PB_EVAL_STATE_CLOCK)
+            {
+                continue;
+            }
             bool ok = append_u8(out, SNAP_KIND_RULE_STATE) &&
                       append_u32(out, (uint32_t)rule_idx) &&
                       append_pb_slice(out, rule->filter) &&
@@ -600,6 +594,9 @@ static bool append_rule_state(mb_buf *out, const pb_program *program)
                      append_u64(out, entry->bar_window_start_ms) &&
                      append_f64(out, entry->bar_last_close);
                 break;
+            case PB_EVAL_STATE_CLOCK:
+                ok = true;
+                break;
             }
             if (!ok)
                 return false;
@@ -608,33 +605,47 @@ static bool append_rule_state(mb_buf *out, const pb_program *program)
     return true;
 }
 
-bool mb_snapshot_write(const char *path, const mb_router *router, const pb_program *program)
+bool mb_snapshot_build(mb_buf *out, const mb_router *router, const pb_program *program)
 {
-    mb_buf out = {0};
-    bool ok = append_bytes(&out, "MBLK", 4) &&
-              append_u8(&out, SNAP_VERSION) &&
-              append_bytes(&out, "\0\0\0", 3);
+    bool ok = append_bytes(out, "MBLK", 4) &&
+              append_u8(out, SNAP_VERSION) &&
+              append_bytes(out, "\0\0\0", 3);
     for (size_t i = 0; ok && i < mb_router_lvc_count(router); i += 1)
     {
         mb_slice subject = {0};
         mb_slice payload = {0};
         ok = mb_router_lvc_entry(router, i, &subject, &payload) &&
-             append_u8(&out, SNAP_KIND_LVC) &&
-             append_len_prefixed(&out, subject) &&
-             append_len_prefixed(&out, payload);
+             append_u8(out, SNAP_KIND_LVC) &&
+             append_len_prefixed(out, subject) &&
+             append_len_prefixed(out, payload);
     }
-    ok = ok && append_rule_state(&out, program);
+    return ok && append_rule_state(out, program);
+}
+
+bool mb_snapshot_write_bytes(const char *path, const mb_buf *snapshot)
+{
+    if (snapshot == NULL)
+    {
+        return false;
+    }
+    const bool ok = mb_write_file_atomic(path, (mb_slice){.ptr = snapshot->ptr, .len = snapshot->len});
+    if (!ok)
+    {
+        perror(path);
+    }
+    return ok;
+}
+
+bool mb_snapshot_write(const char *path, const mb_router *router, const pb_program *program)
+{
+    mb_buf out = {0};
+    bool ok = mb_snapshot_build(&out, router, program);
     if (!ok)
     {
         mb_buf_free(&out);
         return false;
     }
-
-    ok = mb_write_file_atomic(path, (mb_slice){.ptr = out.ptr, .len = out.len});
-    if (!ok)
-    {
-        perror(path);
-    }
+    ok = mb_snapshot_write_bytes(path, &out);
     mb_buf_free(&out);
     return ok;
 }
