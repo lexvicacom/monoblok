@@ -42,6 +42,7 @@ endif()
 set(MB_CORE
   src/array.c
   src/buf.c
+  src/fs.c
   src/proto.c
   src/router.c
   src/slice.c
