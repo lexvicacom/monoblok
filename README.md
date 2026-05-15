@@ -20,7 +20,7 @@ Common ways of running monoblok:
 
 ![monoblok deployment modes](./docs/infographic.png)
 
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. There are no scientific measurements yet. There are some [benchmark scripts](../scripts) and [results](../bench-results).
+monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. There are no scientific measurements yet. 
 
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation of the same idea, but for microcontrollers.
 
@@ -41,6 +41,16 @@ Then run the unpacked binary:
 ```
 
 To add as a service on systemd Linux, the release tarball includes `install-systemd.sh`.
+
+## Build locally
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/monoblok --port 14222 --patchbay patchbay.edn
+```
+
+Compiles cleanly on macOS and Linux. Dependencies are vendored.
 
 ## AI
 
