@@ -1,5 +1,7 @@
 #include "pb_sexpr.h"
 
+#include "array.h"
+
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +21,15 @@ typedef struct parser {
     size_t pos;
 } parser;
 
+bool pb_slice_eq(pb_slice a, pb_slice b) {
+    return a.len == b.len && memcmp(a.ptr, b.ptr, a.len) == 0;
+}
+
+bool pb_slice_eq_lit(pb_slice s, const char *lit) {
+    const size_t n = strlen(lit);
+    return s.len == n && memcmp(s.ptr, lit, n) == 0;
+}
+
 static void skip_ws(parser *p) {
     while (p->pos < p->len) {
         const char c = p->src[p->pos];
@@ -35,23 +46,12 @@ static void skip_ws(parser *p) {
 }
 
 static bool vec_push(value_vec *v, pb_value item) {
-    if (v->len == v->cap) {
-        const size_t next = v->cap == 0 ? 8 : v->cap * 2;
-        pb_value *items = realloc(v->items, next * sizeof v->items[0]);
-        if (items == NULL) {
-            return false;
-        }
-        v->items = items;
-        v->cap = next;
+    if (!mb_array_reserve((void **)&v->items, &v->cap, v->len + 1, sizeof v->items[0], 8)) {
+        return false;
     }
     v->items[v->len] = item;
     v->len += 1;
     return true;
-}
-
-static bool slice_eq(pb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    return s.len == n && memcmp(s.ptr, lit, n) == 0;
 }
 
 static bool parse_number(pb_slice tok, double *out) {
@@ -174,15 +174,9 @@ static pb_parse_error parse_string(parser *p, pb_value *out) {
                 return PB_PARSE_INVALID_ESCAPE;
             }
         }
-        if (len == cap) {
-            const size_t next = cap == 0 ? 16 : cap * 2;
-            char *new_tmp = realloc(tmp, next);
-            if (new_tmp == NULL) {
-                free(tmp);
-                return PB_PARSE_OOM;
-            }
-            tmp = new_tmp;
-            cap = next;
+        if (!mb_array_reserve((void **)&tmp, &cap, len + 1, sizeof tmp[0], 16)) {
+            free(tmp);
+            return PB_PARSE_OOM;
         }
         tmp[len] = c;
         len += 1;
@@ -209,15 +203,15 @@ static pb_parse_error parse_atom(parser *p, pb_value *out) {
     }
 
     pb_slice tok = {.ptr = p->src + start, .len = p->pos - start};
-    if (slice_eq(tok, "nil")) {
+    if (pb_slice_eq_lit(tok, "nil")) {
         *out = (pb_value){.kind = PB_NIL};
         return PB_PARSE_OK;
     }
-    if (slice_eq(tok, "true")) {
+    if (pb_slice_eq_lit(tok, "true")) {
         *out = (pb_value){.kind = PB_BOOL, .boolean = true};
         return PB_PARSE_OK;
     }
-    if (slice_eq(tok, "false")) {
+    if (pb_slice_eq_lit(tok, "false")) {
         *out = (pb_value){.kind = PB_BOOL, .boolean = false};
         return PB_PARSE_OK;
     }

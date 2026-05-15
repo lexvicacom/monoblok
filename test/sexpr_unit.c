@@ -11,6 +11,34 @@ static pb_parse_result parse(pb_arena *arena, const char *src) {
     return pb_parse_all(arena, src, strlen(src));
 }
 
+static size_t arena_retained_cap(const pb_arena *arena) {
+    size_t total = 0;
+    for (const pb_arena_block *b = arena->head; b != NULL; b = b->next) {
+        total += b->cap;
+    }
+    return total;
+}
+
+static void test_arena_trim(void) {
+    pb_arena arena = {0};
+    CHECK(pb_arena_alloc(&arena, 32, _Alignof(double)) != NULL);
+    CHECK(pb_arena_alloc(&arena, 128 * 1024, 1) != NULL);
+
+    pb_arena_reset(&arena);
+    pb_arena_trim(&arena, 4096);
+    CHECK(arena.head != NULL);
+    CHECK(arena_retained_cap(&arena) <= 4096);
+
+    CHECK(pb_arena_alloc(&arena, 16, _Alignof(double)) != NULL);
+    pb_arena_trim(&arena, 0);
+    CHECK(arena.head != NULL);
+
+    pb_arena_reset(&arena);
+    pb_arena_trim(&arena, 0);
+    CHECK(arena.head == NULL);
+    pb_arena_free(&arena);
+}
+
 static void test_atoms(void) {
     pb_arena arena = {0};
     pb_parse_result r = parse(&arena, "42 -3.5 foo \"bar\" true false nil");
@@ -120,6 +148,7 @@ static void test_result_does_not_borrow_source_atoms(void) {
 }
 
 TEST_MAIN(sexpr,
+          test_arena_trim,
           test_atoms,
           test_keywords,
           test_nested_list,

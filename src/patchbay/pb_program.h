@@ -18,6 +18,19 @@ typedef struct pb_lvc_config {
     size_t cap;
 } pb_lvc_config;
 
+// Ordered rule references used by the first-token dispatch index.
+typedef struct pb_rule_ref_list {
+    size_t *items;
+    size_t len;
+    size_t cap;
+} pb_rule_ref_list;
+
+// Bucket of rules sharing the same first literal subject token.
+typedef struct pb_rule_bucket {
+    pb_slice key;
+    pb_rule_ref_list rules;
+} pb_rule_bucket;
+
 // Top-level `(bridge ...)` export-only remote NATS config.
 typedef struct pb_bridge_config {
     pb_slice *servers;
@@ -62,6 +75,10 @@ typedef struct pb_program {
     pb_rule *rules;
     size_t len;
     size_t cap;
+    pb_rule_bucket *rule_buckets;
+    size_t rule_bucket_len;
+    size_t rule_bucket_cap;
+    pb_rule_ref_list rule_global;
     pb_lvc_config lvc;
     pb_bridge_config bridge;
     bool uses_wall_clock;

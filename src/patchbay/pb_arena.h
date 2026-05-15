@@ -20,6 +20,8 @@ typedef struct pb_arena {
 void *pb_arena_alloc(pb_arena *arena, size_t size, size_t align);
 void *pb_arena_memdup(pb_arena *arena, const void *src, size_t len);
 void pb_arena_reset(pb_arena *arena);
+// Free unused blocks above `keep_cap` bytes; call after reset to drop high-water scratch.
+void pb_arena_trim(pb_arena *arena, size_t keep_cap);
 void pb_arena_free(pb_arena *arena);
 
 #endif

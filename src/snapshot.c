@@ -11,7 +11,8 @@
 
 enum
 {
-    SNAP_VERSION = 3,
+    SNAP_VERSION = 4,
+    SNAP_MIN_READ_VERSION = 3,
     SNAP_KIND_LVC = 0x01,
     SNAP_KIND_RULE_STATE = 0x02,
     SNAP_MAX_FIELD = 16 * 1024 * 1024,
@@ -312,18 +313,21 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
     case 0x03:
     {
         uint32_t cap = 0;
-        uint64_t counter = 0;
+        uint64_t saved_len = 0;
         double sum = 0;
         uint32_t max_len = 0;
         uint32_t min_len = 0;
+        size_t cap_bytes = 0;
         if (!read_u32(bytes, len, pos, &cap) ||
-            !read_u64(bytes, len, pos, &counter) ||
-            !read_f64(bytes, len, pos, &sum))
+            !read_u64(bytes, len, pos, &saved_len) ||
+            !read_f64(bytes, len, pos, &sum) ||
+            !checked_field_bytes(cap, 8, &cap_bytes) ||
+            saved_len > cap)
         {
             return false;
         }
         size_t values_pos = *pos;
-        if (!skip_bytes(len, pos, (size_t)cap * 8) ||
+        if (!skip_bytes(len, pos, cap_bytes) ||
             !read_u32(bytes, len, pos, &max_len) ||
             !skip_bytes(len, pos, (size_t)max_len * 8) ||
             !read_u32(bytes, len, pos, &min_len) ||
@@ -331,13 +335,12 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
         {
             return false;
         }
-        (void)counter;
         if (entry != NULL)
         {
             entry->ring_values = calloc(cap == 0 ? 1 : cap, sizeof entry->ring_values[0]);
             if (entry->ring_values == NULL)
                 return false;
-            for (uint32_t i = 0; i < cap; i += 1)
+            for (uint32_t i = 0; i < saved_len; i += 1)
             {
                 size_t p = values_pos + (size_t)i * 8;
                 if (!read_f64(bytes, len, &p, &entry->ring_values[i]))
@@ -345,7 +348,7 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
             }
             entry->kind = PB_EVAL_STATE_RING;
             entry->ring_cap = cap;
-            entry->ring_len = cap;
+            entry->ring_len = (size_t)saved_len;
             entry->ring_sum = sum;
             *loaded += 1;
         }
@@ -452,7 +455,8 @@ bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, 
 
     const uint8_t *bytes = file.ptr;
     const size_t len = file.len;
-    if (len < 8 || memcmp(bytes, "MBLK", 4) != 0 || bytes[4] != SNAP_VERSION)
+    if (len < 8 || memcmp(bytes, "MBLK", 4) != 0 ||
+        bytes[4] < SNAP_MIN_READ_VERSION || bytes[4] > SNAP_VERSION)
     {
         fprintf(stderr, "snapshot: ignoring unsupported snapshot %s\n", path);
         mb_buf_free(&file);
@@ -559,6 +563,8 @@ static bool append_rule_state(mb_buf *out, const pb_program *program)
             case PB_EVAL_STATE_RING:
                 if (entry->ring_time_window)
                 {
+                    if (entry->ring_len > UINT32_MAX)
+                        return false;
                     ok = append_u8(out, 0x05) &&
                          append_u64(out, entry->ring_window_ms) &&
                          append_u32(out, (uint32_t)entry->ring_len);
@@ -571,14 +577,21 @@ static bool append_rule_state(mb_buf *out, const pb_program *program)
                 }
                 else
                 {
+                    if (entry->ring_cap > UINT32_MAX || entry->ring_len > entry->ring_cap)
+                        return false;
                     ok = append_u8(out, 0x03) &&
-                         append_u32(out, (uint32_t)entry->ring_len) &&
+                         append_u32(out, (uint32_t)entry->ring_cap) &&
                          append_u64(out, (uint64_t)entry->ring_len) &&
                          append_f64(out, entry->ring_sum);
-                    for (size_t i = 0; ok && i < entry->ring_len; i += 1)
+                    for (size_t i = 0; ok && i < entry->ring_cap; i += 1)
                     {
-                        const size_t idx = entry->ring_cap == 0 ? 0 : (entry->ring_start + i) % entry->ring_cap;
-                        ok = append_f64(out, entry->ring_values[idx]);
+                        double value = 0;
+                        if (i < entry->ring_len)
+                        {
+                            const size_t idx = entry->ring_cap == 0 ? 0 : (entry->ring_start + i) % entry->ring_cap;
+                            value = entry->ring_values[idx];
+                        }
+                        ok = append_f64(out, value);
                     }
                     ok = ok && append_u32(out, 0) && append_u32(out, 0);
                 }

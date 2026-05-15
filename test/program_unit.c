@@ -41,6 +41,11 @@ static size_t count_msgs(const mb_buf *buf) {
     return count;
 }
 
+static bool buf_eq(const mb_buf *buf, const char *want) {
+    const size_t len = strlen(want);
+    return buf->len == len && memcmp(buf->ptr, want, len) == 0;
+}
+
 static void load_program(pb_program *program, const char *src) {
     char path[128];
     snprintf(path, sizeof path, "/tmp/monoblok-program-%ld.edn", (long)getpid());
@@ -119,6 +124,27 @@ static void test_reentry_depth_cap(void) {
     pb_program_free(&program);
 }
 
+static void test_rule_dispatch_preserves_source_order(void) {
+    pb_program program = {0};
+    load_program(&program, "(on \"foo\" (publish! \"one\" payload))\n"
+                           "(on \">\" (publish! \"two\" payload))\n"
+                           "(on \"foo\" (publish! \"three\" payload))\n");
+
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+    CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("x"), 0, 0));
+    CHECK(buf_eq(&conn.out,
+                 "MSG one 1 1\r\nx\r\n"
+                 "MSG two 1 1\r\nx\r\n"
+                 "MSG three 1 1\r\nx\r\n"));
+
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
 static void test_lvc_filters_load(void) {
     pb_program program = {0};
     load_program(&program, "(lvc [\"hot.>\" \"devices.*\"])\n"
@@ -174,6 +200,7 @@ TEST_MAIN(program,
           test_reentry_runs_downstream_rules,
           test_reentry_eval_failure_does_not_fail_publish,
           test_reentry_depth_cap,
+          test_rule_dispatch_preserves_source_order,
           test_lvc_filters_load,
           test_bridge_config_loads,
           test_bridge_requires_servers)

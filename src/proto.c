@@ -67,17 +67,29 @@ static bool parse_usize(mb_slice s, size_t *out) {
 
 static mb_parse_result parse_sub(mb_slice rest, size_t consumed) {
     mb_slice subject = {0};
+    mb_slice second = {0};
+    mb_slice third = {0};
     mb_slice sid = {0};
-    mb_slice extra = {0};
-    if (!next_token(&rest, &subject) || !next_token(&rest, &sid)) {
+    mb_slice queue = {0};
+    if (!next_token(&rest, &subject) || !next_token(&rest, &second)) {
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
-    if (next_token(&rest, &extra)) {
+    if (next_token(&rest, &third)) {
+        mb_slice extra = {0};
+        if (next_token(&rest, &extra)) {
+            return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
+        }
+        queue = second;
+        sid = third;
+    } else {
+        sid = second;
+    }
+    if (subject.len == 0 || sid.len == 0) {
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
     return (mb_parse_result){
         .status = MB_PARSE_OK,
-        .op = {.kind = MB_OP_SUB, .subject = subject, .sid = sid},
+        .op = {.kind = MB_OP_SUB, .subject = subject, .queue = queue, .sid = sid},
         .consumed = consumed,
     };
 }
@@ -241,6 +253,23 @@ static bool append_decimal(mb_buf *out, size_t n) {
     return mb_buf_append(out, tmp + i, sizeof tmp - i);
 }
 
+static size_t decimal_len(size_t n) {
+    size_t len = 1;
+    while (n >= 10) {
+        n /= 10;
+        len += 1;
+    }
+    return len;
+}
+
+static bool add_size(size_t *total, size_t add) {
+    if (add > SIZE_MAX - *total) {
+        return false;
+    }
+    *total += add;
+    return true;
+}
+
 static bool append_u64_decimal(mb_buf *out, uint64_t n) {
     char tmp[32];
     size_t i = sizeof tmp;
@@ -318,7 +347,21 @@ bool mb_write_msg(mb_buf *out, mb_slice subject, mb_slice sid, mb_slice payload)
 
 bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
                            mb_slice subject, mb_slice sid, mb_slice payload) {
-    return mb_buf_append(out, "MSG ", 4) &&
+    size_t frame_len = 0;
+    if (!add_size(&frame_len, 4) ||
+        !add_size(&frame_len, prefix_len) ||
+        !add_size(&frame_len, subject.len) ||
+        !add_size(&frame_len, 1) ||
+        !add_size(&frame_len, sid.len) ||
+        !add_size(&frame_len, 1) ||
+        !add_size(&frame_len, decimal_len(payload.len)) ||
+        !add_size(&frame_len, 2) ||
+        !add_size(&frame_len, payload.len) ||
+        !add_size(&frame_len, 2)) {
+        return false;
+    }
+    return mb_buf_reserve(out, frame_len) &&
+           mb_buf_append(out, "MSG ", 4) &&
            mb_buf_append(out, prefix, prefix_len) &&
            mb_buf_append(out, subject.ptr, subject.len) &&
            mb_buf_append_byte(out, ' ') &&

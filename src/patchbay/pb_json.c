@@ -1,5 +1,7 @@
 #include "pb_json.h"
 
+#include "array.h"
+
 #include "yyjson.h"
 
 #include <stdlib.h>
@@ -18,20 +20,9 @@ typedef struct json_conv {
     pb_parse_error err;
 } json_conv;
 
-static bool slice_eq(pb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    return s.len == n && memcmp(s.ptr, lit, n) == 0;
-}
-
 static bool vec_push(value_vec *v, pb_value item) {
-    if (v->len == v->cap) {
-        const size_t next = v->cap == 0 ? 8 : v->cap * 2;
-        pb_value *items = realloc(v->items, next * sizeof items[0]);
-        if (items == NULL) {
-            return false;
-        }
-        v->items = items;
-        v->cap = next;
+    if (!mb_array_reserve((void **)&v->items, &v->cap, v->len + 1, sizeof v->items[0], 8)) {
+        return false;
     }
     v->items[v->len] = item;
     v->len += 1;
@@ -51,8 +42,8 @@ static pb_value string_value(json_conv *c, yyjson_val *v) {
     const char *s = yyjson_get_str(v);
     const size_t len = yyjson_get_len(v);
     pb_slice raw = {.ptr = s, .len = len};
-    if (slice_eq(raw, "subject") || slice_eq(raw, "payload") ||
-        slice_eq(raw, "payload-float") || slice_eq(raw, "payload-int")) {
+    if (pb_slice_eq_lit(raw, "subject") || pb_slice_eq_lit(raw, "payload") ||
+        pb_slice_eq_lit(raw, "payload-float") || pb_slice_eq_lit(raw, "payload-int")) {
         return text_value(c, PB_SYMBOL, s, len);
     }
     return text_value(c, PB_STRING, s, len);

@@ -25,6 +25,17 @@ static bool buf_contains(const mb_buf *buf, const char *needle) {
     return false;
 }
 
+static size_t buf_count(const mb_buf *buf, const char *needle) {
+    const size_t n = strlen(needle);
+    size_t count = 0;
+    for (size_t i = 0; i + n <= buf->len; i += 1) {
+        if (memcmp(buf->ptr + i, needle, n) == 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 static void test_parse_ping(void) {
     const char *src = "PING\r\n";
     const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
@@ -40,6 +51,20 @@ static void test_parse_sub(void) {
     CHECK(r.op.kind == MB_OP_SUB);
     CHECK(r.op.subject.len == 3);
     CHECK(memcmp(r.op.subject.ptr, "foo", 3) == 0);
+    CHECK(r.op.queue.len == 0);
+    CHECK(r.op.sid.len == 1);
+    CHECK(memcmp(r.op.sid.ptr, "1", 1) == 0);
+}
+
+static void test_parse_queue_sub(void) {
+    const char *src = "SUB foo workers 1\r\n";
+    const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
+    CHECK(r.status == MB_PARSE_OK);
+    CHECK(r.op.kind == MB_OP_SUB);
+    CHECK(r.op.subject.len == 3);
+    CHECK(memcmp(r.op.subject.ptr, "foo", 3) == 0);
+    CHECK(r.op.queue.len == 7);
+    CHECK(memcmp(r.op.queue.ptr, "workers", 7) == 0);
     CHECK(r.op.sid.len == 1);
     CHECK(memcmp(r.op.sid.ptr, "1", 1) == 0);
 }
@@ -148,6 +173,59 @@ static void test_router_two_subs(void) {
     CHECK(mb_router_publish(&router, lit("foo"), lit("hi")));
     check_buf_eq(&a.out, "MSG foo 1 2\r\nhi\r\n");
     check_buf_eq(&b.out, "MSG foo 2 2\r\nhi\r\n");
+    mb_buf_free(&a.out);
+    mb_buf_free(&b.out);
+    mb_router_free(&router);
+}
+
+static void test_router_queue_group(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn normal = {0};
+    mb_router_conn a = {0};
+    mb_router_conn b = {0};
+    CHECK(mb_router_subscribe(&router, &normal, lit("foo"), lit("1")));
+    CHECK(mb_router_subscribe_queue(&router, &a, lit("foo"), lit("workers"), lit("2")));
+    CHECK(mb_router_subscribe_queue(&router, &b, lit("foo"), lit("workers"), lit("3")));
+    for (size_t i = 0; i < 20; i += 1) {
+        CHECK(mb_router_publish(&router, lit("foo"), lit("hi")));
+    }
+    CHECK(buf_count(&normal.out, "MSG foo ") == 20);
+    CHECK(buf_count(&a.out, "MSG foo ") + buf_count(&b.out, "MSG foo ") == 20);
+    mb_buf_free(&normal.out);
+    mb_buf_free(&a.out);
+    mb_buf_free(&b.out);
+    mb_router_free(&router);
+}
+
+static void test_router_queue_group_by_filter(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn a = {0};
+    mb_router_conn b = {0};
+    CHECK(mb_router_subscribe_queue(&router, &a, lit("foo"), lit("workers"), lit("1")));
+    CHECK(mb_router_subscribe_queue(&router, &b, lit(">"), lit("workers"), lit("2")));
+    CHECK(mb_router_publish(&router, lit("foo"), lit("hi")));
+    check_buf_eq(&a.out, "MSG foo 1 2\r\nhi\r\n");
+    check_buf_eq(&b.out, "MSG foo 2 2\r\nhi\r\n");
+    mb_buf_free(&a.out);
+    mb_buf_free(&b.out);
+    mb_router_free(&router);
+}
+
+static void test_router_queue_auto_unsubscribe(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn a = {0};
+    mb_router_conn b = {0};
+    CHECK(mb_router_subscribe_queue(&router, &a, lit("foo"), lit("workers"), lit("1")));
+    CHECK(mb_router_subscribe_queue(&router, &b, lit("foo"), lit("workers"), lit("2")));
+    mb_router_unsubscribe(&router, &a, lit("1"), 1, true);
+    mb_router_unsubscribe(&router, &b, lit("2"), 1, true);
+    CHECK(mb_router_publish(&router, lit("foo"), lit("a")));
+    CHECK(mb_router_publish(&router, lit("foo"), lit("b")));
+    CHECK(router.sub_count == 0);
+    CHECK(buf_count(&a.out, "MSG foo ") + buf_count(&b.out, "MSG foo ") == 2);
     mb_buf_free(&a.out);
     mb_buf_free(&b.out);
     mb_router_free(&router);
@@ -322,6 +400,7 @@ TEST_MAIN(unit,
           test_parse_ping,
           test_parse_connect,
           test_parse_sub,
+          test_parse_queue_sub,
           test_parse_unsub,
           test_parse_pub,
           test_parse_fragmented_pub,
@@ -332,6 +411,9 @@ TEST_MAIN(unit,
           test_write_msg,
           test_router_one_sub,
           test_router_two_subs,
+          test_router_queue_group,
+          test_router_queue_group_by_filter,
+          test_router_queue_auto_unsubscribe,
           test_router_non_match,
           test_router_wildcards,
           test_router_lvc_replay,

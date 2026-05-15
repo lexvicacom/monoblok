@@ -9,3 +9,4 @@ dist/
 perf.data*
 *.prof
 .claude/settings.local.json
+.claude

@@ -734,150 +734,6 @@ static pb_eval_result call_bar(pb_eval_ctx *ctx, pb_values args) {
     return emit_bar_fields(ctx, close);
 }
 
-static bool ring_reserve(pb_eval_state_entry *slot, size_t cap, bool with_times) {
-    if (slot->ring_cap >= cap) {
-        return true;
-    }
-
-    double *values = malloc(cap * sizeof values[0]);
-    if (values == NULL) {
-        return false;
-    }
-    uint64_t *times = NULL;
-    if (with_times) {
-        times = malloc(cap * sizeof times[0]);
-        if (times == NULL) {
-            free(values);
-            return false;
-        }
-    }
-
-    for (size_t i = 0; i < slot->ring_len; i += 1) {
-        const size_t old_idx = slot->ring_cap == 0 ? 0 : (slot->ring_start + i) % slot->ring_cap;
-        values[i] = slot->ring_values[old_idx];
-        if (with_times && slot->ring_times_ms != NULL) {
-            times[i] = slot->ring_times_ms[old_idx];
-        }
-    }
-
-    free(slot->ring_values);
-    free(slot->ring_times_ms);
-    slot->ring_values = values;
-    slot->ring_times_ms = times;
-    slot->ring_cap = cap;
-    slot->ring_start = 0;
-    return true;
-}
-
-static void ring_push_count(pb_eval_state_entry *slot, double x) {
-    if (slot->ring_len < slot->ring_cap) {
-        const size_t idx = (slot->ring_start + slot->ring_len) % slot->ring_cap;
-        slot->ring_values[idx] = x;
-        slot->ring_len += 1;
-        slot->ring_sum += x;
-        return;
-    }
-    const size_t idx = slot->ring_start;
-    slot->ring_sum -= slot->ring_values[idx];
-    slot->ring_values[idx] = x;
-    slot->ring_sum += x;
-    slot->ring_start = (slot->ring_start + 1) % slot->ring_cap;
-}
-
-static void ring_evict_time(pb_eval_state_entry *slot, uint64_t cutoff_ms) {
-    while (slot->ring_len > 0) {
-        const size_t idx = slot->ring_start;
-        if (slot->ring_times_ms[idx] >= cutoff_ms) {
-            break;
-        }
-        slot->ring_sum -= slot->ring_values[idx];
-        slot->ring_start = (slot->ring_start + 1) % slot->ring_cap;
-        slot->ring_len -= 1;
-    }
-}
-
-static bool ring_push_time(pb_eval_state_entry *slot, double x, uint64_t t_ms) {
-    if (slot->ring_len == slot->ring_cap) {
-        const size_t next = slot->ring_cap == 0 ? 16 : slot->ring_cap * 2;
-        if (!ring_reserve(slot, next, true)) {
-            return false;
-        }
-    }
-    const size_t idx = (slot->ring_start + slot->ring_len) % slot->ring_cap;
-    slot->ring_values[idx] = x;
-    slot->ring_times_ms[idx] = t_ms;
-    slot->ring_len += 1;
-    slot->ring_sum += x;
-    return true;
-}
-
-static pb_eval_result call_moving_avg(pb_eval_ctx *ctx, pb_values args) {
-    bool time_window = false;
-    size_t window_count = 0;
-    uint64_t window_ms = 0;
-    pb_value input = {0};
-
-    if (args.len == 2) {
-        double window = 0;
-        if (!as_number(args.items[0], &window) || window < 1 || floor(window) != window) {
-            return fail(PB_EVAL_TYPE);
-        }
-        window_count = (size_t)window;
-        input = args.items[1];
-    } else if (args.len == 3 &&
-               args.items[0].kind == PB_KEYWORD &&
-               text_eq(args.items[0].text, "ms")) {
-        double ms = 0;
-        if (!as_number(args.items[1], &ms) || ms < 1 || floor(ms) != ms) {
-            return fail(PB_EVAL_TYPE);
-        }
-        time_window = true;
-        window_ms = (uint64_t)ms;
-        input = args.items[2];
-    } else {
-        return fail(PB_EVAL_ARITY);
-    }
-
-    double x = 0;
-    if (!as_number(input, &x)) {
-        return fail(PB_EVAL_TYPE);
-    }
-
-    pb_eval_state_entry *slot = state_slot(ctx, time_window ? "moving-avg/m" : "moving-avg/t");
-    if (slot == NULL) {
-        return fail(PB_EVAL_OOM);
-    }
-    if (slot->kind == PB_EVAL_STATE_EMPTY) {
-        slot->kind = PB_EVAL_STATE_RING;
-        slot->ring_time_window = time_window;
-        slot->ring_window_ms = window_ms;
-        if (!time_window && !ring_reserve(slot, window_count, false)) {
-            return fail(PB_EVAL_OOM);
-        }
-    }
-    if (slot->kind != PB_EVAL_STATE_RING || slot->ring_time_window != time_window) {
-        return fail(PB_EVAL_TYPE);
-    }
-
-    if (time_window) {
-        const uint64_t configured = slot->ring_window_ms == 0 ? window_ms : slot->ring_window_ms;
-        const uint64_t t = ctx->now_ms;
-        const uint64_t cutoff = t > configured ? t - configured : 0;
-        ring_evict_time(slot, cutoff);
-        if (!ring_push_time(slot, x, t)) {
-            return fail(PB_EVAL_OOM);
-        }
-        ring_evict_time(slot, cutoff);
-    } else {
-        ring_push_count(slot, x);
-    }
-
-    if (slot->ring_len == 0) {
-        return ok((pb_value){.kind = PB_NIL});
-    }
-    return ok((pb_value){.kind = PB_NUMBER, .number = slot->ring_sum / (double)slot->ring_len});
-}
-
 static bool path_token(pb_slice path, size_t *pos, pb_slice *out) {
     if (*pos >= path.len) {
         return false;
@@ -952,17 +808,13 @@ static void json_arena_free(void *ctx, void *ptr) {
 }
 
 static yyjson_doc *read_json_slice(pb_eval_ctx *ctx, pb_slice source) {
-    char *owned = pb_arena_memdup(ctx->arena, source.ptr, source.len);
-    if (owned == NULL) {
-        return NULL;
-    }
     yyjson_alc alc = {
         .malloc = json_arena_malloc,
         .realloc = json_arena_realloc,
         .free = json_arena_free,
         .ctx = ctx->arena,
     };
-    return yyjson_read_opts(owned, source.len, YYJSON_READ_NOFLAG, &alc, NULL);
+    return yyjson_read_opts((char *)(void *)source.ptr, source.len, YYJSON_READ_NOFLAG, &alc, NULL);
 }
 
 static pb_eval_result json_scalar_value(pb_eval_ctx *ctx, yyjson_val *v) {
@@ -1140,6 +992,7 @@ pb_eval_result pb_eval_call_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_val
     case PB_BUILTIN_FALLING_EDGE: return call_edge(ctx, args, false);
     case PB_BUILTIN_DELTA: return call_delta(ctx, args);
     case PB_BUILTIN_COUNT: return call_count(ctx, args);
+    case PB_BUILTIN_MOVING_AVG:
     case PB_BUILTIN_MOVING_SUM:
     case PB_BUILTIN_MOVING_MAX:
     case PB_BUILTIN_MOVING_MIN:
@@ -1153,7 +1006,6 @@ pb_eval_result pb_eval_call_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_val
     case PB_BUILTIN_SAMPLE:
     case PB_BUILTIN_AGGREGATE:
         return pb_eval_call_window_builtin(ctx, builtin, args);
-    case PB_BUILTIN_MOVING_AVG: return call_moving_avg(ctx, args);
     case PB_BUILTIN_BAR: return call_bar(ctx, args);
     case PB_BUILTIN_DO:
     case PB_BUILTIN_IF:
@@ -1166,6 +1018,18 @@ pb_eval_result pb_eval_call_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_val
         break;
     }
     return fail(PB_EVAL_UNKNOWN_SYMBOL);
+}
+
+static void ring_evict_time(pb_eval_state_entry *slot, uint64_t cutoff_ms) {
+    while (slot->ring_len > 0) {
+        const size_t idx = slot->ring_start;
+        if (slot->ring_times_ms[idx] >= cutoff_ms) {
+            break;
+        }
+        slot->ring_sum -= slot->ring_values[idx];
+        slot->ring_start = (slot->ring_start + 1) % slot->ring_cap;
+        slot->ring_len -= 1;
+    }
 }
 
 pb_eval_result pb_eval_tick_state_entry(pb_eval_ctx *ctx, pb_eval_state_entry *entry) {

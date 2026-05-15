@@ -12,6 +12,9 @@ typedef struct pb_slice {
     size_t len;
 } pb_slice;
 
+bool pb_slice_eq(pb_slice a, pb_slice b);
+bool pb_slice_eq_lit(pb_slice s, const char *lit);
+
 typedef enum pb_value_kind {
     PB_NIL,
     PB_BOOL,

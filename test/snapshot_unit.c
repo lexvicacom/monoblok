@@ -77,4 +77,42 @@ static void test_snapshot_roundtrip_lvc_and_state(void) {
     remove(path);
 }
 
-TEST_MAIN(snapshot, test_snapshot_roundtrip_lvc_and_state)
+static void test_snapshot_preserves_count_window_capacity(void) {
+    const char *src = "(on \"foo\" (publish! \"avg\" (moving-avg 3 payload-float)))\n";
+    char path[128];
+    snprintf(path, sizeof path, "/tmp/monoblok-snapshot-window-%ld.bin", (long)getpid());
+    remove(path);
+
+    pb_program program = {0};
+    CHECK(pb_program_load_source(&program, "<test>", src, strlen(src)));
+    mb_router router;
+    mb_router_init(&router);
+    CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("1"), 0, 0));
+    CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("2"), 0, 0));
+    CHECK(mb_snapshot_write(path, &router, &program));
+    mb_router_free(&router);
+    pb_program_free(&program);
+
+    pb_program restored_program = {0};
+    CHECK(pb_program_load_source(&restored_program, "<test>", src, strlen(src)));
+    mb_router restored_router;
+    mb_router_init(&restored_router);
+    mb_snapshot_counts counts = {0};
+    CHECK(mb_snapshot_load(path, &restored_router, &restored_program, &counts));
+    CHECK(counts.rule_state == 1);
+
+    mb_router_conn avg_conn = {0};
+    CHECK(mb_router_subscribe(&restored_router, &avg_conn, lit("avg"), lit("1")));
+    CHECK(pb_program_eval_publish(&restored_program, &restored_router, lit("foo"), lit("3"), 0, 0));
+    CHECK(buf_contains(&avg_conn.out, "MSG avg 1 1\r\n2\r\n"));
+    CHECK(!buf_contains(&avg_conn.out, "MSG avg 1 3\r\n2.5\r\n"));
+
+    mb_buf_free(&avg_conn.out);
+    mb_router_free(&restored_router);
+    pb_program_free(&restored_program);
+    remove(path);
+}
+
+TEST_MAIN(snapshot,
+          test_snapshot_roundtrip_lvc_and_state,
+          test_snapshot_preserves_count_window_capacity)

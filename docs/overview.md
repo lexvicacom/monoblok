@@ -175,7 +175,7 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | `PUB` / `SUB` / `UNSUB` / `MSG` | yes |
 | wildcards | yes |
 | request/reply | yes |
-| queue groups | no |
+| queue groups | yes |
 | headers | no |
 | `$LVC.*` last-value replay | yes, monoblok extension |
 | bridge to real NATS | export-only |

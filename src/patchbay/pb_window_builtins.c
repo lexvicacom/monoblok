@@ -407,7 +407,7 @@ static pb_eval_result call_aggregate(pb_eval_ctx *ctx, pb_values args) {
     if (!state_set_emit_subject(slot, subject)) {
         return fail(PB_EVAL_OOM);
     }
-    if (!ring_reserve(slot, slot->ring_len + 1, true) || !ring_push_time(slot, x, ctx->now_ms)) {
+    if (!ring_push_time(slot, x, ctx->now_ms)) {
         return fail(PB_EVAL_OOM);
     }
     slot->kind = PB_EVAL_STATE_CLOCK;
@@ -449,6 +449,7 @@ pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args) {
 
 pb_eval_result pb_eval_call_window_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_values args) {
     switch (builtin) {
+    case PB_BUILTIN_MOVING_AVG: return call_window_calc(ctx, args, "moving-avg", WINDOW_AVG);
     case PB_BUILTIN_MOVING_SUM: return call_window_calc(ctx, args, "moving-sum", WINDOW_SUM);
     case PB_BUILTIN_MOVING_MAX: return call_window_calc(ctx, args, "moving-max", WINDOW_MAX);
     case PB_BUILTIN_MOVING_MIN: return call_window_calc(ctx, args, "moving-min", WINDOW_MIN);
