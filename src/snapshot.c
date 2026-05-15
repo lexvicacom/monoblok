@@ -1,5 +1,7 @@
 #include "snapshot.h"
 
+#include "fs.h"
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,53 +60,6 @@ static bool append_len_prefixed(mb_buf *buf, mb_slice s)
         return false;
     }
     return append_u32(buf, (uint32_t)s.len) && append_bytes(buf, s.ptr, s.len);
-}
-
-static bool read_file(const char *path, uint8_t **out, size_t *out_len)
-{
-    FILE *f = fopen(path, "rb");
-    if (f == NULL)
-    {
-        if (errno == ENOENT)
-        {
-            *out = NULL;
-            *out_len = 0;
-            return true;
-        }
-        perror(path);
-        return false;
-    }
-    if (fseek(f, 0, SEEK_END) != 0)
-    {
-        perror("fseek");
-        fclose(f);
-        return false;
-    }
-    const long size = ftell(f);
-    if (size < 0)
-    {
-        perror("ftell");
-        fclose(f);
-        return false;
-    }
-    rewind(f);
-
-    uint8_t *buf = malloc((size_t)size == 0 ? 1 : (size_t)size);
-    if (buf == NULL)
-    {
-        fclose(f);
-        return false;
-    }
-    const size_t nread = fread(buf, 1, (size_t)size, f);
-    fclose(f);
-    if (nread != (size_t)size)
-    {
-        free(buf);
-        return false;
-    }
-    *out = buf;
-    *out_len = nread;
-    return true;
 }
 
 static bool read_u8(const uint8_t *bytes, size_t len, size_t *pos, uint8_t *out)
@@ -493,20 +448,24 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
 bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, mb_snapshot_counts *counts)
 {
     *counts = (mb_snapshot_counts){0};
-    uint8_t *bytes = NULL;
-    size_t len = 0;
-    if (!read_file(path, &bytes, &len))
+    mb_buf file = {0};
+    errno = 0;
+    if (!mb_read_file(path, &file))
     {
+        if (errno == ENOENT)
+        {
+            return true;
+        }
+        perror(path);
         return false;
     }
-    if (bytes == NULL)
-    {
-        return true;
-    }
+
+    const uint8_t *bytes = file.ptr;
+    const size_t len = file.len;
     if (len < 8 || memcmp(bytes, "MBLK", 4) != 0 || bytes[4] != SNAP_VERSION)
     {
         fprintf(stderr, "snapshot: ignoring unsupported snapshot %s\n", path);
-        free(bytes);
+        mb_buf_free(&file);
         return true;
     }
 
@@ -552,7 +511,7 @@ bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, 
     {
         fprintf(stderr, "snapshot: failed to parse %s\n", path);
     }
-    free(bytes);
+    mb_buf_free(&file);
     return ok;
 }
 
@@ -671,36 +630,11 @@ bool mb_snapshot_write(const char *path, const mb_router *router, const pb_progr
         return false;
     }
 
-    const size_t path_len = strlen(path);
-    char *tmp = malloc(path_len + 5);
-    if (tmp == NULL)
-    {
-        mb_buf_free(&out);
-        return false;
-    }
-    memcpy(tmp, path, path_len);
-    memcpy(tmp + path_len, ".tmp", 5);
-
-    FILE *f = fopen(tmp, "wb");
-    if (f == NULL)
-    {
-        perror(tmp);
-        free(tmp);
-        mb_buf_free(&out);
-        return false;
-    }
-    ok = fwrite(out.ptr, 1, out.len, f) == out.len && fflush(f) == 0;
-    ok = fclose(f) == 0 && ok;
-    if (ok && rename(tmp, path) != 0)
-    {
-        perror("rename snapshot");
-        ok = false;
-    }
+    ok = mb_write_file_atomic(path, (mb_slice){.ptr = out.ptr, .len = out.len});
     if (!ok)
     {
-        remove(tmp);
+        perror(path);
     }
-    free(tmp);
     mb_buf_free(&out);
     return ok;
 }
