@@ -6,6 +6,9 @@ BIN="$ROOT/build/monoblok"
 NAME="$(basename "${0%.sh}")"
 TMP="/tmp/monoblok-$NAME"
 
+echo $($BIN -V)
+echo
+
 if [ ! -x "$BIN" ]; then
     echo "building monoblok..."
     (cd "$ROOT" && cmake -S . -B build >/dev/null && cmake --build build --target monoblok) || exit 1
