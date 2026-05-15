@@ -1,4 +1,4 @@
-# monoblok Overview
+# monoblok
 
 > A NATS-core compatible messaging system that conditions subjects before subscribers see them.
 > 
@@ -20,18 +20,15 @@ Common ways of running monoblok:
 
 ![monoblok deployment modes](./docs/infographic.png)
 
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be **fast**, even on entry level/shared hardware. There are no scientific measurements yet. There are some [benchmark scripts](../scripts) and [results](../bench-results).
+monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. There are no scientific measurements yet. There are some [benchmark scripts](../scripts) and [results](../bench-results).
 
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation of the same idea, but for microcontrollers.
 
-[Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
-
-For a user-facing overview, deployment examples, and DSL introduction, see [docs/overview.md](./docs/overview.md),
-[docs/patchbay.md](./docs/patchbay.md), and the runnable files in [examples/](./examples/).
+See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ## Install
 
-The release helper downloads a platform tarball into the current directory:
+The [release helper](./scripts/start.sh) downloads monoblok (macOS/Linux) into the current directory:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
@@ -40,7 +37,19 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/st
 Then run the unpacked binary:
 
 ```sh
-./monoblok-*/monoblok --port 4222 --patchbay ./monoblok-*/patchbay.edn
+./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
 ```
 
-For Linux services, the release tarball includes `install-systemd.sh`.
+To add as a service on systemd Linux, the release tarball includes `install-systemd.sh`.
+
+## AI
+
+It's 2026, Claude and Codex help me a lot. All code is reviewed and iterated upon before being merged.
+
+### Didn't this used to be written in Zig?
+
+It did, but the good parts of Zig perhaps didn't justify its use **in this project**. I love the idea of Zig but I know C far better. I felt uneasy not being able to explain some of the tricky `@ptrCast` `anytype` `inline` `std.Io` corners that the LLM had generated. With a good prompt to force 0.16 semantics, there's no reason why Zig isn't a fine language to use with coding assistants. However, you could argue that many of Zig's virtues come from you being forced to think low level. **This project** has a small surface area that an LLM can statically analyse with its knowledge of an ancient target (C17). Combined with traditional tooling, this lowers the risk. I like the Redis style of C where you write a minimal domain-specific "not quite DSL" to use, without blurring actual functionality in frameworky BS or macro soup. Simple C code makes the codebase a breeze to work on by hand. Obviously, simple is good. _This is just like, my opinion, man._
+
+## License
+
+MIT. See `LICENSE`.

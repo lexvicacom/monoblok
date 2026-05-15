@@ -259,10 +259,6 @@ Worth keeping in mind: nats-server has a decade of production-grade performance 
 
 See the repository [README](../README.md) for CMake build targets and smoke tests.
 
-## AI
-
-It's 2026, Claude and Codex help me a lot. [Some thoughts on this](https://github.com/lexvicacom/monoblok/blob/main/docs/how-monoblok-uses-ai.md).
-
 ## License
 
 MIT. See `LICENSE`.
