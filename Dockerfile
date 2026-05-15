@@ -1,6 +1,10 @@
-FROM cgr.dev/chainguard/glibc-dynamic:latest
+FROM cgr.dev/chainguard/wolfi-base:latest
 
-COPY build/monoblok /usr/local/bin/monoblok
+RUN apk add --no-cache openssl
+
+ARG MONOBLOK_BIN=build-package/monoblok
+
+COPY ${MONOBLOK_BIN} /usr/local/bin/monoblok
 COPY patchbay.edn /etc/monoblok/patchbay.edn
 
 EXPOSE 4222
