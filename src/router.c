@@ -3,10 +3,12 @@
 #include "array.h"
 #include "slice.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 static void free_sub(mb_subscription *sub) {
     free(sub->subject);
+    free(sub->queue);
     free(sub->sid);
     *sub = (mb_subscription){0};
 }
@@ -129,13 +131,208 @@ static bool ensure_kick_capacity(mb_router *router, size_t needed) {
                             needed, sizeof router->kick_scratch[0], 1);
 }
 
-static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool create) {
+static bool ensure_queue_capacity(mb_router *router, size_t needed) {
+    return mb_array_reserve((void **)&router->queue_scratch, &router->queue_cap,
+                            needed, sizeof router->queue_scratch[0], 1);
+}
+
+static bool ensure_publish_capacity(mb_router *router, size_t needed) {
+    return ensure_kick_capacity(router, needed) && ensure_queue_capacity(router, needed);
+}
+
+static size_t next_index_cap(size_t needed) {
+    size_t cap = 16;
+    while (cap < needed) {
+        if (cap > SIZE_MAX / 2) {
+            return 0;
+        }
+        cap *= 2;
+    }
+    return cap;
+}
+
+static void index_insert(mb_router_index_entry *entries, size_t cap, uint64_t hash, size_t index) {
+    size_t slot = (size_t)(hash & (uint64_t)(cap - 1));
+    while (entries[slot].occupied) {
+        slot = (slot + 1) & (cap - 1);
+    }
+    entries[slot] = (mb_router_index_entry){.hash = hash, .index = index, .occupied = true};
+}
+
+static void clear_index(mb_router_index_entry *entries, size_t cap) {
+    for (size_t i = 0; i < cap; i += 1) {
+        entries[i] = (mb_router_index_entry){0};
+    }
+}
+
+static bool literal_index_ensure(mb_router *router, size_t needed) {
+    if (router->literal_index_cap != 0 && needed < router->literal_index_cap / 2) {
+        return true;
+    }
+    if (needed > SIZE_MAX / 4) {
+        return false;
+    }
+    const size_t cap = next_index_cap(needed == 0 ? 16 : needed * 4);
+    if (cap == 0) {
+        return false;
+    }
+    mb_router_index_entry *entries = calloc(cap, sizeof entries[0]);
+    if (entries == NULL) {
+        return false;
+    }
     for (size_t i = 0; i < router->literal_len; i += 1) {
-        if (mb_slice_eq((mb_slice){.ptr = router->literal[i].key, .len = router->literal[i].key_len}, key)) {
-            return &router->literal[i];
+        const mb_slice key = {.ptr = router->literal[i].key, .len = router->literal[i].key_len};
+        index_insert(entries, cap, mb_slice_hash(key), i);
+    }
+    free(router->literal_index);
+    router->literal_index = entries;
+    router->literal_index_cap = cap;
+    return true;
+}
+
+static bool wildcard_index_ensure(mb_router *router, size_t needed) {
+    if (router->wildcard_index_cap != 0 && needed < router->wildcard_index_cap / 2) {
+        return true;
+    }
+    if (needed > SIZE_MAX / 4) {
+        return false;
+    }
+    const size_t cap = next_index_cap(needed == 0 ? 16 : needed * 4);
+    if (cap == 0) {
+        return false;
+    }
+    mb_router_index_entry *entries = calloc(cap, sizeof entries[0]);
+    if (entries == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < router->wildcard_len; i += 1) {
+        const mb_slice key = {.ptr = router->wildcard[i].key, .len = router->wildcard[i].key_len};
+        index_insert(entries, cap, mb_slice_hash(key), i);
+    }
+    free(router->wildcard_index);
+    router->wildcard_index = entries;
+    router->wildcard_index_cap = cap;
+    return true;
+}
+
+static bool lvc_index_ensure(mb_router *router, size_t needed) {
+    if (router->lvc_index_cap != 0 && needed < router->lvc_index_cap / 2) {
+        return true;
+    }
+    if (needed > SIZE_MAX / 4) {
+        return false;
+    }
+    const size_t cap = next_index_cap(needed == 0 ? 16 : needed * 4);
+    if (cap == 0) {
+        return false;
+    }
+    mb_router_index_entry *entries = calloc(cap, sizeof entries[0]);
+    if (entries == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < router->lvc_len; i += 1) {
+        const mb_slice key = {.ptr = router->lvc[i].subject, .len = router->lvc[i].subject_len};
+        index_insert(entries, cap, mb_slice_hash(key), i);
+    }
+    free(router->lvc_index);
+    router->lvc_index = entries;
+    router->lvc_index_cap = cap;
+    return true;
+}
+
+static void literal_index_refresh(mb_router *router) {
+    if (router->literal_index_cap == 0) {
+        return;
+    }
+    clear_index(router->literal_index, router->literal_index_cap);
+    for (size_t i = 0; i < router->literal_len; i += 1) {
+        const mb_slice key = {.ptr = router->literal[i].key, .len = router->literal[i].key_len};
+        index_insert(router->literal_index, router->literal_index_cap, mb_slice_hash(key), i);
+    }
+}
+
+static void wildcard_index_refresh(mb_router *router) {
+    if (router->wildcard_index_cap == 0) {
+        return;
+    }
+    clear_index(router->wildcard_index, router->wildcard_index_cap);
+    for (size_t i = 0; i < router->wildcard_len; i += 1) {
+        const mb_slice key = {.ptr = router->wildcard[i].key, .len = router->wildcard[i].key_len};
+        index_insert(router->wildcard_index, router->wildcard_index_cap, mb_slice_hash(key), i);
+    }
+}
+
+static size_t literal_index_find(const mb_router *router, mb_slice key, uint64_t hash) {
+    if (router->literal_index_cap == 0) {
+        return SIZE_MAX;
+    }
+    size_t slot = (size_t)(hash & (uint64_t)(router->literal_index_cap - 1));
+    for (;;) {
+        const mb_router_index_entry *entry = &router->literal_index[slot];
+        if (!entry->occupied) {
+            return SIZE_MAX;
+        }
+        const mb_literal_bucket *bucket = &router->literal[entry->index];
+        if (entry->hash == hash &&
+            mb_slice_eq((mb_slice){.ptr = bucket->key, .len = bucket->key_len}, key)) {
+            return entry->index;
+        }
+        slot = (slot + 1) & (router->literal_index_cap - 1);
+    }
+}
+
+static size_t wildcard_index_find(const mb_router *router, mb_slice key, uint64_t hash) {
+    if (router->wildcard_index_cap == 0) {
+        return SIZE_MAX;
+    }
+    size_t slot = (size_t)(hash & (uint64_t)(router->wildcard_index_cap - 1));
+    for (;;) {
+        const mb_router_index_entry *entry = &router->wildcard_index[slot];
+        if (!entry->occupied) {
+            return SIZE_MAX;
+        }
+        const mb_wildcard_bucket *bucket = &router->wildcard[entry->index];
+        if (entry->hash == hash &&
+            mb_slice_eq((mb_slice){.ptr = bucket->key, .len = bucket->key_len}, key)) {
+            return entry->index;
+        }
+        slot = (slot + 1) & (router->wildcard_index_cap - 1);
+    }
+}
+
+static size_t lvc_index_find(const mb_router *router, mb_slice key, uint64_t hash) {
+    if (router->lvc_index_cap == 0) {
+        return SIZE_MAX;
+    }
+    size_t slot = (size_t)(hash & (uint64_t)(router->lvc_index_cap - 1));
+    for (;;) {
+        const mb_router_index_entry *entry = &router->lvc_index[slot];
+        if (!entry->occupied) {
+            return SIZE_MAX;
+        }
+        const mb_lvc_entry *lvc = &router->lvc[entry->index];
+        if (entry->hash == hash &&
+            mb_slice_eq((mb_slice){.ptr = lvc->subject, .len = lvc->subject_len}, key)) {
+            return entry->index;
+        }
+        slot = (slot + 1) & (router->lvc_index_cap - 1);
+    }
+}
+
+static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool create) {
+    const uint64_t hash = mb_slice_hash(key);
+    const size_t found = literal_index_find(router, key, hash);
+    if (found != SIZE_MAX) {
+        return &router->literal[found];
+    }
+    if (router->literal_index_cap == 0) {
+        for (size_t i = 0; i < router->literal_len; i += 1) {
+            if (mb_slice_eq((mb_slice){.ptr = router->literal[i].key, .len = router->literal[i].key_len}, key)) {
+                return &router->literal[i];
+            }
         }
     }
-    if (!create || !grow_literal_buckets(router)) {
+    if (!create || !literal_index_ensure(router, router->literal_len + 1) || !grow_literal_buckets(router)) {
         return NULL;
     }
     mb_literal_bucket *bucket = &router->literal[router->literal_len];
@@ -143,17 +340,25 @@ static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool c
     if (!mb_slice_dup(key, &bucket->key, &bucket->key_len)) {
         return NULL;
     }
+    index_insert(router->literal_index, router->literal_index_cap, hash, router->literal_len);
     router->literal_len += 1;
     return bucket;
 }
 
 static mb_wildcard_bucket *wildcard_bucket(mb_router *router, mb_slice key, bool create) {
-    for (size_t i = 0; i < router->wildcard_len; i += 1) {
-        if (mb_slice_eq((mb_slice){.ptr = router->wildcard[i].key, .len = router->wildcard[i].key_len}, key)) {
-            return &router->wildcard[i];
+    const uint64_t hash = mb_slice_hash(key);
+    const size_t found = wildcard_index_find(router, key, hash);
+    if (found != SIZE_MAX) {
+        return &router->wildcard[found];
+    }
+    if (router->wildcard_index_cap == 0) {
+        for (size_t i = 0; i < router->wildcard_len; i += 1) {
+            if (mb_slice_eq((mb_slice){.ptr = router->wildcard[i].key, .len = router->wildcard[i].key_len}, key)) {
+                return &router->wildcard[i];
+            }
         }
     }
-    if (!create || !grow_wildcard_buckets(router)) {
+    if (!create || !wildcard_index_ensure(router, router->wildcard_len + 1) || !grow_wildcard_buckets(router)) {
         return NULL;
     }
     mb_wildcard_bucket *bucket = &router->wildcard[router->wildcard_len];
@@ -161,6 +366,7 @@ static mb_wildcard_bucket *wildcard_bucket(mb_router *router, mb_slice key, bool
     if (!mb_slice_dup(key, &bucket->key, &bucket->key_len)) {
         return NULL;
     }
+    index_insert(router->wildcard_index, router->wildcard_index_cap, hash, router->wildcard_len);
     router->wildcard_len += 1;
     return bucket;
 }
@@ -173,6 +379,7 @@ static void remove_literal_bucket_at(mb_router *router, size_t i) {
         router->literal[i] = router->literal[router->literal_len];
         router->literal[router->literal_len] = (mb_literal_bucket){0};
     }
+    literal_index_refresh(router);
 }
 
 static void remove_wildcard_bucket_at(mb_router *router, size_t i) {
@@ -183,19 +390,12 @@ static void remove_wildcard_bucket_at(mb_router *router, size_t i) {
         router->wildcard[i] = router->wildcard[router->wildcard_len];
         router->wildcard[router->wildcard_len] = (mb_wildcard_bucket){0};
     }
-}
-
-static bool already_kicked(mb_router_conn **kicked, size_t len, mb_router_conn *conn) {
-    for (size_t i = 0; i < len; i += 1) {
-        if (kicked[i] == conn) {
-            return true;
-        }
-    }
-    return false;
+    wildcard_index_refresh(router);
 }
 
 void mb_router_init(mb_router *router) {
     *router = (mb_router){0};
+    router->queue_rng = UINT64_C(0x9e3779b97f4a7c15);
 }
 
 void mb_router_disable_lvc(mb_router *router) {
@@ -243,9 +443,16 @@ static void lvc_entry_free(mb_lvc_entry *entry) {
 }
 
 static mb_lvc_entry *lvc_entry_find(mb_router *router, mb_slice subject) {
-    for (size_t i = 0; i < router->lvc_len; i += 1) {
-        if (mb_slice_eq((mb_slice){.ptr = router->lvc[i].subject, .len = router->lvc[i].subject_len}, subject)) {
-            return &router->lvc[i];
+    const uint64_t hash = mb_slice_hash(subject);
+    const size_t found = lvc_index_find(router, subject, hash);
+    if (found != SIZE_MAX) {
+        return &router->lvc[found];
+    }
+    if (router->lvc_index_cap == 0) {
+        for (size_t i = 0; i < router->lvc_len; i += 1) {
+            if (mb_slice_eq((mb_slice){.ptr = router->lvc[i].subject, .len = router->lvc[i].subject_len}, subject)) {
+                return &router->lvc[i];
+            }
         }
     }
     return NULL;
@@ -270,6 +477,10 @@ static bool lvc_store(mb_router *router, mb_slice subject, mb_slice payload) {
     }
     mb_lvc_entry *entry = lvc_entry_find(router, subject);
     if (entry == NULL) {
+        const uint64_t hash = mb_slice_hash(subject);
+        if (!lvc_index_ensure(router, router->lvc_len + 1)) {
+            return false;
+        }
         if (!mb_array_reserve((void **)&router->lvc, &router->lvc_cap,
                               router->lvc_len + 1, sizeof router->lvc[0], 16)) {
             return false;
@@ -279,6 +490,7 @@ static bool lvc_store(mb_router *router, mb_slice subject, mb_slice payload) {
         if (!mb_slice_dup(subject, &entry->subject, &entry->subject_len)) {
             return false;
         }
+        index_insert(router->lvc_index, router->lvc_index_cap, hash, router->lvc_len);
         router->lvc_len += 1;
     }
     mb_buf_clear(&entry->payload);
@@ -335,11 +547,15 @@ void mb_router_free(mb_router *router) {
     }
     free(router->literal);
     free(router->wildcard);
+    free(router->literal_index);
+    free(router->wildcard_index);
     free(router->kick_scratch);
+    free(router->queue_scratch);
     for (size_t i = 0; i < router->lvc_len; i += 1) {
         lvc_entry_free(&router->lvc[i]);
     }
     free(router->lvc);
+    free(router->lvc_index);
     for (size_t i = 0; i < router->lvc_filter_len; i += 1) {
         lvc_filter_free(&router->lvc_filters[i]);
     }
@@ -348,18 +564,22 @@ void mb_router_free(mb_router *router) {
     *router = (mb_router){0};
 }
 
-bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subject, mb_slice sid) {
+bool mb_router_subscribe_queue(mb_router *router, mb_router_conn *conn, mb_slice subject, mb_slice queue, mb_slice sid) {
     const bool is_lvc = mb_router_subject_has_lvc_prefix(subject);
     const mb_slice match_subject = is_lvc ? lvc_inner_subject(subject) : subject;
     if (is_lvc && (!router->lvc_enabled || match_subject.len == 0)) {
         return false;
     }
-    if (!ensure_kick_capacity(router, router->sub_count + 1)) {
+    if (!ensure_publish_capacity(router, router->sub_count + 1)) {
         return false;
     }
 
     mb_subscription sub = {.conn = conn, .is_lvc = is_lvc};
     if (!mb_slice_dup(match_subject, &sub.subject, &sub.subject_len)) {
+        return false;
+    }
+    if (queue.len != 0 && !mb_slice_dup(queue, &sub.queue, &sub.queue_len)) {
+        free_sub(&sub);
         return false;
     }
     if (!mb_slice_dup(sid, &sub.sid, &sub.sid_len)) {
@@ -390,6 +610,10 @@ bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subje
         return false;
     }
     return true;
+}
+
+bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subject, mb_slice sid) {
+    return mb_router_subscribe_queue(router, conn, subject, (mb_slice){0}, sid);
 }
 
 static void remove_for_conn_from_list(mb_router *router, mb_sub_list *list, mb_router_conn *conn) {
@@ -464,35 +688,94 @@ void mb_router_unsubscribe(mb_router *router, mb_router_conn *conn, mb_slice sid
     unsubscribe_from_list(router, &router->wildcard_global, conn, sid, max_msgs, has_max_msgs);
 }
 
-static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice subject, mb_slice payload,
-                                  bool check_filter, mb_router_conn **kicked, size_t *kicked_len) {
+static uint64_t queue_random(mb_router *router) {
+    uint64_t x = router->queue_rng;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    router->queue_rng = x == 0 ? UINT64_C(0x9e3779b97f4a7c15) : x;
+    return router->queue_rng * UINT64_C(2685821657736338717);
+}
+
+static bool sub_deliverable(const mb_router *router, const mb_subscription *sub, mb_slice subject, bool check_filter) {
+    if (sub->conn->closed) {
+        return false;
+    }
+    if (check_filter && !subject_matches((mb_slice){.ptr = sub->subject, .len = sub->subject_len}, subject)) {
+        return false;
+    }
+    return !sub->is_lvc || lvc_subject_enabled(router, subject);
+}
+
+static bool queue_group_eq(const mb_queue_delivery *group, const mb_subscription *sub) {
+    return group->is_lvc == sub->is_lvc &&
+           mb_slice_eq(group->subject, (mb_slice){.ptr = sub->subject, .len = sub->subject_len}) &&
+           mb_slice_eq(group->queue, (mb_slice){.ptr = sub->queue, .len = sub->queue_len});
+}
+
+static bool collect_queue_delivery(mb_router *router, mb_subscription *sub, size_t index, size_t *group_len) {
+    mb_queue_delivery *group = NULL;
+    for (size_t i = 0; i < *group_len; i += 1) {
+        if (queue_group_eq(&router->queue_scratch[i], sub)) {
+            group = &router->queue_scratch[i];
+            break;
+        }
+    }
+    if (group == NULL) {
+        if (*group_len >= router->queue_cap) {
+            return false;
+        }
+        group = &router->queue_scratch[*group_len];
+        *group = (mb_queue_delivery){
+            .subject = {.ptr = sub->subject, .len = sub->subject_len},
+            .queue = {.ptr = sub->queue, .len = sub->queue_len},
+            .selected = index,
+            .is_lvc = sub->is_lvc,
+        };
+        *group_len += 1;
+    }
+
+    group->seen += 1;
+    if (group->seen == 1 || queue_random(router) % group->seen == 0) {
+        group->selected = index;
+    }
+    return true;
+}
+
+static bool queue_selected(const mb_router *router, const mb_subscription *sub, size_t index, size_t group_len) {
+    if (sub->queue_len == 0) {
+        return true;
+    }
+    for (size_t i = 0; i < group_len; i += 1) {
+        if (router->queue_scratch[i].selected == index && queue_group_eq(&router->queue_scratch[i], sub)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool deliver_to_sub(mb_router *router, mb_subscription *sub, mb_slice subject, mb_slice payload,
+                           mb_router_conn **kicked, size_t *kicked_len) {
+    const mb_slice sid = {.ptr = sub->sid, .len = sub->sid_len};
+    const bool wrote = sub->is_lvc
+                           ? mb_write_msg_prefixed(&sub->conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload)
+                           : mb_write_msg(&sub->conn->out, subject, sid, payload);
+    if (!wrote) {
+        return false;
+    }
+    sub->delivered += 1;
+    if (sub->conn->kick_fn != NULL && sub->conn->kick_seen_epoch != router->kick_epoch) {
+        sub->conn->kick_seen_epoch = router->kick_epoch;
+        kicked[*kicked_len] = sub->conn;
+        *kicked_len += 1;
+    }
+    return true;
+}
+
+static void remove_delivered_max(mb_router *router, mb_sub_list *list) {
     size_t i = 0;
     while (i < list->len) {
         mb_subscription *sub = &list->items[i];
-        if (sub->conn->closed) {
-            i += 1;
-            continue;
-        }
-        if (check_filter && !subject_matches((mb_slice){.ptr = sub->subject, .len = sub->subject_len}, subject)) {
-            i += 1;
-            continue;
-        }
-        const mb_slice sid = {.ptr = sub->sid, .len = sub->sid_len};
-        if (sub->is_lvc && !lvc_subject_enabled(router, subject)) {
-            i += 1;
-            continue;
-        }
-        const bool wrote = sub->is_lvc
-                               ? mb_write_msg_prefixed(&sub->conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload)
-                               : mb_write_msg(&sub->conn->out, subject, sid, payload);
-        if (!wrote) {
-            return false;
-        }
-        sub->delivered += 1;
-        if (sub->conn->kick_fn != NULL && !already_kicked(kicked, *kicked_len, sub->conn)) {
-            kicked[*kicked_len] = sub->conn;
-            *kicked_len += 1;
-        }
         if (sub->has_max_msgs && sub->delivered >= sub->max_msgs) {
             sub_list_remove_at(list, i);
             router->sub_count -= 1;
@@ -500,6 +783,34 @@ static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice
         }
         i += 1;
     }
+}
+
+static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice subject, mb_slice payload,
+                                  bool check_filter, mb_router_conn **kicked, size_t *kicked_len) {
+    size_t group_len = 0;
+    // First choose one member per matching queue group without mutating the list.
+    for (size_t i = 0; i < list->len; i += 1) {
+        mb_subscription *sub = &list->items[i];
+        if (sub->queue_len == 0 || !sub_deliverable(router, sub, subject, check_filter)) {
+            continue;
+        }
+        if (!collect_queue_delivery(router, sub, i, &group_len)) {
+            return false;
+        }
+    }
+
+    // Then deliver normal subscribers plus the selected queue members.
+    for (size_t i = 0; i < list->len; i += 1) {
+        mb_subscription *sub = &list->items[i];
+        if (!sub_deliverable(router, sub, subject, check_filter) || !queue_selected(router, sub, i, group_len)) {
+            continue;
+        }
+        if (!deliver_to_sub(router, sub, subject, payload, kicked, kicked_len)) {
+            remove_delivered_max(router, list);
+            return false;
+        }
+    }
+    remove_delivered_max(router, list);
     return true;
 }
 
@@ -507,11 +818,15 @@ bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload) {
     if (mb_router_subject_has_lvc_prefix(subject) || !lvc_store(router, subject, payload)) {
         return false;
     }
-    if (router->kick_cap < router->sub_count) {
+    if (router->kick_cap < router->sub_count || router->queue_cap < router->sub_count) {
         return false;
     }
     mb_router_conn **kicked = router->kick_scratch;
     size_t kicked_len = 0;
+    router->kick_epoch += 1;
+    if (router->kick_epoch == 0) {
+        router->kick_epoch = 1;
+    }
     bool ok = true;
 
     mb_literal_bucket *lit = literal_bucket(router, subject, false);

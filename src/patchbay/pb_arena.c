@@ -122,6 +122,26 @@ void pb_arena_reset(pb_arena *arena) {
     }
 }
 
+void pb_arena_trim(pb_arena *arena, size_t keep_cap) {
+    if (arena == NULL) {
+        return;
+    }
+
+    size_t retained = 0;
+    pb_arena_block **link = &arena->head;
+    while (*link != NULL) {
+        pb_arena_block *b = *link;
+        const bool over_budget = retained >= keep_cap || b->cap > keep_cap - retained;
+        if (b->used == 0 && over_budget) {
+            *link = b->next;
+            free(b);
+            continue;
+        }
+        retained = retained > SIZE_MAX - b->cap ? SIZE_MAX : retained + b->cap;
+        link = &b->next;
+    }
+}
+
 void pb_arena_free(pb_arena *arena) {
     if (arena == NULL) {
         return;

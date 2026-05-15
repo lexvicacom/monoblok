@@ -2,13 +2,14 @@
 
 #include "pb_program.h"
 
+#include "array.h"
+#include "fs.h"
 #include "pb_eval_internal.h"
 #include "pb_json.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <limits.h>
 
 typedef struct publish_ctx {
     pb_program *program;
@@ -19,58 +20,25 @@ typedef struct publish_ctx {
     bool reentrant;
 } publish_ctx;
 
-enum { PB_PROGRAM_MAX_REENTRY_DEPTH = 8 };
+enum {
+    PB_PROGRAM_MAX_REENTRY_DEPTH = 8,
+    PB_PROGRAM_SCRATCH_RETAIN_BYTES = 4 * 1024 * 1024,
+};
 
-static bool slice_eq(pb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    return s.len == n && memcmp(s.ptr, lit, n) == 0;
+static void reset_scratch(pb_program *program) {
+    pb_arena_reset(&program->scratch);
+    pb_arena_trim(&program->scratch, PB_PROGRAM_SCRATCH_RETAIN_BYTES);
 }
 
-static bool read_file(const char *path, char **out, size_t *out_len) {
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) {
-        perror(path);
-        return false;
-    }
-    if (fseek(f, 0, SEEK_END) != 0) {
-        perror("fseek");
-        fclose(f);
-        return false;
-    }
-    const long size = ftell(f);
-    if (size < 0) {
-        perror("ftell");
-        fclose(f);
-        return false;
-    }
-    rewind(f);
-
-    char *buf = malloc((size_t)size + 1);
-    if (buf == NULL) {
-        fclose(f);
-        return false;
-    }
-    const size_t nread = fread(buf, 1, (size_t)size, f);
-    fclose(f);
-    if (nread != (size_t)size) {
-        free(buf);
-        return false;
-    }
-    buf[nread] = '\0';
-    *out = buf;
-    *out_len = nread;
-    return true;
+static bool slice_match(pb_slice filter, pb_slice subject) {
+    return mb_router_subject_matches((mb_slice){.ptr = (const uint8_t *)filter.ptr, .len = filter.len},
+                                     (mb_slice){.ptr = (const uint8_t *)subject.ptr, .len = subject.len});
 }
 
 static bool rule_vec_append(pb_program *program, pb_rule rule) {
-    if (program->len == program->cap) {
-        const size_t next = program->cap == 0 ? 8 : program->cap * 2;
-        pb_rule *rules = realloc(program->rules, next * sizeof rules[0]);
-        if (rules == NULL) {
-            return false;
-        }
-        program->rules = rules;
-        program->cap = next;
+    if (!mb_array_reserve((void **)&program->rules, &program->cap, program->len + 1,
+                          sizeof program->rules[0], 8)) {
+        return false;
     }
     program->rules[program->len] = rule;
     program->len += 1;
@@ -78,14 +46,9 @@ static bool rule_vec_append(pb_program *program, pb_rule rule) {
 }
 
 static bool lvc_vec_append(pb_program *program, pb_slice filter) {
-    if (program->lvc.len == program->lvc.cap) {
-        const size_t next = program->lvc.cap == 0 ? 4 : program->lvc.cap * 2;
-        pb_slice *filters = realloc(program->lvc.filters, next * sizeof filters[0]);
-        if (filters == NULL) {
-            return false;
-        }
-        program->lvc.filters = filters;
-        program->lvc.cap = next;
+    if (!mb_array_reserve((void **)&program->lvc.filters, &program->lvc.cap,
+                          program->lvc.len + 1, sizeof program->lvc.filters[0], 4)) {
+        return false;
     }
     program->lvc.filters[program->lvc.len] = filter;
     program->lvc.len += 1;
@@ -131,14 +94,8 @@ static bool load_lvc_form(pb_program *program, pb_values items) {
 }
 
 static bool bridge_vec_append(pb_slice **items, size_t *len, size_t *cap, pb_slice value) {
-    if (*len == *cap) {
-        const size_t next = *cap == 0 ? 4 : *cap * 2;
-        pb_slice *grown = realloc(*items, next * sizeof grown[0]);
-        if (grown == NULL) {
-            return false;
-        }
-        *items = grown;
-        *cap = next;
+    if (!mb_array_reserve((void **)items, cap, *len + 1, sizeof (*items)[0], 4)) {
+        return false;
     }
     (*items)[*len] = value;
     *len += 1;
@@ -241,78 +198,78 @@ static bool load_bridge_form(pb_program *program, pb_values items) {
         }
         pb_slice key = items.items[i].text;
         pb_value value = items.items[i + 1];
-        if (slice_eq(key, "servers")) {
+        if (pb_slice_eq_lit(key, "servers")) {
             if (!load_bridge_list(&bridge.servers, &bridge.servers_len, &bridge.servers_cap, value, "servers")) {
                 goto fail;
             }
-        } else if (slice_eq(key, "export")) {
+        } else if (pb_slice_eq_lit(key, "export")) {
             if (!load_bridge_list(&bridge.exports, &bridge.exports_len, &bridge.exports_cap, value, "export")) {
                 goto fail;
             }
-        } else if (slice_eq(key, "name")) {
+        } else if (pb_slice_eq_lit(key, "name")) {
             if (!load_bridge_string(value, "name", &bridge.name)) {
                 goto fail;
             }
             bridge.has_name = true;
-        } else if (slice_eq(key, "creds")) {
+        } else if (pb_slice_eq_lit(key, "creds")) {
             if (!load_bridge_string(value, "creds", &bridge.creds)) {
                 goto fail;
             }
             bridge.has_creds = true;
-        } else if (slice_eq(key, "user")) {
+        } else if (pb_slice_eq_lit(key, "user")) {
             if (!load_bridge_string(value, "user", &bridge.user)) {
                 goto fail;
             }
             bridge.has_user = true;
-        } else if (slice_eq(key, "password")) {
+        } else if (pb_slice_eq_lit(key, "password")) {
             if (!load_bridge_string(value, "password", &bridge.password)) {
                 goto fail;
             }
             bridge.has_password = true;
-        } else if (slice_eq(key, "token")) {
+        } else if (pb_slice_eq_lit(key, "token")) {
             if (!load_bridge_string(value, "token", &bridge.token)) {
                 goto fail;
             }
             bridge.has_token = true;
-        } else if (slice_eq(key, "tls")) {
+        } else if (pb_slice_eq_lit(key, "tls")) {
             if (!load_bridge_bool(value, "tls", &bridge.tls)) {
                 goto fail;
             }
-        } else if (slice_eq(key, "tls-ca")) {
+        } else if (pb_slice_eq_lit(key, "tls-ca")) {
             if (!load_bridge_string(value, "tls-ca", &bridge.tls_ca)) {
                 goto fail;
             }
             bridge.has_tls_ca = true;
-        } else if (slice_eq(key, "tls-cert")) {
+        } else if (pb_slice_eq_lit(key, "tls-cert")) {
             if (!load_bridge_string(value, "tls-cert", &bridge.tls_cert)) {
                 goto fail;
             }
             bridge.has_tls_cert = true;
-        } else if (slice_eq(key, "tls-key")) {
+        } else if (pb_slice_eq_lit(key, "tls-key")) {
             if (!load_bridge_string(value, "tls-key", &bridge.tls_key)) {
                 goto fail;
             }
             bridge.has_tls_key = true;
-        } else if (slice_eq(key, "tls-skip-verify")) {
+        } else if (pb_slice_eq_lit(key, "tls-skip-verify")) {
             if (!load_bridge_bool(value, "tls-skip-verify", &bridge.tls_skip_verify)) {
                 goto fail;
             }
-        } else if (slice_eq(key, "connect-timeout-ms")) {
+        } else if (pb_slice_eq_lit(key, "connect-timeout-ms")) {
             if (!load_bridge_i64(value, "connect-timeout-ms", &bridge.connect_timeout_ms)) {
                 goto fail;
             }
             bridge.has_connect_timeout_ms = true;
-        } else if (slice_eq(key, "ping-interval-ms")) {
+        } else if (pb_slice_eq_lit(key, "ping-interval-ms")) {
             if (!load_bridge_i64(value, "ping-interval-ms", &bridge.ping_interval_ms)) {
                 goto fail;
             }
             bridge.has_ping_interval_ms = true;
-        } else if (slice_eq(key, "reconnect-wait-ms")) {
+        } else if (pb_slice_eq_lit(key, "reconnect-wait-ms")) {
             if (!load_bridge_i64(value, "reconnect-wait-ms", &bridge.reconnect_wait_ms)) {
                 goto fail;
             }
             bridge.has_reconnect_wait_ms = true;
-        } else if (slice_eq(key, "max-reconnect")) {
+        } else if (pb_slice_eq_lit(key, "max-reconnect")) {
             if (!load_bridge_int(value, "max-reconnect", &bridge.max_reconnect)) {
                 goto fail;
             }
@@ -342,13 +299,13 @@ static bool load_on_form(pb_program *program, pb_value form) {
         return false;
     }
     pb_values items = form.seq;
-    if (slice_eq(items.items[0].text, "lvc")) {
+    if (pb_slice_eq_lit(items.items[0].text, "lvc")) {
         return load_lvc_form(program, items);
     }
-    if (slice_eq(items.items[0].text, "bridge")) {
+    if (pb_slice_eq_lit(items.items[0].text, "bridge")) {
         return load_bridge_form(program, items);
     }
-    if (!slice_eq(items.items[0].text, "on")) {
+    if (!pb_slice_eq_lit(items.items[0].text, "on")) {
         return true;
     }
     if (items.len < 3 || items.items[1].kind != PB_STRING) {
@@ -367,7 +324,7 @@ static bool load_on_form(pb_program *program, pb_value form) {
             fprintf(stderr, "patchbay: invalid on options\n");
             return false;
         }
-        if (!slice_eq(items.items[i].text, "reentrant")) {
+        if (!pb_slice_eq_lit(items.items[i].text, "reentrant")) {
             fprintf(stderr, "patchbay: unknown on option: %.*s\n", (int)items.items[i].text.len,
                     items.items[i].text.ptr);
             return false;
@@ -382,13 +339,85 @@ static bool load_on_form(pb_program *program, pb_value form) {
     return rule_vec_append(program, rule);
 }
 
+static bool first_subject_token(pb_slice s, pb_slice *tok) {
+    size_t end = 0;
+    while (end < s.len && s.ptr[end] != '.') {
+        end += 1;
+    }
+    if (end == 0) {
+        return false;
+    }
+    *tok = (pb_slice){.ptr = s.ptr, .len = end};
+    return true;
+}
+
+static bool wildcard_token(pb_slice tok) {
+    return tok.len == 1 && (tok.ptr[0] == '*' || tok.ptr[0] == '>');
+}
+
+static bool rule_ref_append(pb_rule_ref_list *list, size_t rule_idx) {
+    if (!mb_array_reserve((void **)&list->items, &list->cap, list->len + 1,
+                          sizeof list->items[0], 8)) {
+        return false;
+    }
+    list->items[list->len] = rule_idx;
+    list->len += 1;
+    return true;
+}
+
+static pb_rule_bucket *rule_bucket(pb_program *program, pb_slice key) {
+    for (size_t i = 0; i < program->rule_bucket_len; i += 1) {
+        if (pb_slice_eq(program->rule_buckets[i].key, key)) {
+            return &program->rule_buckets[i];
+        }
+    }
+    if (!mb_array_reserve((void **)&program->rule_buckets, &program->rule_bucket_cap,
+                          program->rule_bucket_len + 1, sizeof program->rule_buckets[0], 8)) {
+        return NULL;
+    }
+    pb_rule_bucket *bucket = &program->rule_buckets[program->rule_bucket_len];
+    *bucket = (pb_rule_bucket){.key = key};
+    program->rule_bucket_len += 1;
+    return bucket;
+}
+
+static void rule_index_free(pb_program *program) {
+    for (size_t i = 0; i < program->rule_bucket_len; i += 1) {
+        free(program->rule_buckets[i].rules.items);
+    }
+    free(program->rule_buckets);
+    free(program->rule_global.items);
+    program->rule_buckets = NULL;
+    program->rule_bucket_len = 0;
+    program->rule_bucket_cap = 0;
+    program->rule_global = (pb_rule_ref_list){0};
+}
+
+static bool build_rule_index(pb_program *program) {
+    rule_index_free(program);
+    for (size_t i = 0; i < program->len; i += 1) {
+        pb_slice first = {0};
+        if (!first_subject_token(program->rules[i].filter, &first) || wildcard_token(first)) {
+            if (!rule_ref_append(&program->rule_global, i)) {
+                return false;
+            }
+            continue;
+        }
+        pb_rule_bucket *bucket = rule_bucket(program, first);
+        if (bucket == NULL || !rule_ref_append(&bucket->rules, i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool value_head_eq(pb_value v, const char *lit) {
-    return v.kind == PB_LIST && v.seq.len > 0 && v.seq.items[0].kind == PB_SYMBOL && slice_eq(v.seq.items[0].text, lit);
+    return v.kind == PB_LIST && v.seq.len > 0 && v.seq.items[0].kind == PB_SYMBOL && pb_slice_eq_lit(v.seq.items[0].text, lit);
 }
 
 static bool call_has_ms_window(pb_value v) {
     return v.kind == PB_LIST && v.seq.len >= 3 && v.seq.items[1].kind == PB_KEYWORD &&
-           slice_eq(v.seq.items[1].text, "ms");
+           pb_slice_eq_lit(v.seq.items[1].text, "ms");
 }
 
 static void scan_clock_forms(pb_program *program, pb_value v) {
@@ -431,6 +460,10 @@ static bool load_source(pb_program *program, const char *label, const char *sour
         }
         scan_clock_forms(program, parsed.forms.items[i]);
     }
+    if (!build_rule_index(program)) {
+        pb_program_free(program);
+        return false;
+    }
     if (log) {
         fprintf(stderr, "info: loaded %zu patchbay form(s) from %s\n", program->len, label);
         if (program->uses_wall_clock) {
@@ -448,15 +481,15 @@ bool pb_program_load_source(pb_program *program, const char *label, const char *
 }
 
 bool pb_program_load_file(pb_program *program, const char *path) {
-    char *source = NULL;
-    size_t source_len = 0;
-    if (!read_file(path, &source, &source_len)) {
+    mb_buf source = {0};
+    if (!mb_read_file(path, &source)) {
+        perror(path);
         *program = (pb_program){0};
         return false;
     }
 
-    const bool ok = load_source(program, path, source, source_len, true);
-    free(source);
+    const bool ok = load_source(program, path, (const char *)source.ptr, source.len, true);
+    mb_buf_free(&source);
     return ok;
 }
 
@@ -464,6 +497,7 @@ void pb_program_free(pb_program *program) {
     for (size_t i = 0; i < program->len; i += 1) {
         pb_eval_state_free(&program->rules[i].state);
     }
+    rule_index_free(program);
     free(program->rules);
     free(program->lvc.filters);
     free(program->bridge.servers);
@@ -473,41 +507,18 @@ void pb_program_free(pb_program *program) {
     *program = (pb_program){0};
 }
 
-static bool token_match(pb_slice filter, pb_slice subject) {
-    size_t fp = 0;
-    size_t sp = 0;
-
-    for (;;) {
-        const size_t fs = fp;
-        while (fp < filter.len && filter.ptr[fp] != '.')
-            fp += 1;
-        const pb_slice ftok = {.ptr = filter.ptr + fs, .len = fp - fs};
-
-        if (ftok.len == 1 && ftok.ptr[0] == '>') {
-            return true;
-        }
-
-        const size_t ss = sp;
-        while (sp < subject.len && subject.ptr[sp] != '.')
-            sp += 1;
-        if (ss == subject.len && ftok.len != 0) {
-            return false;
-        }
-        const pb_slice stok = {.ptr = subject.ptr + ss, .len = sp - ss};
-
-        if (!(ftok.len == 1 && ftok.ptr[0] == '*') &&
-            !(ftok.len == stok.len && memcmp(ftok.ptr, stok.ptr, ftok.len) == 0)) {
-            return false;
-        }
-
-        const bool fend = fp == filter.len;
-        const bool send = sp == subject.len;
-        if (fend || send) {
-            return fend && send;
-        }
-        fp += 1;
-        sp += 1;
+static const pb_rule_ref_list *rule_refs_for_subject(const pb_program *program, pb_slice subject) {
+    pb_slice first = {0};
+    if (!first_subject_token(subject, &first)) {
+        return NULL;
     }
+    for (size_t i = 0; i < program->rule_bucket_len; i += 1) {
+        const pb_rule_bucket *bucket = &program->rule_buckets[i];
+        if (pb_slice_eq(bucket->key, first)) {
+            return &bucket->rules;
+        }
+    }
+    return NULL;
 }
 
 static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice subject, pb_slice payload,
@@ -530,6 +541,40 @@ static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     return true;
 }
 
+static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t rule_idx,
+                                  pb_slice subject, pb_slice payload,
+                                  uint64_t now_ms, int64_t wall_ms, size_t depth) {
+    pb_rule *rule = &program->rules[rule_idx];
+    if (!slice_match(rule->filter, subject)) {
+        return true;
+    }
+    publish_ctx pub = {
+        .program = program,
+        .router = router,
+        .now_ms = now_ms,
+        .wall_ms = wall_ms,
+        .depth = depth,
+        .reentrant = rule->reentrant,
+    };
+    pb_eval_ctx ctx = {
+        .arena = &program->scratch,
+        .state = &rule->state,
+        .rule_id = rule_idx,
+        .now_ms = now_ms,
+        .wall_ms = wall_ms,
+        .subject = subject,
+        .payload = payload,
+        .publish = publish_cb,
+        .publish_ctx = &pub,
+    };
+    const pb_eval_result r = pb_eval(&ctx, rule->body);
+    if (r.err != PB_EVAL_OK) {
+        fprintf(stderr, "patchbay: rule %zu eval failed: %s\n", rule_idx, pb_eval_error_name(r.err));
+        return false;
+    }
+    return true;
+}
+
 static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice subject, pb_slice payload,
                                 uint64_t now_ms, int64_t wall_ms, size_t depth) {
     if (program == NULL || program->len == 0) {
@@ -537,33 +582,21 @@ static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice
     }
 
     bool ok = true;
-    for (size_t i = 0; i < program->len; i += 1) {
-        pb_rule *rule = &program->rules[i];
-        if (!token_match(rule->filter, subject)) {
-            continue;
+    const pb_rule_ref_list *bucket = rule_refs_for_subject(program, subject);
+    size_t bucket_pos = 0;
+    size_t global_pos = 0;
+    while ((bucket != NULL && bucket_pos < bucket->len) || global_pos < program->rule_global.len) {
+        const size_t bucket_idx = bucket != NULL && bucket_pos < bucket->len ? bucket->items[bucket_pos] : SIZE_MAX;
+        const size_t global_idx = global_pos < program->rule_global.len ? program->rule_global.items[global_pos] : SIZE_MAX;
+        size_t rule_idx = 0;
+        if (bucket_idx < global_idx) {
+            rule_idx = bucket_idx;
+            bucket_pos += 1;
+        } else {
+            rule_idx = global_idx;
+            global_pos += 1;
         }
-        publish_ctx pub = {
-            .program = program,
-            .router = router,
-            .now_ms = now_ms,
-            .wall_ms = wall_ms,
-            .depth = depth,
-            .reentrant = rule->reentrant,
-        };
-        pb_eval_ctx ctx = {
-            .arena = &program->scratch,
-            .state = &rule->state,
-            .rule_id = i,
-            .now_ms = now_ms,
-            .wall_ms = wall_ms,
-            .subject = subject,
-            .payload = payload,
-            .publish = publish_cb,
-            .publish_ctx = &pub,
-        };
-        const pb_eval_result r = pb_eval(&ctx, rule->body);
-        if (r.err != PB_EVAL_OK) {
-            fprintf(stderr, "patchbay: rule %zu eval failed: %s\n", i, pb_eval_error_name(r.err));
+        if (!eval_rule_for_publish(program, router, rule_idx, subject, payload, now_ms, wall_ms, depth)) {
             ok = false;
         }
     }
@@ -582,7 +615,7 @@ bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice su
                             (pb_slice){.ptr = (const char *)payload.ptr, .len = payload.len}, now_ms, wall_ms, 0);
     program->eval_depth -= 1;
     if (outer) {
-        pb_arena_reset(&program->scratch);
+        reset_scratch(program);
     }
     return ok;
 }
@@ -627,7 +660,7 @@ bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, in
     }
     program->eval_depth -= 1;
     if (outer) {
-        pb_arena_reset(&program->scratch);
+        reset_scratch(program);
     }
     return ok;
 }

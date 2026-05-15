@@ -184,7 +184,7 @@ nats -s 127.0.0.1:4223 sub "demo.sensors.*.spike"
   read-only visitor sees nothing on `demo.>` until someone
   publishes.
 - **No auth.** Treat it as a whiteboard, not storage.
-- **No JetStream, queues, headers, request/reply.** Core NATS only
+- **No JetStream, headers, request/reply.** Core NATS only
   (`PUB`, `SUB`, `UNSUB`, `PING`/`PONG`, `INFO`, `-ERR`).
 
 For the full primitive reference see [patchbay.md](./patchbay.md).

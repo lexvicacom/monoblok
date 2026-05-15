@@ -24,6 +24,25 @@ Keep the layout shallow:
 Prefer local, explicit C over frameworks or abstraction layers. The point of
 this branch is proving plain C can stay readable while staying fast.
 
+## Project Taste
+
+Monoblok is close in spirit to the Redis Manifesto: a small daemon exposing a
+clear data/protocol model, with memory-first predictable behavior and complexity
+kept visible instead of hidden behind opaque layers.
+
+- Treat the protocol, router, LVC, snapshots, and patchbay as concrete data
+  structures with visible cost. APIs should make the model easier to reason
+  about, not pretend hard tradeoffs disappeared.
+- Prefer in-memory state and bounded, predictable hot paths. Disk is for
+  snapshots and warm start, not a second storage engine unless the project
+  explicitly changes shape.
+- Say no to features that require broad abstraction, background magic,
+  publish-time allocation, or large dependency surfaces for a marginal win.
+- Dependencies are acceptable when they are self-contained, audited, and keep
+  the main story smaller; vendored code should remain an island.
+- Code should be pleasant to read because ownership, lifetimes, and performance
+  consequences are obvious. Favor direct, local C over clever generality.
+
 ## Build And Test
 
 ```sh
@@ -124,8 +143,8 @@ outbound buffering.
 Core only: `CONNECT`, `PUB`, `SUB`, `UNSUB`, `MSG`, `PING`, `PONG`, `INFO`,
 `+OK`, `-ERR`.
 
-There is no auth on the server side, queue groups, headers, JetStream, mixer,
-or `$SYS.*` request-reply. `CONNECT` bodies are accepted and ignored. `+OK` is
+There is no auth on the server side, headers, JetStream, mixer, or `$SYS.*`
+request-reply. `CONNECT` bodies are accepted and ignored. `+OK` is
 never sent.
 
 ## C Style

@@ -86,11 +86,20 @@ typedef struct pb_eval_state_entry {
     size_t emit_subject_cap;
 } pb_eval_state_entry;
 
+// Hash index entry for long-lived evaluator state slots.
+typedef struct pb_eval_state_index_entry {
+    uint64_t hash;
+    size_t index;
+    bool occupied;
+} pb_eval_state_index_entry;
+
 // Stateful patchbay storage owned by the caller and reused across publishes.
 typedef struct pb_eval_state {
     pb_eval_state_entry *items;
+    pb_eval_state_index_entry *index;
     size_t len;
     size_t cap;
+    size_t index_cap;
 } pb_eval_state;
 
 // Per-evaluation bindings and effect hooks; scratch allocations use arena.

@@ -1,7 +1,8 @@
 #include "pb_json.h"
 
+#include "fs.h"
+
 #include <stdio.h>
-#include <stdlib.h>
 
 static void dump_value(const pb_value *v, int depth);
 
@@ -42,42 +43,18 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    FILE *f = fopen(argv[1], "rb");
-    if (f == NULL) {
+    mb_buf src = {0};
+    if (!mb_read_file(argv[1], &src)) {
         perror(argv[1]);
-        return 1;
-    }
-    if (fseek(f, 0, SEEK_END) != 0) {
-        perror("fseek");
-        fclose(f);
-        return 1;
-    }
-    const long size = ftell(f);
-    if (size < 0) {
-        perror("ftell");
-        fclose(f);
-        return 1;
-    }
-    rewind(f);
-
-    char *src = malloc((size_t)size);
-    if (src == NULL) {
-        fclose(f);
-        return 1;
-    }
-    const size_t nread = fread(src, 1, (size_t)size, f);
-    fclose(f);
-    if (nread != (size_t)size) {
-        free(src);
         return 1;
     }
 
     pb_arena arena = {0};
-    const pb_parse_result r = pb_parse_patchbay_source(&arena, argv[1], src, (size_t)size);
+    const pb_parse_result r = pb_parse_patchbay_source(&arena, argv[1], (const char *)src.ptr, src.len);
     if (r.err != PB_PARSE_OK) {
         fprintf(stderr, "%s at byte %zu\n", pb_parse_error_name(r.err), r.err_offset);
         pb_arena_free(&arena);
-        free(src);
+        mb_buf_free(&src);
         return 1;
     }
 
@@ -87,6 +64,6 @@ int main(int argc, char **argv) {
     }
 
     pb_arena_free(&arena);
-    free(src);
+    mb_buf_free(&src);
     return 0;
 }

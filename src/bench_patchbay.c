@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "buf.h"
+#include "fs.h"
 #include "pb_program.h"
 
 #include <inttypes.h>
@@ -20,6 +21,8 @@ typedef enum bench_mode {
 typedef struct noop_publisher {
     uint64_t count;
 } noop_publisher;
+
+enum { BENCH_SCRATCH_RETAIN_BYTES = 4 * 1024 * 1024 };
 
 static const char *mode_name(bench_mode mode) {
     switch (mode) {
@@ -56,42 +59,6 @@ static uint64_t mono_ns(void) {
         return 0;
     }
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
-
-static bool read_file(const char *path, char **out, size_t *out_len) {
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) {
-        perror(path);
-        return false;
-    }
-    if (fseek(f, 0, SEEK_END) != 0) {
-        perror("fseek");
-        fclose(f);
-        return false;
-    }
-    const long size = ftell(f);
-    if (size < 0) {
-        perror("ftell");
-        fclose(f);
-        return false;
-    }
-    rewind(f);
-
-    char *buf = malloc((size_t)size + 1);
-    if (buf == NULL) {
-        fclose(f);
-        return false;
-    }
-    const size_t nread = fread(buf, 1, (size_t)size, f);
-    fclose(f);
-    if (nread != (size_t)size) {
-        free(buf);
-        return false;
-    }
-    buf[nread] = '\0';
-    *out = buf;
-    *out_len = nread;
-    return true;
 }
 
 static bool append_line(mb_buf *buf, const char *fmt, size_t i) {
@@ -145,46 +112,9 @@ static bool build_source(bench_mode mode, size_t n, char **out, size_t *out_len)
     return true;
 }
 
-static bool next_subject_token(pb_slice s, size_t *pos, pb_slice *tok) {
-    if (*pos > s.len) {
-        return false;
-    }
-    const size_t start = *pos;
-    while (*pos < s.len && s.ptr[*pos] != '.') {
-        *pos += 1;
-    }
-    if (*pos == start) {
-        return false;
-    }
-    *tok = (pb_slice){.ptr = s.ptr + start, .len = *pos - start};
-    *pos = *pos < s.len ? *pos + 1 : s.len + 1;
-    return true;
-}
-
-static bool token_eq(pb_slice a, pb_slice b) {
-    return a.len == b.len && memcmp(a.ptr, b.ptr, a.len) == 0;
-}
-
 static bool subject_matches(pb_slice filter, pb_slice subject) {
-    size_t fp = 0;
-    size_t sp = 0;
-    for (;;) {
-        pb_slice ftok = {0};
-        if (!next_subject_token(filter, &fp, &ftok)) {
-            return sp > subject.len;
-        }
-        if (ftok.len == 1 && ftok.ptr[0] == '>') {
-            return fp > filter.len;
-        }
-
-        pb_slice stok = {0};
-        if (!next_subject_token(subject, &sp, &stok)) {
-            return false;
-        }
-        if (!(ftok.len == 1 && ftok.ptr[0] == '*') && !token_eq(ftok, stok)) {
-            return false;
-        }
-    }
+    return mb_router_subject_matches((mb_slice){.ptr = (const uint8_t *)filter.ptr, .len = filter.len},
+                                     (mb_slice){.ptr = (const uint8_t *)subject.ptr, .len = subject.len});
 }
 
 static bool run_program(pb_program *program, pb_slice subject, pb_slice payload,
@@ -213,6 +143,7 @@ static bool run_program(pb_program *program, pb_slice subject, pb_slice payload,
         }
     }
     pb_arena_reset(&program->scratch);
+    pb_arena_trim(&program->scratch, BENCH_SCRATCH_RETAIN_BYTES);
     return ok;
 }
 
@@ -259,9 +190,16 @@ int main(int argc, char **argv) {
 
     char *source = NULL;
     size_t source_len = 0;
+    mb_buf file_source = {0};
     bool source_ok = false;
     if (mode == BENCH_MIXED) {
-        source_ok = read_file("patchbay.edn", &source, &source_len);
+        source_ok = mb_read_file("patchbay.edn", &file_source);
+        if (!source_ok) {
+            perror("patchbay.edn");
+        } else {
+            source = (char *)file_source.ptr;
+            source_len = file_source.len;
+        }
     } else {
         source_ok = build_source(mode, n, &source, &source_len);
     }
@@ -271,10 +209,18 @@ int main(int argc, char **argv) {
 
     pb_program program = {0};
     if (!pb_program_load_source(&program, mode == BENCH_MIXED ? "patchbay.edn" : "<bench>", source, source_len)) {
-        free(source);
+        if (mode == BENCH_MIXED) {
+            mb_buf_free(&file_source);
+        } else {
+            free(source);
+        }
         return 1;
     }
-    free(source);
+    if (mode == BENCH_MIXED) {
+        mb_buf_free(&file_source);
+    } else {
+        free(source);
+    }
 
     noop_publisher pub = {0};
     char subject_buf[64];

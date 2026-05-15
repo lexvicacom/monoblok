@@ -38,6 +38,7 @@ typedef enum mb_op_kind {
 typedef struct mb_op {
     mb_op_kind kind;
     mb_slice subject;
+    mb_slice queue;
     mb_slice sid;
     mb_slice payload;
     size_t max_msgs;

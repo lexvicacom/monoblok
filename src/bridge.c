@@ -2,6 +2,7 @@
 
 #include "bridge.h"
 
+#include "array.h"
 #include "router.h"
 
 #include "nats.h"
@@ -36,14 +37,9 @@ static char *slice_to_cstr(pb_slice slice) {
 }
 
 static char *track_cstr(bridge_strings *strings, pb_slice slice) {
-    if (strings->len == strings->cap) {
-        const size_t next = strings->cap == 0 ? 8 : strings->cap * 2;
-        char **items = realloc(strings->items, next * sizeof items[0]);
-        if (items == NULL) {
-            return NULL;
-        }
-        strings->items = items;
-        strings->cap = next;
+    if (!mb_array_reserve((void **)&strings->items, &strings->cap, strings->len + 1,
+                          sizeof strings->items[0], 8)) {
+        return NULL;
     }
     char *s = slice_to_cstr(slice);
     if (s == NULL) {
@@ -211,14 +207,10 @@ void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload) {
         bridge->dropped += 1;
         return;
     }
-    if (bridge->subject_scratch_cap < subject.len + 1) {
-        char *next = realloc(bridge->subject_scratch, subject.len + 1);
-        if (next == NULL) {
-            bridge->dropped += 1;
-            return;
-        }
-        bridge->subject_scratch = next;
-        bridge->subject_scratch_cap = subject.len + 1;
+    if (!mb_array_reserve((void **)&bridge->subject_scratch, &bridge->subject_scratch_cap,
+                          subject.len + 1, sizeof bridge->subject_scratch[0], 64)) {
+        bridge->dropped += 1;
+        return;
     }
     memcpy(bridge->subject_scratch, subject.ptr, subject.len);
     bridge->subject_scratch[subject.len] = '\0';

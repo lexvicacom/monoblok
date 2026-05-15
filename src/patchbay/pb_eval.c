@@ -1,5 +1,7 @@
 #include "pb_eval_internal.h"
 
+#include "array.h"
+
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -15,8 +17,7 @@ pb_eval_result fail(pb_eval_error err) {
 }
 
 bool text_eq(pb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    return s.len == n && memcmp(s.ptr, lit, n) == 0;
+    return pb_slice_eq_lit(s, lit);
 }
 
 bool truthy(pb_value v) {
@@ -113,7 +114,7 @@ bool value_eq(pb_value a, pb_value b) {
     case PB_SYMBOL:
     case PB_KEYWORD:
     case PB_STRING:
-        return a.text.len == b.text.len && memcmp(a.text.ptr, b.text.ptr, a.text.len) == 0;
+        return pb_slice_eq(a.text, b.text);
     case PB_LIST:
     case PB_VECTOR:
         return false;
@@ -217,15 +218,97 @@ void pb_eval_state_free(pb_eval_state *state) {
         state_entry_free(&state->items[i]);
     }
     free(state->items);
+    free(state->index);
     *state = (pb_eval_state){0};
+}
+
+static uint64_t state_hash_update(uint64_t h, const void *ptr, size_t len) {
+    const unsigned char *bytes = ptr;
+    for (size_t i = 0; i < len; i += 1) {
+        h ^= (uint64_t)bytes[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static uint64_t state_key_hash(size_t rule_id, pb_slice op, pb_slice subject) {
+    uint64_t h = 1469598103934665603ULL;
+    h = state_hash_update(h, &rule_id, sizeof rule_id);
+    h = state_hash_update(h, op.ptr, op.len);
+    h ^= 0xff;
+    h *= 1099511628211ULL;
+    return state_hash_update(h, subject.ptr, subject.len);
 }
 
 static bool state_key_eq(const pb_eval_state_entry *e, size_t rule_id, pb_slice op, pb_slice subject) {
     return e->rule_id == rule_id &&
-           e->op_len == op.len &&
-           e->subject_len == subject.len &&
-           memcmp(e->op, op.ptr, op.len) == 0 &&
-           memcmp(e->subject, subject.ptr, subject.len) == 0;
+           pb_slice_eq((pb_slice){.ptr = e->op, .len = e->op_len}, op) &&
+           pb_slice_eq((pb_slice){.ptr = e->subject, .len = e->subject_len}, subject);
+}
+
+static size_t state_index_cap_for(size_t needed) {
+    if (needed > SIZE_MAX / 4) {
+        return 0;
+    }
+    size_t cap = 16;
+    const size_t target = needed == 0 ? 16 : needed * 4;
+    while (cap < target) {
+        if (cap > SIZE_MAX / 2) {
+            return 0;
+        }
+        cap *= 2;
+    }
+    return cap;
+}
+
+static void state_index_insert(pb_eval_state_index_entry *index, size_t cap, uint64_t hash, size_t item_index) {
+    size_t slot = (size_t)(hash & (uint64_t)(cap - 1));
+    while (index[slot].occupied) {
+        slot = (slot + 1) & (cap - 1);
+    }
+    index[slot] = (pb_eval_state_index_entry){.hash = hash, .index = item_index, .occupied = true};
+}
+
+static bool state_index_rebuild(pb_eval_state *state, size_t needed) {
+    if (state->index_cap != 0 && needed < state->index_cap / 2) {
+        return true;
+    }
+    const size_t cap = state_index_cap_for(needed);
+    if (cap == 0) {
+        return false;
+    }
+    pb_eval_state_index_entry *index = calloc(cap, sizeof index[0]);
+    if (index == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < state->len; i += 1) {
+        const pb_eval_state_entry *e = &state->items[i];
+        const pb_slice op = {.ptr = e->op, .len = e->op_len};
+        const pb_slice subject = {.ptr = e->subject, .len = e->subject_len};
+        state_index_insert(index, cap, state_key_hash(e->rule_id, op, subject), i);
+    }
+    free(state->index);
+    state->index = index;
+    state->index_cap = cap;
+    return true;
+}
+
+static pb_eval_state_entry *state_index_find(pb_eval_state *state, size_t rule_id, pb_slice op, pb_slice subject, uint64_t hash) {
+    if (state->index_cap == 0) {
+        return NULL;
+    }
+    size_t slot = (size_t)(hash & (uint64_t)(state->index_cap - 1));
+    for (;;) {
+        const pb_eval_state_index_entry *entry = &state->index[slot];
+        if (!entry->occupied) {
+            return NULL;
+        }
+        pb_eval_state_entry *candidate = &state->items[entry->index];
+        if (entry->hash == hash && state_key_eq(candidate, rule_id, op, subject)) {
+            return candidate;
+        }
+        slot = (slot + 1) & (state->index_cap - 1);
+    }
 }
 
 static bool heap_dup_slice(pb_slice s, char **out, size_t *out_len) {
@@ -245,20 +328,29 @@ pb_eval_state_entry *state_slot(pb_eval_ctx *ctx, const char *op_lit) {
     }
 
     const pb_slice op = {.ptr = op_lit, .len = strlen(op_lit)};
-    for (size_t i = 0; i < ctx->state->len; i += 1) {
-        if (state_key_eq(&ctx->state->items[i], ctx->rule_id, op, ctx->subject)) {
-            return &ctx->state->items[i];
+    const uint64_t hash = state_key_hash(ctx->rule_id, op, ctx->subject);
+    if (ctx->state->index_cap == 0 && ctx->state->len >= 8) {
+        (void)state_index_rebuild(ctx->state, ctx->state->len);
+    }
+    pb_eval_state_entry *found = state_index_find(ctx->state, ctx->rule_id, op, ctx->subject, hash);
+    if (found != NULL) {
+        return found;
+    }
+    if (ctx->state->index_cap == 0) {
+        for (size_t i = 0; i < ctx->state->len; i += 1) {
+            if (state_key_eq(&ctx->state->items[i], ctx->rule_id, op, ctx->subject)) {
+                return &ctx->state->items[i];
+            }
         }
     }
 
-    if (ctx->state->len == ctx->state->cap) {
-        const size_t next = ctx->state->cap == 0 ? 8 : ctx->state->cap * 2;
-        pb_eval_state_entry *items = realloc(ctx->state->items, next * sizeof items[0]);
-        if (items == NULL) {
-            return NULL;
-        }
-        ctx->state->items = items;
-        ctx->state->cap = next;
+    if ((ctx->state->index_cap != 0 || ctx->state->len >= 8) &&
+        !state_index_rebuild(ctx->state, ctx->state->len + 1)) {
+        return NULL;
+    }
+    if (!mb_array_reserve((void **)&ctx->state->items, &ctx->state->cap,
+                          ctx->state->len + 1, sizeof ctx->state->items[0], 8)) {
+        return NULL;
     }
 
     pb_eval_state_entry *e = &ctx->state->items[ctx->state->len];
@@ -269,6 +361,9 @@ pb_eval_state_entry *state_slot(pb_eval_ctx *ctx, const char *op_lit) {
         return NULL;
     }
     ctx->state->len += 1;
+    if (ctx->state->index_cap != 0) {
+        state_index_insert(ctx->state->index, ctx->state->index_cap, hash, ctx->state->len - 1);
+    }
     return e;
 }
 

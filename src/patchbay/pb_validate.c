@@ -1,52 +1,10 @@
 #include "pb_validate.h"
 
+#include "fs.h"
 #include "pb_eval.h"
 #include "pb_json.h"
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-static bool slice_eq(pb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    return s.len == n && memcmp(s.ptr, lit, n) == 0;
-}
-
-static bool read_file(const char *path, char **out, size_t *out_len) {
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) {
-        perror(path);
-        return false;
-    }
-    if (fseek(f, 0, SEEK_END) != 0) {
-        perror("fseek");
-        fclose(f);
-        return false;
-    }
-    const long size = ftell(f);
-    if (size < 0) {
-        perror("ftell");
-        fclose(f);
-        return false;
-    }
-    rewind(f);
-
-    char *buf = malloc((size_t)size + 1);
-    if (buf == NULL) {
-        fclose(f);
-        return false;
-    }
-    const size_t nread = fread(buf, 1, (size_t)size, f);
-    fclose(f);
-    if (nread != (size_t)size) {
-        free(buf);
-        return false;
-    }
-    buf[nread] = '\0';
-    *out = buf;
-    *out_len = nread;
-    return true;
-}
 
 static bool discard_publish(void *ctx, pb_slice subject, pb_slice payload) {
     (void)ctx;
@@ -62,7 +20,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
     }
 
     pb_values items = form.seq;
-    if (slice_eq(items.items[0].text, "lvc")) {
+    if (pb_slice_eq_lit(items.items[0].text, "lvc")) {
         if (items.len < 2) {
             fprintf(stderr, "validate: lvc expects at least one filter\n");
             return false;
@@ -89,7 +47,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
         }
         return true;
     }
-    if (slice_eq(items.items[0].text, "bridge")) {
+    if (pb_slice_eq_lit(items.items[0].text, "bridge")) {
         if (items.len < 3 || (items.len % 2) == 0) {
             fprintf(stderr, "validate: bridge expects keyword/value options\n");
             return false;
@@ -102,8 +60,8 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
             }
             pb_slice key = items.items[i].text;
             pb_value value = items.items[i + 1];
-            if (slice_eq(key, "servers") || slice_eq(key, "export")) {
-                if (slice_eq(key, "servers")) {
+            if (pb_slice_eq_lit(key, "servers") || pb_slice_eq_lit(key, "export")) {
+                if (pb_slice_eq_lit(key, "servers")) {
                     has_servers = true;
                 }
                 if (value.kind == PB_STRING) {
@@ -129,20 +87,20 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                         return false;
                     }
                 }
-            } else if (slice_eq(key, "tls") || slice_eq(key, "tls-skip-verify")) {
+            } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify")) {
                 if (value.kind != PB_BOOL) {
                     fprintf(stderr, "validate: bridge :%.*s expects boolean\n", (int)key.len, key.ptr);
                     return false;
                 }
-            } else if (slice_eq(key, "connect-timeout-ms") || slice_eq(key, "ping-interval-ms") ||
-                       slice_eq(key, "reconnect-wait-ms") || slice_eq(key, "max-reconnect")) {
+            } else if (pb_slice_eq_lit(key, "connect-timeout-ms") || pb_slice_eq_lit(key, "ping-interval-ms") ||
+                       pb_slice_eq_lit(key, "reconnect-wait-ms") || pb_slice_eq_lit(key, "max-reconnect")) {
                 if (value.kind != PB_NUMBER) {
                     fprintf(stderr, "validate: bridge :%.*s expects number\n", (int)key.len, key.ptr);
                     return false;
                 }
-            } else if (slice_eq(key, "name") || slice_eq(key, "creds") || slice_eq(key, "user") ||
-                       slice_eq(key, "password") || slice_eq(key, "token") || slice_eq(key, "tls-ca") ||
-                       slice_eq(key, "tls-cert") || slice_eq(key, "tls-key")) {
+            } else if (pb_slice_eq_lit(key, "name") || pb_slice_eq_lit(key, "creds") || pb_slice_eq_lit(key, "user") ||
+                       pb_slice_eq_lit(key, "password") || pb_slice_eq_lit(key, "token") || pb_slice_eq_lit(key, "tls-ca") ||
+                       pb_slice_eq_lit(key, "tls-cert") || pb_slice_eq_lit(key, "tls-key")) {
                 if (value.kind != PB_STRING || value.text.len == 0) {
                     fprintf(stderr, "validate: bridge :%.*s expects non-empty string\n", (int)key.len, key.ptr);
                     return false;
@@ -158,7 +116,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
         }
         return true;
     }
-    if (!slice_eq(items.items[0].text, "on")) {
+    if (!pb_slice_eq_lit(items.items[0].text, "on")) {
         return true;
     }
     *rule_count += 1;
@@ -175,7 +133,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
             fprintf(stderr, "validate: invalid on options\n");
             return false;
         }
-        if (!slice_eq(items.items[i].text, "reentrant")) {
+        if (!pb_slice_eq_lit(items.items[i].text, "reentrant")) {
             fprintf(stderr, "validate: unknown on option: %.*s\n", (int)items.items[i].text.len,
                     items.items[i].text.ptr);
             return false;
@@ -208,18 +166,18 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
 }
 
 int pb_validate_file(const char *path) {
-    char *source = NULL;
-    size_t source_len = 0;
-    if (!read_file(path, &source, &source_len)) {
+    mb_buf source = {0};
+    if (!mb_read_file(path, &source)) {
+        perror(path);
         return 1;
     }
 
     pb_arena arena = {0};
-    const pb_parse_result parsed = pb_parse_patchbay_source(&arena, path, source, source_len);
+    const pb_parse_result parsed = pb_parse_patchbay_source(&arena, path, (const char *)source.ptr, source.len);
     if (parsed.err != PB_PARSE_OK) {
         fprintf(stderr, "validate: parse error: %s at byte %zu\n", pb_parse_error_name(parsed.err), parsed.err_offset);
         pb_arena_free(&arena);
-        free(source);
+        mb_buf_free(&source);
         return 1;
     }
 
@@ -236,6 +194,6 @@ int pb_validate_file(const char *path) {
     }
 
     pb_arena_free(&arena);
-    free(source);
+    mb_buf_free(&source);
     return ok ? 0 : 1;
 }

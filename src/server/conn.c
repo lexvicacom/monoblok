@@ -15,6 +15,9 @@ static void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) 
 }
 
 static void unlink_conn(mb_conn *conn) {
+    if (conn->prev == NULL && conn->next == NULL && conn->server->conns != conn) {
+        return;
+    }
     if (conn->prev != NULL) {
         conn->prev->next = conn->next;
     } else {
@@ -79,8 +82,14 @@ static void trace_op(mb_conn *conn, mb_op op) {
         fprintf(stderr, "trace: conn %" PRIu64 " PING\n", conn->client_id);
         break;
     case MB_OP_SUB:
-        fprintf(stderr, "trace: conn %" PRIu64 " SUB %.*s %.*s\n", conn->client_id,
-                (int)op.subject.len, op.subject.ptr, (int)op.sid.len, op.sid.ptr);
+        if (op.queue.len != 0) {
+            fprintf(stderr, "trace: conn %" PRIu64 " SUB %.*s %.*s %.*s\n", conn->client_id,
+                    (int)op.subject.len, op.subject.ptr, (int)op.queue.len, op.queue.ptr,
+                    (int)op.sid.len, op.sid.ptr);
+        } else {
+            fprintf(stderr, "trace: conn %" PRIu64 " SUB %.*s %.*s\n", conn->client_id,
+                    (int)op.subject.len, op.subject.ptr, (int)op.sid.len, op.sid.ptr);
+        }
         break;
     case MB_OP_UNSUB:
         fprintf(stderr, "trace: conn %" PRIu64 " UNSUB %.*s\n", conn->client_id,
@@ -120,7 +129,7 @@ static void handle_op(mb_conn *conn, mb_op op) {
     case MB_OP_SUB:
         if (mb_router_subject_has_lvc_prefix(op.subject) && !conn->server->lvc_enabled) {
             write_err_or_close(conn, "$LVC is disabled");
-        } else if (!mb_router_subscribe(&conn->server->router, &conn->router_conn, op.subject, op.sid)) {
+        } else if (!mb_router_subscribe_queue(&conn->server->router, &conn->router_conn, op.subject, op.queue, op.sid)) {
             write_err_or_close(conn, "Subscribe Failed");
         }
         break;
