@@ -37,6 +37,17 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  sanitizer:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure ASan/UBSan
+        run: cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DMB_ASAN=ON
+      - name: Build ASan/UBSan
+        run: cmake --build build-asan
+      - name: Test ASan/UBSan
+        run: ctest --test-dir build-asan --output-on-failure
+
   smoke:
     needs: test
     runs-on: ubuntu-22.04
