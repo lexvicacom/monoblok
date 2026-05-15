@@ -1,5 +1,6 @@
 #include "array.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 bool mb_array_reserve(void **items, size_t *cap, size_t needed,
