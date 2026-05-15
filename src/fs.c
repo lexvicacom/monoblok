@@ -1,14 +1,8 @@
 #include "fs.h"
 
-#include <errno.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifndef _WIN32
-#include <unistd.h>
-#endif
 
 bool mb_read_file(const char *path, mb_buf *out) {
     if (path == NULL || out == NULL) {
@@ -35,7 +29,9 @@ bool mb_read_file(const char *path, mb_buf *out) {
         }
     }
 
-    fclose(f);
+    if (fclose(f) != 0) {
+        ok = false;
+    }
     return ok;
 }
 
@@ -47,14 +43,21 @@ bool mb_write_file_atomic(const char *path, mb_slice bytes) {
         return false;
     }
 
-    char tmp_path[PATH_MAX];
-    const int rc = snprintf(tmp_path, sizeof tmp_path, "%s.tmp", path);
-    if (rc < 0 || (size_t)rc >= sizeof tmp_path) {
+    const size_t path_len = strlen(path);
+    if (path_len > SIZE_MAX - 5) {
         return false;
     }
 
+    char *tmp_path = malloc(path_len + 5);
+    if (tmp_path == NULL) {
+        return false;
+    }
+    memcpy(tmp_path, path, path_len);
+    memcpy(tmp_path + path_len, ".tmp", 5);
+
     FILE *f = fopen(tmp_path, "wb");
     if (f == NULL) {
+        free(tmp_path);
         return false;
     }
 
@@ -68,25 +71,22 @@ bool mb_write_file_atomic(const char *path, mb_slice bytes) {
         ok = false;
     }
 
-#ifndef _WIN32
-    if (ok && fsync(fileno(f)) != 0) {
-        ok = false;
-    }
-#endif
-
     if (fclose(f) != 0) {
         ok = false;
     }
 
     if (!ok) {
         remove(tmp_path);
+        free(tmp_path);
         return false;
     }
 
     if (rename(tmp_path, path) != 0) {
         remove(tmp_path);
+        free(tmp_path);
         return false;
     }
 
+    free(tmp_path);
     return true;
 }
