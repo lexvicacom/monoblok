@@ -13,7 +13,7 @@ static bool eq_upper(mb_slice s, const char *lit) {
         return false;
     }
     for (size_t i = 0; i < n; i += 1) {
-        if ((char)toupper(s.ptr[i]) != lit[i]) {
+        if ((char)toupper((unsigned char)s.ptr[i]) != lit[i]) {
             return false;
         }
     }
