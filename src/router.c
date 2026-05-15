@@ -1,7 +1,9 @@
 #include "router.h"
 
+#include "array.h"
+#include "slice.h"
+
 #include <stdlib.h>
-#include <string.h>
 
 static void free_sub(mb_subscription *sub) {
     free(sub->subject);
@@ -9,29 +11,13 @@ static void free_sub(mb_subscription *sub) {
     *sub = (mb_subscription){0};
 }
 
-static bool dup_slice(mb_slice s, uint8_t **out_ptr, size_t *out_len) {
-    uint8_t *ptr = malloc(s.len == 0 ? 1 : s.len);
-    if (ptr == NULL) {
-        return false;
-    }
-    memcpy(ptr, s.ptr, s.len);
-    *out_ptr = ptr;
-    *out_len = s.len;
-    return true;
-}
-
-static bool slice_eq_bytes(const uint8_t *ptr, size_t len, mb_slice s) {
-    return len == s.len && memcmp(ptr, s.ptr, len) == 0;
-}
-
 static bool sid_eq(const mb_subscription *sub, mb_slice sid) {
-    return slice_eq_bytes(sub->sid, sub->sid_len, sid);
+    return mb_slice_eq_bytes(sub->sid, sub->sid_len, sid);
 }
 
 bool mb_router_subject_has_lvc_prefix(mb_slice subject) {
     static const char prefix[] = MB_LVC_PREFIX;
-    const size_t prefix_len = sizeof prefix - 1;
-    return subject.len >= prefix_len && memcmp(subject.ptr, prefix, prefix_len) == 0;
+    return mb_slice_has_prefix(subject, prefix, sizeof prefix - 1);
 }
 
 static mb_slice lvc_inner_subject(mb_slice subject) {
@@ -40,14 +26,9 @@ static mb_slice lvc_inner_subject(mb_slice subject) {
 }
 
 static bool sub_list_append(mb_sub_list *list, mb_subscription sub) {
-    if (list->len == list->cap) {
-        const size_t next = list->cap == 0 ? 8 : list->cap * 2;
-        mb_subscription *items = realloc(list->items, next * sizeof items[0]);
-        if (items == NULL) {
-            return false;
-        }
-        list->items = items;
-        list->cap = next;
+    if (!mb_array_reserve((void **)&list->items, &list->cap, list->len + 1,
+                          sizeof list->items[0], 8)) {
+        return false;
     }
     list->items[list->len] = sub;
     list->len += 1;
@@ -107,10 +88,6 @@ static bool is_literal_filter(mb_slice filter) {
     return true;
 }
 
-static bool token_eq(mb_slice a, mb_slice b) {
-    return a.len == b.len && memcmp(a.ptr, b.ptr, a.len) == 0;
-}
-
 static bool subject_matches(mb_slice filter, mb_slice subject) {
     size_t fp = 0;
     size_t sp = 0;
@@ -127,7 +104,7 @@ static bool subject_matches(mb_slice filter, mb_slice subject) {
         if (!next_subject_token(subject, &sp, &stok)) {
             return false;
         }
-        if (!(ftok.len == 1 && ftok.ptr[0] == '*') && !token_eq(ftok, stok)) {
+        if (!(ftok.len == 1 && ftok.ptr[0] == '*') && !mb_slice_eq(ftok, stok)) {
             return false;
         }
     }
@@ -138,50 +115,23 @@ bool mb_router_subject_matches(mb_slice filter, mb_slice subject) {
 }
 
 static bool grow_literal_buckets(mb_router *router) {
-    if (router->literal_len != router->literal_cap) {
-        return true;
-    }
-    const size_t next = router->literal_cap == 0 ? 8 : router->literal_cap * 2;
-    mb_literal_bucket *items = realloc(router->literal, next * sizeof items[0]);
-    if (items == NULL) {
-        return false;
-    }
-    router->literal = items;
-    router->literal_cap = next;
-    return true;
+    return mb_array_reserve((void **)&router->literal, &router->literal_cap,
+                            router->literal_len + 1, sizeof router->literal[0], 8);
 }
 
 static bool grow_wildcard_buckets(mb_router *router) {
-    if (router->wildcard_len != router->wildcard_cap) {
-        return true;
-    }
-    const size_t next = router->wildcard_cap == 0 ? 8 : router->wildcard_cap * 2;
-    mb_wildcard_bucket *items = realloc(router->wildcard, next * sizeof items[0]);
-    if (items == NULL) {
-        return false;
-    }
-    router->wildcard = items;
-    router->wildcard_cap = next;
-    return true;
+    return mb_array_reserve((void **)&router->wildcard, &router->wildcard_cap,
+                            router->wildcard_len + 1, sizeof router->wildcard[0], 8);
 }
 
 static bool ensure_kick_capacity(mb_router *router, size_t needed) {
-    if (router->kick_cap >= needed) {
-        return true;
-    }
-    const size_t next = needed == 0 ? 1 : needed;
-    mb_router_conn **items = realloc(router->kick_scratch, next * sizeof items[0]);
-    if (items == NULL) {
-        return false;
-    }
-    router->kick_scratch = items;
-    router->kick_cap = next;
-    return true;
+    return mb_array_reserve((void **)&router->kick_scratch, &router->kick_cap,
+                            needed, sizeof router->kick_scratch[0], 1);
 }
 
 static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool create) {
     for (size_t i = 0; i < router->literal_len; i += 1) {
-        if (slice_eq_bytes(router->literal[i].key, router->literal[i].key_len, key)) {
+        if (mb_slice_eq_bytes(router->literal[i].key, router->literal[i].key_len, key)) {
             return &router->literal[i];
         }
     }
@@ -190,7 +140,7 @@ static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool c
     }
     mb_literal_bucket *bucket = &router->literal[router->literal_len];
     *bucket = (mb_literal_bucket){0};
-    if (!dup_slice(key, &bucket->key, &bucket->key_len)) {
+    if (!mb_slice_dup(key, &bucket->key, &bucket->key_len)) {
         return NULL;
     }
     router->literal_len += 1;
@@ -199,7 +149,7 @@ static mb_literal_bucket *literal_bucket(mb_router *router, mb_slice key, bool c
 
 static mb_wildcard_bucket *wildcard_bucket(mb_router *router, mb_slice key, bool create) {
     for (size_t i = 0; i < router->wildcard_len; i += 1) {
-        if (slice_eq_bytes(router->wildcard[i].key, router->wildcard[i].key_len, key)) {
+        if (mb_slice_eq_bytes(router->wildcard[i].key, router->wildcard[i].key_len, key)) {
             return &router->wildcard[i];
         }
     }
@@ -208,7 +158,7 @@ static mb_wildcard_bucket *wildcard_bucket(mb_router *router, mb_slice key, bool
     }
     mb_wildcard_bucket *bucket = &router->wildcard[router->wildcard_len];
     *bucket = (mb_wildcard_bucket){0};
-    if (!dup_slice(key, &bucket->key, &bucket->key_len)) {
+    if (!mb_slice_dup(key, &bucket->key, &bucket->key_len)) {
         return NULL;
     }
     router->wildcard_len += 1;
@@ -267,18 +217,14 @@ bool mb_router_configure_lvc(mb_router *router, const mb_slice *filters, size_t 
     if (filter_len == 0) {
         return true;
     }
-    if (router->lvc_filter_cap < filter_len) {
-        mb_lvc_filter *next = realloc(router->lvc_filters, filter_len * sizeof next[0]);
-        if (next == NULL) {
-            return false;
-        }
-        router->lvc_filters = next;
-        router->lvc_filter_cap = filter_len;
+    if (!mb_array_reserve((void **)&router->lvc_filters, &router->lvc_filter_cap,
+                          filter_len, sizeof router->lvc_filters[0], 8)) {
+        return false;
     }
     for (size_t i = 0; i < filter_len; i += 1) {
         mb_lvc_filter *filter = &router->lvc_filters[i];
         *filter = (mb_lvc_filter){0};
-        if (!dup_slice(filters[i], &filter->filter, &filter->filter_len)) {
+        if (!mb_slice_dup(filters[i], &filter->filter, &filter->filter_len)) {
             for (size_t j = 0; j < i; j += 1) {
                 lvc_filter_free(&router->lvc_filters[j]);
             }
@@ -298,7 +244,7 @@ static void lvc_entry_free(mb_lvc_entry *entry) {
 
 static mb_lvc_entry *lvc_entry_find(mb_router *router, mb_slice subject) {
     for (size_t i = 0; i < router->lvc_len; i += 1) {
-        if (slice_eq_bytes(router->lvc[i].subject, router->lvc[i].subject_len, subject)) {
+        if (mb_slice_eq_bytes(router->lvc[i].subject, router->lvc[i].subject_len, subject)) {
             return &router->lvc[i];
         }
     }
@@ -324,18 +270,13 @@ static bool lvc_store(mb_router *router, mb_slice subject, mb_slice payload) {
     }
     mb_lvc_entry *entry = lvc_entry_find(router, subject);
     if (entry == NULL) {
-        if (router->lvc_len == router->lvc_cap) {
-            const size_t next = router->lvc_cap == 0 ? 16 : router->lvc_cap * 2;
-            mb_lvc_entry *items = realloc(router->lvc, next * sizeof items[0]);
-            if (items == NULL) {
-                return false;
-            }
-            router->lvc = items;
-            router->lvc_cap = next;
+        if (!mb_array_reserve((void **)&router->lvc, &router->lvc_cap,
+                              router->lvc_len + 1, sizeof router->lvc[0], 16)) {
+            return false;
         }
         entry = &router->lvc[router->lvc_len];
         *entry = (mb_lvc_entry){0};
-        if (!dup_slice(subject, &entry->subject, &entry->subject_len)) {
+        if (!mb_slice_dup(subject, &entry->subject, &entry->subject_len)) {
             return false;
         }
         router->lvc_len += 1;
@@ -418,10 +359,10 @@ bool mb_router_subscribe(mb_router *router, mb_router_conn *conn, mb_slice subje
     }
 
     mb_subscription sub = {.conn = conn, .is_lvc = is_lvc};
-    if (!dup_slice(match_subject, &sub.subject, &sub.subject_len)) {
+    if (!mb_slice_dup(match_subject, &sub.subject, &sub.subject_len)) {
         return false;
     }
-    if (!dup_slice(sid, &sub.sid, &sub.sid_len)) {
+    if (!mb_slice_dup(sid, &sub.sid, &sub.sid_len)) {
         free_sub(&sub);
         return false;
     }
