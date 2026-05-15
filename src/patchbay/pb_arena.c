@@ -1,5 +1,6 @@
 #include "pb_arena.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
