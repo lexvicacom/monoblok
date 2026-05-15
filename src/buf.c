@@ -34,6 +34,12 @@ bool mb_buf_reserve(mb_buf *buf, size_t additional) {
 }
 
 bool mb_buf_append(mb_buf *buf, const void *src, size_t len) {
+    if (len == 0) {
+        return true;
+    }
+    if (src == NULL) {
+        return false;
+    }
     if (!mb_buf_reserve(buf, len)) {
         return false;
     }
