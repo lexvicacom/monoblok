@@ -8,7 +8,7 @@
 ;; Start a local remote to point at:
 ;;   nats-server -p 14888
 ;; Then run monoblok against this file:
-;;   ./zig-out/bin/monoblok --port 4222 --patchbay examples/bridge.edn
+;;   ./build/monoblok --port 4222 --patchbay examples/bridge.edn
 ;; And watch forwarded messages on the remote:
 ;;   nats -s nats://127.0.0.1:14888 sub 'telemetry.>'
 ;; Publish into monoblok to drive the bridge:

@@ -55,8 +55,8 @@
 
 (on "moonwell.*.env.pressure"
   (-> payload-float
-      (deadband 0.8)
       (round 1)
+      (deadband 0.8)
       (publish! (subject-append "stable"))))
 
 (on "moonwell.*.drill.depth"

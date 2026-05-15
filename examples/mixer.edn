@@ -1,6 +1,0 @@
-(mixer
-  :listen "tcp://0.0.0.0:14222"
-  :workers
-    [[:shard "SENSORS" :patchbay "examples/mixer-sensors.edn"]
-     [:shard "ORDERS"  :patchbay "examples/mixer-orders.edn"]
-     [:shard "*"       :patchbay "examples/mixer-default.edn"]])

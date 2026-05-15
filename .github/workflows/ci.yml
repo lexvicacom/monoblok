@@ -2,6 +2,9 @@ name: CI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
   pull_request:
     types:
       - opened
@@ -30,27 +33,36 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel
       - name: Test
-        run: zig build test --summary all
+        run: ctest --test-dir build --output-on-failure
 
-  smoke:
-    needs: test
+  sanitizer:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      - name: Install sanitizer dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - name: Configure ASan/UBSan
+        run: cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DMB_ASAN=ON
+      - name: Build ASan/UBSan
+        run: cmake --build build-asan --parallel
+      - name: Test ASan/UBSan
+        run: ctest --test-dir build-asan --output-on-failure
+
+  smoke:
+    needs:
+      - test
+      - sanitizer
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
       - name: Install smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd
-      - name: Build
-        run: zig build
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev netcat-openbsd
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Server smoke
-        run: bash scripts/smoke.sh
-      - name: Mixer PUB smoke
-        run: bash scripts/mixer-smoke.sh
-      - name: Mixer SUB smoke
-        run: python3 scripts/mixer-sub-smoke.py
+        run: cmake --build build --target smoke --parallel

@@ -1,2 +1,0 @@
-; Catch-all shard: no conditioning, just deliver as-is.
-(on ">" payload)

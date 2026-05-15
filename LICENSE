@@ -24,15 +24,19 @@ SOFTWARE.
 
 Third-party components:
 
-- libxev (https://github.com/mitchellh/libxev) — MIT License,
-  Copyright (c) Mitchell Hashimoto. Used as the event loop / networking
-  backend.
+- libuv (https://github.com/libuv/libuv) — MIT License,
+  Copyright (c) 2015-present libuv project contributors. Vendored under
+  `vendor/libuv/`. Full license text at `vendor/libuv/LICENSE`.
+
+- yyjson (https://github.com/ibireme/yyjson) — MIT License,
+  Copyright (c) 2020 YaoYuan. Vendored under `vendor/yyjson/`. Full license
+  text at `vendor/yyjson/LICENSE`.
 
 - nats.c (https://github.com/nats-io/nats.c) — Apache License 2.0,
   Copyright (c) The NATS Authors. Vendored under `vendor/nats.c/` and
-  statically linked into the outbound NATS bridge (when built with the
-  default `-Dbridge=true`). Full license text at `vendor/nats.c/LICENSE`.
+  statically linked into the outbound NATS bridge. Full license text at
+  `vendor/nats.c/LICENSE`.
 
 - OpenSSL (https://www.openssl.org/) — Apache License 2.0,
-  Copyright (c) The OpenSSL Project Authors. Dynamically linked at
-  runtime when the bridge is enabled; not redistributed by this project.
+  Copyright (c) The OpenSSL Project Authors. Dynamically linked when
+  `MB_NATS_TLS=ON`; not vendored or redistributed by this project.

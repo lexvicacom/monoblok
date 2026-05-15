@@ -2,13 +2,13 @@
 URL="nats://127.0.0.1:$PORT"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/zig-out/bin/monoblok"
+BIN="$ROOT/build/monoblok"
 NAME="$(basename "${0%.sh}")"
 TMP="/tmp/monoblok-$NAME"
 
 if [ ! -x "$BIN" ]; then
     echo "building monoblok..."
-    (cd "$ROOT" && zig build) || exit 1
+    (cd "$ROOT" && cmake -S . -B build >/dev/null && cmake --build build --target monoblok) || exit 1
 fi
 
 if ! command -v nats >/dev/null; then
