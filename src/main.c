@@ -50,6 +50,7 @@ static void banner(void) {
            "monoblok v%s\n"
            "\n\n",
            MB_VERSION);
+    fflush(stdout);
 }
 
 static const char *backend_name(void) {

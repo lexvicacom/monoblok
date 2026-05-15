@@ -269,6 +269,7 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
 
 int mb_server_run(mb_server *server) {
     printf("monoblok listening on %s:%u\n", server->host, server->port);
+    fflush(stdout);
     return uv_run(&server->loop, UV_RUN_DEFAULT);
 }
 
