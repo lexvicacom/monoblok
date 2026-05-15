@@ -1,22 +1,17 @@
 #include "pb_eval.h"
+#include "test_check.h"
+#include "test_pb_check.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define CHECK(expr) do { if (!(expr)) fail(__FILE__, __LINE__, #expr); } while (0)
-
 typedef struct published {
     pb_slice subjects[8];
     pb_slice payloads[8];
     int count;
 } published;
-
-static void fail(const char *file, int line, const char *expr) {
-    fprintf(stderr, "%s:%d: check failed: %s\n", file, line, expr);
-    exit(1);
-}
 
 static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     published *p = ctx;
@@ -26,14 +21,6 @@ static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     }
     p->count += 1;
     return true;
-}
-
-static void check_text(pb_slice s, const char *want) {
-    CHECK(s.len == strlen(want));
-    if (memcmp(s.ptr, want, s.len) != 0) {
-        fprintf(stderr, "got: %.*s, want: %s\n", (int)s.len, s.ptr, want);
-    }
-    CHECK(memcmp(s.ptr, want, s.len) == 0);
 }
 
 static pb_eval_result eval_src_core(pb_arena *arena, pb_eval_state *state, const char *src, const char *payload,
@@ -689,21 +676,18 @@ static void test_json_demux(void) {
     pb_arena_free(&arena);
 }
 
-int main(void) {
-    test_bound_symbols_and_math();
-    test_contains_string_and_vector();
-    test_if_when_do();
-    test_subject_helpers();
-    test_publish();
-    test_thread_and_numeric_helpers();
-    test_stateful_helpers();
-    test_edge_and_holdoff_helpers();
-    test_windowed_analytics();
-    test_rate_throttle_and_clock_forms();
-    test_transition_helper();
-    test_now_and_bar();
-    test_json_get();
-    test_json_demux();
-    puts("eval tests passed");
-    return 0;
-}
+TEST_MAIN(eval,
+          test_bound_symbols_and_math,
+          test_contains_string_and_vector,
+          test_if_when_do,
+          test_subject_helpers,
+          test_publish,
+          test_thread_and_numeric_helpers,
+          test_stateful_helpers,
+          test_edge_and_holdoff_helpers,
+          test_windowed_analytics,
+          test_rate_throttle_and_clock_forms,
+          test_transition_helper,
+          test_now_and_bar,
+          test_json_get,
+          test_json_demux)

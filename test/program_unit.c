@@ -1,20 +1,10 @@
 #include "pb_program.h"
+#include "test_check.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#define CHECK(expr)                          \
-    do {                                     \
-        if (!(expr))                         \
-            fail(__FILE__, __LINE__, #expr); \
-    } while (0)
-
-static void fail(const char *file, int line, const char *expr) {
-    fprintf(stderr, "%s:%d: check failed: %s\n", file, line, expr);
-    exit(1);
-}
 
 static mb_slice lit(const char *s) {
     return (mb_slice){.ptr = (const uint8_t *)s, .len = strlen(s)};
@@ -162,13 +152,10 @@ static void test_bridge_requires_servers(void) {
     pb_program_free(&program);
 }
 
-int main(void) {
-    test_reentry_is_opt_in();
-    test_reentry_runs_downstream_rules();
-    test_reentry_depth_cap();
-    test_lvc_filters_load();
-    test_bridge_config_loads();
-    test_bridge_requires_servers();
-    puts("program tests passed");
-    return 0;
-}
+TEST_MAIN(program,
+          test_reentry_is_opt_in,
+          test_reentry_runs_downstream_rules,
+          test_reentry_depth_cap,
+          test_lvc_filters_load,
+          test_bridge_config_loads,
+          test_bridge_requires_servers)

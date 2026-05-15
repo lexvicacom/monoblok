@@ -55,7 +55,7 @@ typedef struct pb_bridge_config {
     bool has_max_reconnect;
 } pb_bridge_config;
 
-// Loaded patchbay rules plus persistent rule state and reusable eval scratch.
+// The loaded and validated patchbay program: rules/config plus runtime state and eval scratch.
 typedef struct pb_program {
     pb_arena parse_arena;
     pb_arena scratch;

@@ -61,6 +61,9 @@ cmake --build build --target pb-dump
   It must not know about libuv handles.
 - Server owns connection lifetime and write completions.
 - Protocol parsing is slice-based and allocation-free.
+- `mb_slice`/`pb_slice` values are borrowed views unless a helper explicitly
+  duplicates them. Do not store a slice beyond the lifetime of its source
+  buffer or arena.
 - Patchbay parse trees and temporary eval values live in arenas.
 - Long-lived patchbay state is owned by `pb_eval_state`; be explicit about
   string/ring ownership and free every heap field in `state_entry_free`.
@@ -134,8 +137,9 @@ never sent.
 - The root `.clang-format` intentionally uses `ColumnLimit: 0` to avoid
   save-on-format churn in generated-looking compact C. Do not run broad
   mechanical formatting unless explicitly requested.
-- Keep structs that carry important ownership or state commented with one short
-  comment explaining their role.
+- Keep every project-owned struct documented with one short comment explaining
+  its role, ownership, or lifetime. This includes small view types such as
+  slices.
 - Prefer arena copies for AST text and evaluator-owned output text.
 - Keep comments concise and focused on ownership, lifetime, invariants, or
   non-obvious protocol behavior.

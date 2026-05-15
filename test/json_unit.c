@@ -1,20 +1,10 @@
 #include "pb_json.h"
+#include "test_check.h"
+#include "test_pb_check.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define CHECK(expr) do { if (!(expr)) fail(__FILE__, __LINE__, #expr); } while (0)
-
-static void fail(const char *file, int line, const char *expr) {
-    fprintf(stderr, "%s:%d: check failed: %s\n", file, line, expr);
-    exit(1);
-}
-
-static void check_text(pb_slice s, const char *want) {
-    CHECK(s.len == strlen(want));
-    CHECK(memcmp(s.ptr, want, s.len) == 0);
-}
 
 static void test_json_patchbay_form(void) {
     const char *src =
@@ -39,8 +29,4 @@ static void test_json_patchbay_form(void) {
     pb_arena_free(&arena);
 }
 
-int main(void) {
-    test_json_patchbay_form();
-    puts("json tests passed");
-    return 0;
-}
+TEST_MAIN(json, test_json_patchbay_form)

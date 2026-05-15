@@ -1,24 +1,14 @@
 #include "pb_sexpr.h"
+#include "test_check.h"
+#include "test_pb_check.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define CHECK(expr) do { if (!(expr)) fail(__FILE__, __LINE__, #expr); } while (0)
-
-static void fail(const char *file, int line, const char *expr) {
-    fprintf(stderr, "%s:%d: check failed: %s\n", file, line, expr);
-    exit(1);
-}
-
 static pb_parse_result parse(pb_arena *arena, const char *src) {
     return pb_parse_all(arena, src, strlen(src));
-}
-
-static void check_text(pb_slice s, const char *want) {
-    CHECK(s.len == strlen(want));
-    CHECK(memcmp(s.ptr, want, s.len) == 0);
 }
 
 static void test_atoms(void) {
@@ -129,15 +119,12 @@ static void test_result_does_not_borrow_source_atoms(void) {
     pb_arena_free(&arena);
 }
 
-int main(void) {
-    test_atoms();
-    test_keywords();
-    test_nested_list();
-    test_comments_and_escapes();
-    test_vectors();
-    test_errors();
-    test_offset_at_eof();
-    test_result_does_not_borrow_source_atoms();
-    puts("sexpr tests passed");
-    return 0;
-}
+TEST_MAIN(sexpr,
+          test_atoms,
+          test_keywords,
+          test_nested_list,
+          test_comments_and_escapes,
+          test_vectors,
+          test_errors,
+          test_offset_at_eof,
+          test_result_does_not_borrow_source_atoms)

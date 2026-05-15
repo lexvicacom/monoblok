@@ -1,16 +1,10 @@
 #include "proto.h"
 #include "router.h"
+#include "test_check.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define CHECK(expr) do { if (!(expr)) fail(__FILE__, __LINE__, #expr); } while (0)
-
-static void fail(const char *file, int line, const char *expr) {
-    fprintf(stderr, "%s:%d: check failed: %s\n", file, line, expr);
-    exit(1);
-}
 
 static mb_slice lit(const char *s) {
     return (mb_slice){.ptr = (const uint8_t *)s, .len = strlen(s)};
@@ -324,31 +318,28 @@ static void test_router_remove_conn(void) {
     mb_router_free(&router);
 }
 
-int main(void) {
-    test_parse_ping();
-    test_parse_connect();
-    test_parse_sub();
-    test_parse_unsub();
-    test_parse_pub();
-    test_parse_fragmented_pub();
-    test_parse_bad_command();
-    test_parse_payload_too_large();
-    test_parse_control_line_too_long();
-    test_write_info();
-    test_write_msg();
-    test_router_one_sub();
-    test_router_two_subs();
-    test_router_non_match();
-    test_router_wildcards();
-    test_router_lvc_replay();
-    test_router_lvc_live_wildcard();
-    test_router_lvc_rejects_writes();
-    test_router_lvc_disabled();
-    test_router_lvc_filter_gates_cache();
-    test_router_unsubscribe();
-    test_router_auto_unsubscribe();
-    test_router_kicks_after_fanout();
-    test_router_remove_conn();
-    puts("unit tests passed");
-    return 0;
-}
+TEST_MAIN(unit,
+          test_parse_ping,
+          test_parse_connect,
+          test_parse_sub,
+          test_parse_unsub,
+          test_parse_pub,
+          test_parse_fragmented_pub,
+          test_parse_bad_command,
+          test_parse_payload_too_large,
+          test_parse_control_line_too_long,
+          test_write_info,
+          test_write_msg,
+          test_router_one_sub,
+          test_router_two_subs,
+          test_router_non_match,
+          test_router_wildcards,
+          test_router_lvc_replay,
+          test_router_lvc_live_wildcard,
+          test_router_lvc_rejects_writes,
+          test_router_lvc_disabled,
+          test_router_lvc_filter_gates_cache,
+          test_router_unsubscribe,
+          test_router_auto_unsubscribe,
+          test_router_kicks_after_fanout,
+          test_router_remove_conn)

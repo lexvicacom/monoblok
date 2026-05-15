@@ -81,6 +81,7 @@ pb_eval_result pb_eval_call_window_builtin(pb_eval_ctx *ctx, pb_builtin builtin,
 pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args);
 pb_eval_result pb_eval_tick_clock_state_entry(pb_eval_ctx *ctx, pb_eval_state_entry *entry);
 
+// Short aliases used as local sugar in evaluator builtin implementations.
 #define ok pb_eval_ok
 #define fail pb_eval_fail
 #define text_eq pb_eval_text_eq

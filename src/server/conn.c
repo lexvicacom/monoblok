@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// libuv read allocator: reuse the per-connection buffer and cap read chunks.
 static void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
     mb_conn *conn = handle->data;
     const size_t n = suggested_size < MB_READ_CHUNK ? suggested_size : MB_READ_CHUNK;

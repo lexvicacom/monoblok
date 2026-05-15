@@ -12,10 +12,6 @@
 #include <string.h>
 #include <time.h>
 
-#if defined(_WIN32)
-#define gmtime_r(timep, result) gmtime_s((result), (timep))
-#endif
-
 static pb_eval_result call_now(pb_eval_ctx *ctx, pb_values args) {
     if (args.len != 1 || args.items[0].kind != PB_KEYWORD) {
         return fail(PB_EVAL_ARITY);

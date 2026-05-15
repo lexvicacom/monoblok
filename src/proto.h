@@ -11,6 +11,7 @@ enum {
     MB_MAX_PAYLOAD = 1024 * 1024,
 };
 
+// Borrowed byte slice; callers must not retain it past the source buffer lifetime.
 typedef struct mb_slice {
     const uint8_t *ptr;
     size_t len;

@@ -4,6 +4,7 @@
 #include "router.h"
 #include "pb_program.h"
 
+// Counts of snapshot records loaded, useful for startup reporting.
 typedef struct mb_snapshot_counts {
     size_t lvc;
     size_t rule_state;
