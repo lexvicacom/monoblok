@@ -4,7 +4,7 @@
 # Works from either:
 #   * an unpacked release tarball (binary + patchbay + service unit all sit
 #     next to this script), or
-#   * a repo checkout (binary under zig-out/bin, patchbay + unit in the repo).
+#   * a repo checkout (binary under build/, patchbay + unit in the repo).
 #
 # Usage:
 #   sudo bash install-systemd.sh [PATH_TO_PATCHBAY]
@@ -24,13 +24,13 @@ fi
 here="$(cd "$(dirname "$0")" && pwd)"
 
 # Pick the binary. Tarball layout (next to this script) wins; otherwise
-# fall back to a repo checkout's zig-out.
+# fall back to a repo checkout's build directory.
 if [ -x "$here/monoblok" ]; then
     bin_src="$here/monoblok"
-elif [ -x "$here/../zig-out/bin/monoblok" ]; then
-    bin_src="$here/../zig-out/bin/monoblok"
+elif [ -x "$here/../build/monoblok" ]; then
+    bin_src="$here/../build/monoblok"
 else
-    echo "could not find monoblok binary next to the installer or in zig-out/bin" >&2
+    echo "could not find monoblok binary next to the installer or in build/" >&2
     exit 2
 fi
 

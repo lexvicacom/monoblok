@@ -11,11 +11,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-      - name: Run tests
-        run: zig build test --summary all
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
 
   build:
     needs: test
@@ -35,9 +36,6 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
 
       - name: Resolve version
         id: ver
@@ -51,12 +49,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Build + package
-        run: |
-          set -eu
-          bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
-          case "${{ matrix.platform }}" in
-            linux-*) bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}" epoll ;;
-          esac
+        run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
 
       - name: Resolve container metadata
         if: startsWith(matrix.platform, 'linux-')
@@ -80,9 +73,20 @@ jobs:
           esac
           echo "image=$image" >> "$GITHUB_OUTPUT"
 
+      - name: Check runtime dependencies
+        if: startsWith(matrix.platform, 'linux-')
+        run: ldd build-package/monoblok
+
       - name: Set up Docker Buildx
         if: startsWith(matrix.platform, 'linux-')
         uses: docker/setup-buildx-action@v3
+
+      - name: Smoke container image
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          set -eu
+          docker build --build-arg MONOBLOK_BIN=build-package/monoblok -t monoblok:release-smoke .
+          docker run --rm monoblok:release-smoke --version
 
       - name: Log in to GHCR
         if: startsWith(matrix.platform, 'linux-')
@@ -99,6 +103,8 @@ jobs:
           context: ${{ github.workspace }}
           platforms: ${{ steps.image.outputs.platform }}
           push: true
+          build-args: |
+            MONOBLOK_BIN=build-package/monoblok
           tags: |
             ${{ steps.image.outputs.image }}:${{ steps.ver.outputs.version }}-${{ steps.image.outputs.arch }}
             ${{ steps.image.outputs.image }}:${{ github.sha }}-${{ steps.image.outputs.arch }}

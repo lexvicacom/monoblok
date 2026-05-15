@@ -1,7 +1,7 @@
 .git
 .github
-.zig-cache
-zig-cache
+.cmake-cache
+cmake-cache
 dist
 docs
 examples

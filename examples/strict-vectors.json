@@ -1,0 +1,15 @@
+[
+  [
+    "on",
+    "sensors.*",
+    [
+      "do",
+      [
+        "when",
+        ["contains?", {"vec": ["temp", "hum", "batt"]}, ["subject-token", 1]],
+        ["publish!", ["subject-append", "seen"], "payload"]
+      ],
+      ["json-demux!", {"vec": ["temp", {"vec": ["status", "state"]}]}, "payload"]
+    ]
+  ]
+]

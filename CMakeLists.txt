@@ -1,0 +1,197 @@
+cmake_minimum_required(VERSION 3.22)
+
+set(MONOBLOK_FALLBACK_VERSION "0.0.0")
+set(MONOBLOK_DETECTED_VERSION "${MONOBLOK_FALLBACK_VERSION}")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" describe --tags --exact-match HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE MB_GIT_TAG_RESULT
+    OUTPUT_VARIABLE MB_GIT_TAG
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(MB_GIT_TAG_RESULT EQUAL 0)
+    string(REGEX REPLACE "^v" "" MB_GIT_TAG_VERSION "${MB_GIT_TAG}")
+    if(MB_GIT_TAG_VERSION MATCHES "^[0-9]+(\\.[0-9]+){0,3}$")
+      set(MONOBLOK_DETECTED_VERSION "${MB_GIT_TAG_VERSION}")
+    endif()
+  endif()
+endif()
+set(MONOBLOK_VERSION "${MONOBLOK_DETECTED_VERSION}" CACHE STRING "monoblok version")
+
+project(monoblok VERSION "${MONOBLOK_VERSION}" LANGUAGES C)
+
+set(MB_BUILD_PLATFORM "${CMAKE_SYSTEM_NAME}")
+set(MB_BUILD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+set(MB_BUILD_COMPILER "${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
+set(MB_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+if(NOT MB_BUILD_TYPE)
+  set(MB_BUILD_TYPE "multi-config/unspecified")
+endif()
+set(MB_BUILD_INFO "${MB_BUILD_PLATFORM}/${MB_BUILD_ARCH} ${MB_BUILD_COMPILER} ${MB_BUILD_TYPE}")
+
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+option(MB_ASAN "Build with AddressSanitizer and UBSan" OFF)
+option(MB_NATS_TLS "Build nats.c with TLS/OpenSSL support" ON)
+
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+  set(MB_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+  set(MB_BUILD_INFO "${MB_BUILD_PLATFORM}/${MB_BUILD_ARCH} ${MB_BUILD_COMPILER} ${MB_BUILD_TYPE}")
+endif()
+
+configure_file(src/mb_version.h.in generated/mb_version.h @ONLY)
+
+if(MB_ASAN)
+  add_compile_options(-fsanitize=address,undefined)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+set(MB_WARNINGS
+  -Wall
+  -Wextra
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+  -Wstrict-prototypes
+  -Wmissing-prototypes
+)
+
+if(APPLE)
+  set(MB_MATH_LIB "")
+else()
+  set(MB_MATH_LIB m)
+endif()
+
+set(MB_CORE
+  src/array.c
+  src/buf.c
+  src/fs.c
+  src/proto.c
+  src/router.c
+  src/slice.c
+)
+
+set(PB_CORE
+  src/patchbay/pb_arena.c
+  src/patchbay/pb_builtins.c
+  src/patchbay/pb_eval.c
+  src/patchbay/pb_json.c
+  src/patchbay/pb_program.c
+  src/patchbay/pb_sexpr.c
+  src/patchbay/pb_soundcheck.c
+  src/patchbay/pb_validate.c
+  src/patchbay/pb_window_builtins.c
+)
+
+add_library(yyjson STATIC vendor/yyjson/src/yyjson.c)
+target_include_directories(yyjson PUBLIC vendor/yyjson/src)
+
+add_library(monoblok_core STATIC ${MB_CORE})
+target_include_directories(monoblok_core PUBLIC src)
+target_include_directories(monoblok_core PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_compile_options(monoblok_core PRIVATE ${MB_WARNINGS})
+
+add_executable(unit-tests test/unit.c)
+target_link_libraries(unit-tests PRIVATE monoblok_core)
+target_compile_options(unit-tests PRIVATE ${MB_WARNINGS})
+
+add_library(patchbay_sexpr STATIC ${PB_CORE})
+target_include_directories(patchbay_sexpr PUBLIC src)
+target_include_directories(patchbay_sexpr PUBLIC src/patchbay)
+target_include_directories(patchbay_sexpr PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_link_libraries(patchbay_sexpr PUBLIC yyjson monoblok_core ${MB_MATH_LIB})
+target_compile_options(patchbay_sexpr PRIVATE ${MB_WARNINGS})
+
+add_executable(sexpr-tests test/sexpr_unit.c)
+target_link_libraries(sexpr-tests PRIVATE patchbay_sexpr)
+target_compile_options(sexpr-tests PRIVATE ${MB_WARNINGS})
+
+add_executable(eval-tests test/eval_unit.c)
+target_link_libraries(eval-tests PRIVATE patchbay_sexpr)
+target_compile_options(eval-tests PRIVATE ${MB_WARNINGS})
+
+add_executable(json-tests test/json_unit.c)
+target_link_libraries(json-tests PRIVATE patchbay_sexpr)
+target_compile_options(json-tests PRIVATE ${MB_WARNINGS})
+
+add_executable(program-tests test/program_unit.c)
+target_link_libraries(program-tests PRIVATE patchbay_sexpr)
+target_compile_options(program-tests PRIVATE ${MB_WARNINGS})
+
+add_executable(snapshot-tests test/snapshot_unit.c src/snapshot.c)
+target_link_libraries(snapshot-tests PRIVATE patchbay_sexpr)
+target_compile_options(snapshot-tests PRIVATE ${MB_WARNINGS})
+
+add_executable(bench-patchbay src/bench_patchbay.c)
+target_link_libraries(bench-patchbay PRIVATE patchbay_sexpr)
+target_compile_options(bench-patchbay PRIVATE ${MB_WARNINGS})
+
+add_executable(pb-dump src/patchbay/pb_dump.c)
+target_link_libraries(pb-dump PRIVATE patchbay_sexpr)
+target_compile_options(pb-dump PRIVATE ${MB_WARNINGS})
+
+enable_testing()
+add_test(NAME unit COMMAND unit-tests)
+add_test(NAME sexpr COMMAND sexpr-tests)
+add_test(NAME eval COMMAND eval-tests)
+add_test(NAME json COMMAND json-tests)
+add_test(NAME program COMMAND program-tests)
+add_test(NAME snapshot COMMAND snapshot-tests)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libuv/CMakeLists.txt")
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  add_subdirectory(vendor/libuv EXCLUDE_FROM_ALL)
+  set(MB_UV_TARGET uv_a)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LIBUV REQUIRED IMPORTED_TARGET libuv)
+  set(MB_UV_TARGET PkgConfig::LIBUV)
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/nats.c/CMakeLists.txt")
+  set(NATS_BUILD_WITH_TLS ${MB_NATS_TLS} CACHE BOOL "" FORCE)
+  set(NATS_BUILD_OPENSSL_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_LIB_SHARED OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_LIB_STATIC ON CACHE BOOL "" FORCE)
+  set(NATS_BUILD_STREAMING OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_USE_SODIUM OFF CACHE BOOL "" FORCE)
+  add_subdirectory(vendor/nats.c EXCLUDE_FROM_ALL)
+  set(MB_NATS_TARGET nats_static)
+else()
+  set(MB_NATS_TARGET "")
+endif()
+
+add_executable(monoblok
+  src/bridge.c
+  src/snapshot.c
+  src/server/conn.c
+  src/main.c
+  src/server/server.c
+)
+target_link_libraries(monoblok PRIVATE patchbay_sexpr ${MB_UV_TARGET} ${MB_NATS_TARGET})
+target_compile_options(monoblok PRIVATE ${MB_WARNINGS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_compile_definitions(monoblok PRIVATE _GNU_SOURCE)
+endif()
+target_include_directories(monoblok PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_include_directories(monoblok PRIVATE src/server src/patchbay)
+
+add_custom_target(smoke
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/smoke.sh $<TARGET_FILE:monoblok>
+  DEPENDS monoblok
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(soundcheck
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/soundcheck.sh $<TARGET_FILE:monoblok>
+  DEPENDS monoblok
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)

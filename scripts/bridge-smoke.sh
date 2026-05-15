@@ -9,7 +9,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MONO_PORT="${MONO_PORT:-14222}"
 REMOTE_PORT="${REMOTE_PORT:-14888}"
-BIN="$ROOT/zig-out/bin/monoblok"
+BIN="$ROOT/build/monoblok"
 PATCHBAY="/tmp/monoblok-bridge-smoke.edn"
 
 if ! command -v nats-server >/dev/null || ! command -v nats >/dev/null; then
@@ -29,17 +29,17 @@ done
 
 if [ ! -x "$BIN" ]; then
     echo "building..."
-    (cd "$ROOT" && zig build) || exit 1
+    (cd "$ROOT" && cmake -S . -B build >/dev/null && cmake --build build --target monoblok) || exit 1
 fi
 
 cat > "$PATCHBAY" <<EOF
 (bridge
-  :servers ("nats://127.0.0.1:${REMOTE_PORT}")
+  :servers ["nats://127.0.0.1:${REMOTE_PORT}"]
   :name    "monoblok-bridge-smoke"
-  :export  ("telemetry.>"))
+  :export  ["telemetry.>"])
 
 (on "telemetry.*"
-  (publish (subject-append "echoed") payload))
+  (publish! (subject-append "echoed") payload))
 EOF
 
 cleanup() {

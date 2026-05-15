@@ -1,6 +1,0 @@
-; SENSORS shard: round + squelch like examples/sensors.edn.
-(on "SENSORS.*"
-  (-> payload-float
-      (round 1)
-      (squelch)
-      (publish! (subject-append "stable"))))
