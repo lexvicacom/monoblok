@@ -147,6 +147,7 @@ add_test(NAME snapshot COMMAND snapshot-tests)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libuv/CMakeLists.txt")
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(ENABLE_CLANG_TIDY OFF CACHE BOOL "" FORCE)
   add_subdirectory(vendor/libuv EXCLUDE_FROM_ALL)
   set(MB_UV_TARGET uv_a)
 else()
@@ -194,4 +195,8 @@ add_custom_target(soundcheck
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/soundcheck.sh $<TARGET_FILE:monoblok>
   DEPENDS monoblok
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(tidy
+  COMMAND ${CMAKE_COMMAND} -E echo "No clang-tidy checks configured for monoblok."
 )
