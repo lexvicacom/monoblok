@@ -3,7 +3,16 @@
 
 #include <stddef.h>
 
-// Linked bump block; individual allocations are freed with the whole arena.
+// Small bump allocator used by patchbay parsing/evaluation code.
+//
+// The arena owns a linked list of blocks. Each allocation bumps the `used`
+// cursor in one block; individual allocations are never freed. This keeps parse
+// trees and temporary evaluation objects cheap to allocate and simple to tear
+// down. Call pb_arena_reset() to reuse existing blocks for another short-lived
+// batch, or pb_arena_free() to release all memory owned by the arena.
+//
+// Ownership rule: pointers returned by pb_arena_alloc()/pb_arena_memdup() remain
+// valid until the next reset/free of the same arena. Do not free them directly.
 typedef struct pb_arena_block {
     struct pb_arena_block *next;
     size_t used;
@@ -11,7 +20,6 @@ typedef struct pb_arena_block {
     unsigned char data[];
 } pb_arena_block;
 
-// One-shot allocator for parse trees and per-evaluation scratch.
 typedef struct pb_arena {
     pb_arena_block *head;
 } pb_arena;
