@@ -11,7 +11,7 @@ MB_BIN="$ROOT/build/monoblok"
 
 export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 PORT="${NATS_URL##*:}"
-COOLDOWN_S="${BENCH_COOLDOWN_S:-2}"
+COOLDOWN_S="${BENCH_COOLDOWN_S:-1}"
 
 command -v nats >/dev/null 2>&1 || {
     echo "missing: nats CLI (install from https://github.com/nats-io/natscli/releases)"
@@ -110,7 +110,7 @@ else
     echo "$(uname -m) · ${cores} cores · ${mem} GB"
 fi
 echo
-echo "monoblok $("$MB_BIN" --help 2>&1 | head -1 || true)"
+echo "$("$MB_BIN" -V 2>&1 | head -1 || true)"
 echo "nats cli $(nats --version 2>&1 | head -1)"
 $HAS_NATS_SERVER && echo "$(nats-server --version 2>&1 | head -1)"
 echo
