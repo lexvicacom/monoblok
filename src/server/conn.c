@@ -1,6 +1,7 @@
 #include "conn.h"
 
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +49,9 @@ void mb_conn_begin_close(mb_conn *conn) {
 }
 
 static size_t pending_bytes(const mb_conn *conn) {
+    if (conn->router_conn.out.len > SIZE_MAX - conn->in_flight.len) {
+        return SIZE_MAX;
+    }
     return conn->router_conn.out.len + conn->in_flight.len;
 }
 
@@ -209,6 +213,11 @@ void mb_conn_kick_write(void *ctx) {
     }
 
     mb_buf_swap(&conn->router_conn.out, &conn->in_flight);
+    if (conn->in_flight.len > UINT_MAX) {
+        mb_conn_begin_close(conn);
+        return;
+    }
+
     uv_buf_t uvb = uv_buf_init((char *)conn->in_flight.ptr, (unsigned int)conn->in_flight.len);
     conn->write_req.data = conn;
     conn->write_pending = true;
