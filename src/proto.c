@@ -125,7 +125,12 @@ static mb_parse_result parse_pub(const uint8_t *buf, size_t len, mb_slice rest, 
     if (payload_len > MB_MAX_PAYLOAD) {
         return (mb_parse_result){.status = MB_PARSE_PAYLOAD_TOO_LARGE};
     }
-    if (len - line_end < payload_len + 1) {
+    if (line_end > len) {
+        return (mb_parse_result){.status = MB_PARSE_NEED_MORE};
+    }
+
+    const size_t available = len - line_end;
+    if (available <= payload_len) {
         return (mb_parse_result){.status = MB_PARSE_NEED_MORE};
     }
 
@@ -135,7 +140,7 @@ static mb_parse_result parse_pub(const uint8_t *buf, size_t len, mb_slice rest, 
     if (tail[0] == '\n') {
         trailer_len = 1;
     } else if (tail[0] == '\r') {
-        if (len - line_end < payload_len + 2) {
+        if (available < payload_len || available - payload_len < 2) {
             return (mb_parse_result){.status = MB_PARSE_NEED_MORE};
         }
         if (tail[1] != '\n') {
@@ -144,6 +149,10 @@ static mb_parse_result parse_pub(const uint8_t *buf, size_t len, mb_slice rest, 
         trailer_len = 2;
     } else {
         return (mb_parse_result){.status = MB_PARSE_MALFORMED};
+    }
+
+    if (payload_len > SIZE_MAX - line_end || trailer_len > SIZE_MAX - line_end - payload_len) {
+        return (mb_parse_result){.status = MB_PARSE_PAYLOAD_TOO_LARGE};
     }
 
     return (mb_parse_result){
@@ -247,12 +256,12 @@ static bool append_u64_decimal(mb_buf *out, uint64_t n) {
 }
 
 static bool append_json_string(mb_buf *out, const char *s) {
-    if (!mb_buf_append_byte(out, '"')) {
+    if (!mb_buf_append_byte(out, '\"')) {
         return false;
     }
     for (size_t i = 0; s[i] != '\0'; i += 1) {
         const char c = s[i];
-        if (c == '"' || c == '\\') {
+        if (c == '\"' || c == '\\') {
             if (!mb_buf_append_byte(out, '\\') || !mb_buf_append_byte(out, (uint8_t)c)) {
                 return false;
             }
@@ -269,7 +278,7 @@ static bool append_json_string(mb_buf *out, const char *s) {
             return false;
         }
     }
-    return mb_buf_append_byte(out, '"');
+    return mb_buf_append_byte(out, '\"');
 }
 
 bool mb_write_pong(mb_buf *out) {
