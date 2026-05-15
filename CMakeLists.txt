@@ -40,9 +40,11 @@ else()
 endif()
 
 set(MB_CORE
+  src/array.c
   src/buf.c
   src/proto.c
   src/router.c
+  src/slice.c
 )
 
 set(PB_CORE
