@@ -27,6 +27,8 @@ jobs:
         include:
           - platform: linux-x86_64
             runs-on: ubuntu-22.04
+          - platform: linux-aarch64
+            runs-on: ubuntu-22.04-arm
           - platform: macos-aarch64
             runs-on: macos-latest
     runs-on: ${{ matrix.runs-on }}
