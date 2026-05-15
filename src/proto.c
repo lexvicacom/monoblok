@@ -302,7 +302,7 @@ bool mb_write_info(mb_buf *out, const mb_info *info) {
            APPEND_LIT(out, ",\"client_ip\":") &&
            append_json_string(out, info->client_ip) &&
            APPEND_LIT(out, ",\"build\":") &&
-           append_json_string(out, MB_BUILD_PLATFORM "/" MB_BUILD_ARCH " " MB_BUILD_COMPILER) &&
+           append_json_string(out, MB_BUILD_INFO) &&
            APPEND_LIT(out, "}\r\n");
 }
 

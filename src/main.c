@@ -37,7 +37,7 @@ static void usage(const char *argv0) {
 }
 
 static void version(void) {
-    printf("monoblok %s\n", MB_VERSION);
+    printf("monoblok %s (%s)\n", MB_VERSION, MB_BUILD_INFO);
 }
 
 static void banner(void) {

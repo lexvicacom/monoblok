@@ -1,11 +1,36 @@
 cmake_minimum_required(VERSION 3.22)
-project(monoblok C)
 
-set(MONOBLOK_VERSION "0.2.1" CACHE STRING "monoblok version")
+set(MONOBLOK_FALLBACK_VERSION "0.0.0")
+set(MONOBLOK_DETECTED_VERSION "${MONOBLOK_FALLBACK_VERSION}")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" describe --tags --exact-match HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE MB_GIT_TAG_RESULT
+    OUTPUT_VARIABLE MB_GIT_TAG
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(MB_GIT_TAG_RESULT EQUAL 0)
+    string(REGEX REPLACE "^v" "" MB_GIT_TAG_VERSION "${MB_GIT_TAG}")
+    if(MB_GIT_TAG_VERSION MATCHES "^[0-9]+(\\.[0-9]+){0,3}$")
+      set(MONOBLOK_DETECTED_VERSION "${MB_GIT_TAG_VERSION}")
+    endif()
+  endif()
+endif()
+set(MONOBLOK_VERSION "${MONOBLOK_DETECTED_VERSION}" CACHE STRING "monoblok version")
+
+project(monoblok VERSION "${MONOBLOK_VERSION}" LANGUAGES C)
+
 set(MB_BUILD_PLATFORM "${CMAKE_SYSTEM_NAME}")
 set(MB_BUILD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
 set(MB_BUILD_COMPILER "${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
-configure_file(src/mb_version.h.in generated/mb_version.h @ONLY)
+set(MB_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+if(NOT MB_BUILD_TYPE)
+  set(MB_BUILD_TYPE "multi-config/unspecified")
+endif()
+set(MB_BUILD_INFO "${MB_BUILD_PLATFORM}/${MB_BUILD_ARCH} ${MB_BUILD_COMPILER} ${MB_BUILD_TYPE}")
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -16,7 +41,11 @@ option(MB_NATS_TLS "Build nats.c with TLS/OpenSSL support" ON)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+  set(MB_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+  set(MB_BUILD_INFO "${MB_BUILD_PLATFORM}/${MB_BUILD_ARCH} ${MB_BUILD_COMPILER} ${MB_BUILD_TYPE}")
 endif()
+
+configure_file(src/mb_version.h.in generated/mb_version.h @ONLY)
 
 if(MB_ASAN)
   add_compile_options(-fsanitize=address,undefined)
