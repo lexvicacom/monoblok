@@ -25,8 +25,9 @@ cmake --build build-package --target monoblok
 
 mkdir -p "dist/${name}"
 cp build-package/monoblok "dist/${name}/monoblok"
+cp scripts/release-README.md "dist/${name}/README.md"
 cp patchbay.edn "dist/${name}/"
-cp scripts/bench.sh "dist/${name}/"
+cp scripts/bench.sh scripts/bench-with-nats-server.sh "dist/${name}/"
 case "$PLATFORM" in
     linux-*)
         cp scripts/monoblok.service "dist/${name}/"

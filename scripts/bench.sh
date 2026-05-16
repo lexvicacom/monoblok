@@ -12,11 +12,41 @@
 # Requirements:
 #   - nats CLI (https://github.com/nats-io/natscli/releases)
 #
-# Usage: ./scripts/bench.sh
+# Usage: ./scripts/bench.sh [--io-uring|--epoll]
+#
+# Linux benchmark runs use libuv io_uring by default. Pass --epoll when you
+# want the production-default Linux path for comparison.
 #
 # NOTE: If numbers seem low, ensure you're running a release build:
 #   cmake --build build --target monoblok   (recommended, what release artifacts ship)
 set -u
+
+usage() {
+    echo "Usage: $0 [--io-uring|--epoll]"
+    echo
+    echo "On Linux, defaults to --io-uring. Pass --epoll to run with libuv epoll."
+}
+
+BENCH_IO_MODE="${BENCH_IO_MODE:-}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --io-uring)
+            BENCH_IO_MODE="io_uring"
+            ;;
+        --epoll|--no-io-uring)
+            BENCH_IO_MODE="epoll"
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+    shift
+done
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # Binary lives next to the script on deployed boxes (release tarballs);
@@ -32,6 +62,24 @@ fi
 export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 # Extract host:port → port for the server --port flag.
 PORT="${NATS_URL##*:}"
+MB_IO_ARGS=()
+MB_IO_LABEL="platform default"
+if [[ "$(uname)" == "Linux" ]]; then
+    case "${BENCH_IO_MODE:-io_uring}" in
+        io_uring|io-uring)
+            MB_IO_ARGS=(--io-uring)
+            MB_IO_LABEL="io_uring"
+            ;;
+        epoll)
+            MB_IO_ARGS=(--no-io-uring)
+            MB_IO_LABEL="epoll"
+            ;;
+        *)
+            echo "invalid BENCH_IO_MODE: $BENCH_IO_MODE (use io_uring or epoll)"
+            exit 2
+            ;;
+    esac
+fi
 
 command -v nats >/dev/null 2>&1 || { echo "missing: nats CLI (install from https://github.com/nats-io/natscli/releases)"; exit 1; }
 
@@ -116,10 +164,11 @@ fi
 echo
 echo "$("$MB_BIN" --version)"
 echo "nats cli $(nats --version 2>&1 | head -1)"
+echo "monoblok libuv mode: $MB_IO_LABEL"
 echo
 
 # --- monoblok -----------------------------------------------------------------
-"$MB_BIN" --port $PORT > /tmp/mb.log 2>&1 &
+"$MB_BIN" "${MB_IO_ARGS[@]}" --port $PORT > /tmp/mb.log 2>&1 &
 MB_PID=$!
 sleep 0.3
 kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
@@ -147,7 +196,7 @@ sleep "$COOLDOWN_S"
 PATCHBAY_EDN="$ROOT/examples/bench-onerule.edn"
 MB_P_1="" MB_P_2="" MB_P_3="" MB_P_4="" MB_P_5="" MB_P_6=""
 if [ -f "$PATCHBAY_EDN" ]; then
-    "$MB_BIN" --port $PORT --patchbay "$PATCHBAY_EDN" > /tmp/mb-patchbay.log 2>&1 &
+    "$MB_BIN" "${MB_IO_ARGS[@]}" --port $PORT --patchbay "$PATCHBAY_EDN" > /tmp/mb-patchbay.log 2>&1 &
     MB_PID=$!
     sleep 0.3
     if kill -0 $MB_PID 2>/dev/null; then
@@ -173,7 +222,7 @@ fi
 PATCHBAY_50_EDN="$ROOT/examples/bench-50rules.edn"
 MB_50_1="" MB_50_2="" MB_50_3="" MB_50_4="" MB_50_5="" MB_50_6=""
 if [ -f "$PATCHBAY_50_EDN" ]; then
-    "$MB_BIN" --port $PORT --patchbay "$PATCHBAY_50_EDN" > /tmp/mb-patchbay50.log 2>&1 &
+    "$MB_BIN" "${MB_IO_ARGS[@]}" --port $PORT --patchbay "$PATCHBAY_50_EDN" > /tmp/mb-patchbay50.log 2>&1 &
     MB_PID=$!
     sleep 0.3
     if kill -0 $MB_PID 2>/dev/null; then

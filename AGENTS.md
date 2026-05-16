@@ -102,6 +102,10 @@ cmake --build build --target pb-dump
 - Do not add quote, macro, or list-as-data compatibility paths.
 - Keep effectful forms explicit, conventionally with `!` (`publish!`,
   `json-demux!`).
+- Before adding a new DSL form, read `src/patchbay/README.md` and keep the
+  evaluator/module split in sync with that guidance. Once the DSL reaches
+  critical mass, be disciplined about saying no; do not turn patchbay into an
+  ill-conceived Swiss Army knife of marginal forms.
 - If an evaluator form is not implemented, validation should fail rather than
   silently accepting it.
 - Patchbay messages re-enter rule evaluation only when the emitting rule is

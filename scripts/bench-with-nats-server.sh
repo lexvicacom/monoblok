@@ -3,15 +3,72 @@
 #
 # The C daemon implements the core CONNECT/PING/PUB/SUB and fanout path, so this
 # measures core parser/router/write behavior rather than Monoblok feature parity.
+#
+# Usage: ./scripts/bench-with-nats-server.sh [--io-uring|--epoll]
+#
+# Linux monoblok benchmark runs use libuv io_uring by default. Pass --epoll
+# when you want the production-default Linux path for comparison.
 set -u
 
+usage() {
+    echo "Usage: $0 [--io-uring|--epoll]"
+    echo
+    echo "On Linux, defaults to --io-uring for monoblok. Pass --epoll to run with libuv epoll."
+}
+
+BENCH_IO_MODE="${BENCH_IO_MODE:-}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --io-uring)
+            BENCH_IO_MODE="io_uring"
+            ;;
+        --epoll|--no-io-uring)
+            BENCH_IO_MODE="epoll"
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+    shift
+done
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
-MB_BIN="$ROOT/build/monoblok"
+# Binary lives next to the script on deployed boxes (release tarballs);
+# fall back to cmake-out/bin when run out of a source checkout.
+if [ -x "$HERE/monoblok" ]; then
+    MB_BIN="$HERE/monoblok"
+    ROOT="$HERE"
+else
+    ROOT="$(cd "$HERE/.." && pwd)"
+    MB_BIN="$ROOT/build/monoblok"
+fi
 
 export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 PORT="${NATS_URL##*:}"
 COOLDOWN_S="${BENCH_COOLDOWN_S:-1}"
+MB_IO_ARGS=()
+MB_IO_LABEL="platform default"
+if [[ "$(uname)" == "Linux" ]]; then
+    case "${BENCH_IO_MODE:-io_uring}" in
+        io_uring|io-uring)
+            MB_IO_ARGS=(--io-uring)
+            MB_IO_LABEL="io_uring"
+            ;;
+        epoll)
+            MB_IO_ARGS=(--no-io-uring)
+            MB_IO_LABEL="epoll"
+            ;;
+        *)
+            echo "invalid BENCH_IO_MODE: $BENCH_IO_MODE (use io_uring or epoll)"
+            exit 2
+            ;;
+    esac
+fi
 
 command -v nats >/dev/null 2>&1 || {
     echo "missing: nats CLI (install from https://github.com/nats-io/natscli/releases)"
@@ -113,9 +170,10 @@ echo
 echo "$("$MB_BIN" -V 2>&1 | head -1 || true)"
 echo "nats cli $(nats --version 2>&1 | head -1)"
 $HAS_NATS_SERVER && echo "$(nats-server --version 2>&1 | head -1)"
+echo "monoblok libuv mode: $MB_IO_LABEL"
 echo
 
-"$MB_BIN" --port "$PORT" > /tmp/monoblok-bench.log 2>&1 &
+"$MB_BIN" "${MB_IO_ARGS[@]}" --port "$PORT" > /tmp/monoblok-bench.log 2>&1 &
 MB_PID=$!
 sleep 0.3
 kill -0 "$MB_PID" 2>/dev/null || {
