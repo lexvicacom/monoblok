@@ -46,6 +46,54 @@ static bool next_token(mb_slice *rest, mb_slice *tok) {
     return true;
 }
 
+bool mb_proto_token_valid(mb_slice token) {
+    if (token.len == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < token.len; i += 1) {
+        const uint8_t c = token.ptr[i];
+        if (c <= ' ' || c == 0x7f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool mb_proto_subject_valid(mb_slice subject, bool allow_wildcards) {
+    if (subject.len == 0 || !mb_proto_token_valid(subject)) {
+        return false;
+    }
+    size_t start = 0;
+    while (start <= subject.len) {
+        size_t end = start;
+        while (end < subject.len && subject.ptr[end] != '.') {
+            end += 1;
+        }
+        const mb_slice tok = {.ptr = subject.ptr + start, .len = end - start};
+        if (tok.len == 0) {
+            return false;
+        }
+        const bool star = tok.len == 1 && tok.ptr[0] == '*';
+        const bool tail = tok.len == 1 && tok.ptr[0] == '>';
+        if (star || tail) {
+            if (!allow_wildcards || (tail && end != subject.len)) {
+                return false;
+            }
+        } else {
+            for (size_t i = 0; i < tok.len; i += 1) {
+                if (tok.ptr[i] == '*' || tok.ptr[i] == '>') {
+                    return false;
+                }
+            }
+        }
+        if (end == subject.len) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
 static bool parse_usize(mb_slice s, size_t *out) {
     if (s.len == 0) {
         return false;
@@ -84,7 +132,9 @@ static mb_parse_result parse_sub(mb_slice rest, size_t consumed) {
     } else {
         sid = second;
     }
-    if (subject.len == 0 || sid.len == 0) {
+    if (!mb_proto_subject_valid(subject, true) ||
+        !mb_proto_token_valid(sid) ||
+        (queue.len != 0 && !mb_proto_token_valid(queue))) {
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
     return (mb_parse_result){
@@ -99,6 +149,9 @@ static mb_parse_result parse_unsub(mb_slice rest, size_t consumed) {
     mb_slice max_msgs = {0};
     mb_slice extra = {0};
     if (!next_token(&rest, &sid)) {
+        return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
+    }
+    if (!mb_proto_token_valid(sid)) {
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
 
@@ -132,6 +185,9 @@ static mb_parse_result parse_pub(const uint8_t *buf, size_t len, mb_slice rest, 
 
     size_t payload_len = 0;
     if (!parse_usize(bytes_str, &payload_len)) {
+        return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
+    }
+    if (!mb_proto_subject_valid(subject, false)) {
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
     if (payload_len > MB_MAX_PAYLOAD) {
@@ -345,8 +401,10 @@ bool mb_write_msg(mb_buf *out, mb_slice subject, mb_slice sid, mb_slice payload)
     return mb_write_msg_prefixed(out, "", 0, subject, sid, payload);
 }
 
-bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
-                           mb_slice subject, mb_slice sid, mb_slice payload) {
+bool mb_msg_frame_len_prefixed(size_t *out, size_t prefix_len, mb_slice subject, mb_slice sid, mb_slice payload) {
+    if (out == NULL) {
+        return false;
+    }
     size_t frame_len = 0;
     if (!add_size(&frame_len, 4) ||
         !add_size(&frame_len, prefix_len) ||
@@ -358,6 +416,16 @@ bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
         !add_size(&frame_len, 2) ||
         !add_size(&frame_len, payload.len) ||
         !add_size(&frame_len, 2)) {
+        return false;
+    }
+    *out = frame_len;
+    return true;
+}
+
+bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
+                           mb_slice subject, mb_slice sid, mb_slice payload) {
+    size_t frame_len = 0;
+    if (!mb_msg_frame_len_prefixed(&frame_len, prefix_len, subject, sid, payload)) {
         return false;
     }
     return mb_buf_reserve(out, frame_len) &&

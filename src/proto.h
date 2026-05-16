@@ -66,5 +66,8 @@ bool mb_write_err(mb_buf *out, const char *msg);
 bool mb_write_msg(mb_buf *out, mb_slice subject, mb_slice sid, mb_slice payload);
 bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
                            mb_slice subject, mb_slice sid, mb_slice payload);
+bool mb_proto_token_valid(mb_slice token);
+bool mb_proto_subject_valid(mb_slice subject, bool allow_wildcards);
+bool mb_msg_frame_len_prefixed(size_t *out, size_t prefix_len, mb_slice subject, mb_slice sid, mb_slice payload);
 
 #endif

@@ -4,8 +4,14 @@
 #include "router.h"
 #include "pb_program.h"
 
+#include <stddef.h>
 #include <stdint.h>
 #include <uv.h>
+
+enum {
+    // Accepted-client cap to bound slow or idle socket footprint.
+    MB_MAX_CONNECTIONS = 1024,
+};
 
 typedef struct mb_conn mb_conn;
 typedef struct mb_snapshot_job mb_snapshot_job;
@@ -22,6 +28,7 @@ typedef struct mb_server {
     pb_program *program;
     mb_conn *conns;
     mb_snapshot_job *snapshot_job;
+    size_t conn_count;
     char server_id[35];
     uint64_t next_client_id;
     const char *host;

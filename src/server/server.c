@@ -136,6 +136,26 @@ void mb_server_reschedule_patchbay_clock(mb_server *server) {
     (void)uv_timer_start(&server->patchbay_timer, on_patchbay_timer, due, 0);
 }
 
+static void close_dropped_connection(uv_handle_t *handle) {
+    free(handle);
+}
+
+static void drop_pending_connection(mb_server *server, uv_stream_t *listener) {
+    uv_tcp_t *drop = calloc(1, sizeof *drop);
+    if (drop == NULL) {
+        return;
+    }
+    if (uv_tcp_init(&server->loop, drop) != 0) {
+        free(drop);
+        return;
+    }
+    if (uv_accept(listener, (uv_stream_t *)drop) == 0) {
+        uv_close((uv_handle_t *)drop, close_dropped_connection);
+        return;
+    }
+    uv_close((uv_handle_t *)drop, close_dropped_connection);
+}
+
 static void on_connection(uv_stream_t *listener, int status) {
     mb_server *server = listener->data;
     if (status < 0) {
@@ -143,6 +163,11 @@ static void on_connection(uv_stream_t *listener, int status) {
         return;
     }
     if (server->closing) {
+        return;
+    }
+    if (server->conn_count >= MB_MAX_CONNECTIONS) {
+        fprintf(stderr, "warn: connection cap reached (%zu), dropping client\n", (size_t)MB_MAX_CONNECTIONS);
+        drop_pending_connection(server, listener);
         return;
     }
     if (!mb_conn_create(server, listener)) {

@@ -54,6 +54,15 @@ static void sub_list_remove_at(mb_sub_list *list, size_t i) {
     }
 }
 
+static void note_sub_removed(mb_router *router, const mb_subscription *sub) {
+    if (router->sub_count > 0) {
+        router->sub_count -= 1;
+    }
+    if (sub->conn != NULL && sub->conn->sub_count > 0) {
+        sub->conn->sub_count -= 1;
+    }
+}
+
 static bool next_subject_token(mb_slice s, size_t *pos, mb_slice *tok) {
     if (*pos > s.len) {
         return false;
@@ -131,13 +140,18 @@ static bool ensure_kick_capacity(mb_router *router, size_t needed) {
                             needed, sizeof router->kick_scratch[0], 1);
 }
 
+static bool ensure_close_capacity(mb_router *router, size_t needed) {
+    return mb_array_reserve((void **)&router->close_scratch, &router->close_cap,
+                            needed, sizeof router->close_scratch[0], 1);
+}
+
 static bool ensure_queue_capacity(mb_router *router, size_t needed) {
     return mb_array_reserve((void **)&router->queue_scratch, &router->queue_cap,
                             needed, sizeof router->queue_scratch[0], 1);
 }
 
 static bool ensure_publish_capacity(mb_router *router, size_t needed) {
-    return ensure_kick_capacity(router, needed) && ensure_queue_capacity(router, needed);
+    return ensure_kick_capacity(router, needed) && ensure_close_capacity(router, needed) && ensure_queue_capacity(router, needed);
 }
 
 static size_t next_index_cap(size_t needed) {
@@ -417,6 +431,11 @@ bool mb_router_configure_lvc(mb_router *router, const mb_slice *filters, size_t 
     if (filter_len == 0) {
         return true;
     }
+    for (size_t i = 0; i < filter_len; i += 1) {
+        if (!mb_proto_subject_valid(filters[i], true)) {
+            return false;
+        }
+    }
     if (!mb_array_reserve((void **)&router->lvc_filters, &router->lvc_filter_cap,
                           filter_len, sizeof router->lvc_filters[0], 8)) {
         return false;
@@ -475,8 +494,22 @@ static bool lvc_store(mb_router *router, mb_slice subject, mb_slice payload) {
     if (mb_router_subject_has_lvc_prefix(subject) || !lvc_subject_enabled(router, subject)) {
         return true;
     }
+    if (!mb_proto_subject_valid(subject, false)) {
+        return false;
+    }
     mb_lvc_entry *entry = lvc_entry_find(router, subject);
+    const size_t old_payload_len = entry == NULL ? 0 : entry->payload.len;
+    if (router->lvc_payload_bytes < old_payload_len) {
+        return false;
+    }
+    const size_t payload_base = router->lvc_payload_bytes - old_payload_len;
+    if (payload_base > MB_MAX_LVC_BYTES || payload.len > MB_MAX_LVC_BYTES - payload_base) {
+        return false;
+    }
     if (entry == NULL) {
+        if (router->lvc_len >= MB_MAX_LVC_ENTRIES) {
+            return false;
+        }
         const uint64_t hash = mb_slice_hash(subject);
         if (!lvc_index_ensure(router, router->lvc_len + 1)) {
             return false;
@@ -494,7 +527,11 @@ static bool lvc_store(mb_router *router, mb_slice subject, mb_slice payload) {
         router->lvc_len += 1;
     }
     mb_buf_clear(&entry->payload);
-    return mb_buf_append(&entry->payload, payload.ptr, payload.len);
+    if (!mb_buf_append(&entry->payload, payload.ptr, payload.len)) {
+        return false;
+    }
+    router->lvc_payload_bytes = payload_base + payload.len;
+    return true;
 }
 
 bool mb_router_store_lvc(mb_router *router, mb_slice subject, mb_slice payload) {
@@ -529,6 +566,12 @@ static bool emit_cached(mb_router *router, mb_router_conn *conn, mb_slice filter
             continue;
         }
         const mb_slice payload = {.ptr = entry->payload.ptr, .len = entry->payload.len};
+        size_t frame_len = 0;
+        if (!mb_msg_frame_len_prefixed(&frame_len, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload) ||
+            conn->out.len > MB_MAX_PENDING ||
+            frame_len > MB_MAX_PENDING - conn->out.len) {
+            return false;
+        }
         if (!mb_write_msg_prefixed(&conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload)) {
             return false;
         }
@@ -550,6 +593,7 @@ void mb_router_free(mb_router *router) {
     free(router->literal_index);
     free(router->wildcard_index);
     free(router->kick_scratch);
+    free(router->close_scratch);
     free(router->queue_scratch);
     for (size_t i = 0; i < router->lvc_len; i += 1) {
         lvc_entry_free(&router->lvc[i]);
@@ -565,9 +609,20 @@ void mb_router_free(mb_router *router) {
 }
 
 bool mb_router_subscribe_queue(mb_router *router, mb_router_conn *conn, mb_slice subject, mb_slice queue, mb_slice sid) {
+    if (conn == NULL) {
+        return false;
+    }
     const bool is_lvc = mb_router_subject_has_lvc_prefix(subject);
     const mb_slice match_subject = is_lvc ? lvc_inner_subject(subject) : subject;
     if (is_lvc && (!router->lvc_enabled || match_subject.len == 0)) {
+        return false;
+    }
+    if (!mb_proto_subject_valid(match_subject, true) ||
+        !mb_proto_token_valid(sid) ||
+        (queue.len != 0 && !mb_proto_token_valid(queue))) {
+        return false;
+    }
+    if (conn->sub_count >= MB_MAX_SUBS_PER_CONN || router->sub_count >= MB_MAX_SUBS_TOTAL) {
         return false;
     }
     if (!ensure_publish_capacity(router, router->sub_count + 1)) {
@@ -605,6 +660,7 @@ bool mb_router_subscribe_queue(mb_router *router, mb_router_conn *conn, mb_slice
         return false;
     }
     router->sub_count += 1;
+    conn->sub_count += 1;
     if (is_lvc && !emit_cached(router, conn, match_subject, sid)) {
         mb_router_unsubscribe(router, conn, sid, 0, false);
         return false;
@@ -623,8 +679,8 @@ static void remove_for_conn_from_list(mb_router *router, mb_sub_list *list, mb_r
             i += 1;
             continue;
         }
+        note_sub_removed(router, &list->items[i]);
         sub_list_remove_at(list, i);
-        router->sub_count -= 1;
     }
 }
 
@@ -658,8 +714,8 @@ static void unsubscribe_from_list(mb_router *router, mb_sub_list *list, mb_route
             continue;
         }
         if (!has_max_msgs || max_msgs <= sub->delivered) {
+            note_sub_removed(router, sub);
             sub_list_remove_at(list, i);
-            router->sub_count -= 1;
             continue;
         }
         sub->max_msgs = max_msgs;
@@ -754,9 +810,36 @@ static bool queue_selected(const mb_router *router, const mb_subscription *sub, 
     return false;
 }
 
+static bool queue_conn_close(mb_router *router, mb_router_conn *conn,
+                             mb_router_conn **closed, size_t *closed_len) {
+    if (conn->closed) {
+        return true;
+    }
+    conn->closed = true;
+    if (conn->close_fn == NULL || conn->close_seen_epoch == router->kick_epoch) {
+        return true;
+    }
+    if (*closed_len >= router->close_cap) {
+        return false;
+    }
+    conn->close_seen_epoch = router->kick_epoch;
+    closed[*closed_len] = conn;
+    *closed_len += 1;
+    return true;
+}
+
 static bool deliver_to_sub(mb_router *router, mb_subscription *sub, mb_slice subject, mb_slice payload,
-                           mb_router_conn **kicked, size_t *kicked_len) {
+                           mb_router_conn **kicked, size_t *kicked_len,
+                           mb_router_conn **closed, size_t *closed_len) {
     const mb_slice sid = {.ptr = sub->sid, .len = sub->sid_len};
+    const size_t prefix_len = sub->is_lvc ? sizeof(MB_LVC_PREFIX) - 1 : 0;
+    size_t frame_len = 0;
+    if (!mb_msg_frame_len_prefixed(&frame_len, prefix_len, subject, sid, payload)) {
+        return false;
+    }
+    if (sub->conn->out.len > MB_MAX_PENDING || frame_len > MB_MAX_PENDING - sub->conn->out.len) {
+        return queue_conn_close(router, sub->conn, closed, closed_len);
+    }
     const bool wrote = sub->is_lvc
                            ? mb_write_msg_prefixed(&sub->conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload)
                            : mb_write_msg(&sub->conn->out, subject, sid, payload);
@@ -777,8 +860,8 @@ static void remove_delivered_max(mb_router *router, mb_sub_list *list) {
     while (i < list->len) {
         mb_subscription *sub = &list->items[i];
         if (sub->has_max_msgs && sub->delivered >= sub->max_msgs) {
+            note_sub_removed(router, sub);
             sub_list_remove_at(list, i);
-            router->sub_count -= 1;
             continue;
         }
         i += 1;
@@ -786,7 +869,8 @@ static void remove_delivered_max(mb_router *router, mb_sub_list *list) {
 }
 
 static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice subject, mb_slice payload,
-                                  bool check_filter, mb_router_conn **kicked, size_t *kicked_len) {
+                                  bool check_filter, mb_router_conn **kicked, size_t *kicked_len,
+                                  mb_router_conn **closed, size_t *closed_len) {
     size_t group_len = 0;
     // First choose one member per matching queue group without mutating the list.
     for (size_t i = 0; i < list->len; i += 1) {
@@ -805,7 +889,7 @@ static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice
         if (!sub_deliverable(router, sub, subject, check_filter) || !queue_selected(router, sub, i, group_len)) {
             continue;
         }
-        if (!deliver_to_sub(router, sub, subject, payload, kicked, kicked_len)) {
+        if (!deliver_to_sub(router, sub, subject, payload, kicked, kicked_len, closed, closed_len)) {
             remove_delivered_max(router, list);
             return false;
         }
@@ -815,14 +899,21 @@ static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice
 }
 
 bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload) {
+    if (!mb_proto_subject_valid(subject, false)) {
+        return false;
+    }
     if (mb_router_subject_has_lvc_prefix(subject) || !lvc_store(router, subject, payload)) {
         return false;
     }
-    if (router->kick_cap < router->sub_count || router->queue_cap < router->sub_count) {
+    if (router->kick_cap < router->sub_count ||
+        router->close_cap < router->sub_count ||
+        router->queue_cap < router->sub_count) {
         return false;
     }
     mb_router_conn **kicked = router->kick_scratch;
+    mb_router_conn **closed = router->close_scratch;
     size_t kicked_len = 0;
+    size_t closed_len = 0;
     router->kick_epoch += 1;
     if (router->kick_epoch == 0) {
         router->kick_epoch = 1;
@@ -830,21 +921,27 @@ bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload) {
     bool ok = true;
 
     mb_literal_bucket *lit = literal_bucket(router, subject, false);
-    if (lit != NULL && !deliver_matching_list(router, &lit->subs, subject, payload, false, kicked, &kicked_len)) {
+    if (lit != NULL && !deliver_matching_list(router, &lit->subs, subject, payload, false, kicked, &kicked_len, closed, &closed_len)) {
         ok = false;
     }
 
     if (ok) {
         const mb_slice first = first_token(subject);
         mb_wildcard_bucket *wild = wildcard_bucket(router, first, false);
-        if (wild != NULL && !deliver_matching_list(router, &wild->subs, subject, payload, true, kicked, &kicked_len)) {
+        if (wild != NULL && !deliver_matching_list(router, &wild->subs, subject, payload, true, kicked, &kicked_len, closed, &closed_len)) {
             ok = false;
         }
     }
-    if (ok && !deliver_matching_list(router, &router->wildcard_global, subject, payload, true, kicked, &kicked_len)) {
+    if (ok && !deliver_matching_list(router, &router->wildcard_global, subject, payload, true, kicked, &kicked_len, closed, &closed_len)) {
         ok = false;
     }
 
+    for (size_t i = 0; i < closed_len; i += 1) {
+        mb_router_conn *conn = closed[i];
+        if (conn->close_fn != NULL) {
+            conn->close_fn(conn->close_ctx);
+        }
+    }
     for (size_t i = 0; i < kicked_len; i += 1) {
         mb_router_conn *conn = kicked[i];
         if (!conn->closed && conn->kick_fn != NULL) {

@@ -9,7 +9,6 @@
 enum {
     MB_READ_CHUNK = 16 * 1024,
     MB_MAX_RX = MB_MAX_CONTROL_LINE + MB_MAX_PAYLOAD + 64,
-    MB_MAX_PENDING = 64 * 1024 * 1024,
 };
 
 // libuv connection state, including exactly one guarded write in flight.
@@ -25,6 +24,7 @@ struct mb_conn {
     uint64_t client_id;
     bool write_pending;
     bool closing;
+    bool counted;
     mb_conn *prev;
     mb_conn *next;
 };

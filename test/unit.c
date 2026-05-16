@@ -125,6 +125,24 @@ static void test_parse_control_line_too_long(void) {
     CHECK(r.status == MB_PARSE_CONTROL_LINE_TOO_LONG);
 }
 
+static void test_parse_rejects_control_bytes_in_tokens(void) {
+    const char *src = "SUB foo\rbar 1\n";
+    const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
+    CHECK(r.status == MB_PARSE_INVALID_ARGS);
+}
+
+static void test_parse_rejects_pub_wildcards(void) {
+    const char *src = "PUB foo.* 1\r\nx\r\n";
+    const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
+    CHECK(r.status == MB_PARSE_INVALID_ARGS);
+}
+
+static void test_parse_malformed_pub_trailer(void) {
+    const char *src = "PUB foo 1\r\nxz";
+    const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
+    CHECK(r.status == MB_PARSE_MALFORMED);
+}
+
 static void test_write_msg(void) {
     mb_buf buf = {0};
     CHECK(mb_write_msg(&buf, lit("foo"), lit("1"), lit("hi")));
@@ -328,6 +346,28 @@ static void test_router_lvc_filter_gates_cache(void) {
     mb_router_free(&router);
 }
 
+static void test_router_lvc_payload_cap(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_slice filters[] = {lit(">")};
+    CHECK(mb_router_configure_lvc(&router, filters, 1));
+    router.lvc_payload_bytes = MB_MAX_LVC_BYTES;
+    CHECK(!mb_router_publish(&router, lit("hot.one"), lit("x")));
+    mb_router_free(&router);
+}
+
+static void test_router_subscription_caps(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    conn.sub_count = MB_MAX_SUBS_PER_CONN;
+    CHECK(!mb_router_subscribe(&router, &conn, lit("foo"), lit("1")));
+    conn.sub_count = 0;
+    router.sub_count = MB_MAX_SUBS_TOTAL;
+    CHECK(!mb_router_subscribe(&router, &conn, lit("foo"), lit("1")));
+    mb_router_free(&router);
+}
+
 static void test_router_unsubscribe(void) {
     mb_router router;
     mb_router_init(&router);
@@ -360,6 +400,10 @@ typedef struct kick_probe {
     int kicks;
 } kick_probe;
 
+typedef struct close_probe {
+    int closes;
+} close_probe;
+
 static void kick_after_full_fanout(void *ctx) {
     kick_probe *probe = ctx;
     probe->kicks += 1;
@@ -379,6 +423,27 @@ static void test_router_kicks_after_fanout(void) {
     CHECK(mb_router_publish(&router, lit("foo"), lit("hi")));
     CHECK(probe.kicks == 1);
     CHECK(conn.closed);
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+}
+
+static void close_after_pending_cap(void *ctx) {
+    close_probe *probe = ctx;
+    probe->closes += 1;
+}
+
+static void test_router_closes_before_pending_append(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    close_probe probe = {0};
+    conn.close_fn = close_after_pending_cap;
+    conn.close_ctx = &probe;
+    CHECK(mb_router_subscribe(&router, &conn, lit("foo"), lit("1")));
+    conn.out.len = MB_MAX_PENDING;
+    CHECK(mb_router_publish(&router, lit("foo"), lit("hi")));
+    CHECK(conn.closed);
+    CHECK(probe.closes == 1);
     mb_buf_free(&conn.out);
     mb_router_free(&router);
 }
@@ -407,6 +472,9 @@ TEST_MAIN(unit,
           test_parse_bad_command,
           test_parse_payload_too_large,
           test_parse_control_line_too_long,
+          test_parse_rejects_control_bytes_in_tokens,
+          test_parse_rejects_pub_wildcards,
+          test_parse_malformed_pub_trailer,
           test_write_info,
           test_write_msg,
           test_router_one_sub,
@@ -421,7 +489,10 @@ TEST_MAIN(unit,
           test_router_lvc_rejects_writes,
           test_router_lvc_disabled,
           test_router_lvc_filter_gates_cache,
+          test_router_lvc_payload_cap,
+          test_router_subscription_caps,
           test_router_unsubscribe,
           test_router_auto_unsubscribe,
           test_router_kicks_after_fanout,
+          test_router_closes_before_pending_append,
           test_router_remove_conn)

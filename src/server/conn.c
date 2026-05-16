@@ -32,6 +32,9 @@ static void unlink_conn(mb_conn *conn) {
 
 static void close_cb(uv_handle_t *handle) {
     mb_conn *conn = handle->data;
+    if (conn->counted && conn->server->conn_count > 0) {
+        conn->server->conn_count -= 1;
+    }
     mb_buf_free(&conn->rx);
     mb_buf_free(&conn->router_conn.out);
     mb_buf_free(&conn->in_flight);
@@ -50,6 +53,10 @@ void mb_conn_begin_close(mb_conn *conn) {
     if (!uv_is_closing((uv_handle_t *)&conn->tcp)) {
         uv_close((uv_handle_t *)&conn->tcp, close_cb);
     }
+}
+
+static void close_conn_from_router(void *ctx) {
+    mb_conn_begin_close(ctx);
 }
 
 static size_t pending_bytes(const mb_conn *conn) {
@@ -185,6 +192,7 @@ static void process_rx(mb_conn *conn) {
         }
         if (result.status != MB_PARSE_OK) {
             if (result.status == MB_PARSE_CONTROL_LINE_TOO_LONG ||
+                result.status == MB_PARSE_MALFORMED ||
                 result.status == MB_PARSE_PAYLOAD_TOO_LARGE) {
                 write_err_or_close(conn, "Protocol Violation");
                 mb_conn_begin_close(conn);
@@ -286,6 +294,8 @@ bool mb_conn_create(mb_server *server, uv_stream_t *listener) {
     server->next_client_id += 1;
     conn->router_conn.kick_fn = mb_conn_kick_write;
     conn->router_conn.kick_ctx = conn;
+    conn->router_conn.close_fn = close_conn_from_router;
+    conn->router_conn.close_ctx = conn;
 
     if (uv_tcp_init(&server->loop, &conn->tcp) != 0) {
         free(conn);
@@ -314,6 +324,8 @@ bool mb_conn_create(mb_server *server, uv_stream_t *listener) {
         server->conns->prev = conn;
     }
     server->conns = conn;
+    conn->counted = true;
+    server->conn_count += 1;
 
     if (uv_read_start((uv_stream_t *)&conn->tcp, alloc_cb, read_cb) != 0) {
         mb_conn_begin_close(conn);
