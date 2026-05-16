@@ -73,16 +73,18 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-End-to-end smoke targets:
+Fast integration smoke:
 
 ```sh
 cmake --build build --target smoke
-cmake --build build --target soundcheck
 ```
 
-Load correctness checks:
+`smoke` runs the TCP server smoke, patchbay `soundcheck`, `load-smoke`, and
+the larger `load-soak` profile.
+The subchecks can also be run directly:
 
 ```sh
+cmake --build build --target soundcheck
 cmake --build build --target load-smoke
 cmake --build build --target load-soak
 ```

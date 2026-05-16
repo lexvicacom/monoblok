@@ -203,6 +203,10 @@ target_include_directories(monoblok PRIVATE src/server src/patchbay)
 
 add_custom_target(smoke
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/smoke.sh $<TARGET_FILE:monoblok>
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/soundcheck.sh $<TARGET_FILE:monoblok>
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/test/load_smoke.py $<TARGET_FILE:monoblok>
+  COMMAND ${CMAKE_COMMAND} -E env MB_LOAD_SUBSCRIBERS=64 MB_LOAD_MESSAGES_PER_SUBJECT=1024 MB_LOAD_TIMEOUT=60
+          python3 ${CMAKE_CURRENT_SOURCE_DIR}/test/load_smoke.py $<TARGET_FILE:monoblok>
   DEPENDS monoblok
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
