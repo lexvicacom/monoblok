@@ -10,6 +10,7 @@ typedef struct mb_bridge {
     void *conn;
     const pb_bridge_config *config;
     char *subject_scratch;
+    char *origin_header_value;
     size_t subject_scratch_cap;
     uint64_t published;
     uint64_t dropped;

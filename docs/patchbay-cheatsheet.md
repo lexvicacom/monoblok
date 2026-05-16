@@ -190,6 +190,7 @@ outbound NATS forwarder. Counters land on `$STATS.bridge.published` /
 | `:tls-ca` | string | CA cert path (PEM) |
 | `:tls-cert` / `:tls-key` | strings | client cert + key (mTLS) |
 | `:tls-skip-verify` | bool | dev only, insecure |
+| `:origin-header` | bool | when true, forwarded messages include `x-monoblok: <hostname>` |
 | `:connect-timeout-ms` / `:ping-interval-ms` | numbers | tuning |
 | `:max-reconnect` | number | -1 for unlimited |
 | `:reconnect-wait-ms` | number | tuning |

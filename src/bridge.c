@@ -11,6 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#define MB_BRIDGE_ORIGIN_HEADER "x-monoblok"
 
 typedef struct bridge_strings {
     char **items;
@@ -34,6 +37,25 @@ static char *slice_to_cstr(pb_slice slice) {
     memcpy(s, slice.ptr, slice.len);
     s[slice.len] = '\0';
     return s;
+}
+
+static char *cstr_dup(const char *s) {
+    const size_t len = strlen(s);
+    char *copy = malloc(len + 1);
+    if (copy == NULL) {
+        return NULL;
+    }
+    memcpy(copy, s, len + 1);
+    return copy;
+}
+
+static char *origin_header_value(void) {
+    char host[256];
+    if (gethostname(host, sizeof host) != 0 || host[0] == '\0') {
+        return cstr_dup("unknown");
+    }
+    host[sizeof host - 1] = '\0';
+    return cstr_dup(host);
 }
 
 static char *track_cstr(bridge_strings *strings, pb_slice slice) {
@@ -172,18 +194,35 @@ bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config) {
 
     bridge_strings strings = {0};
     bool ok = set_bridge_options(opts, config, &strings);
+    char *origin_value = NULL;
+    if (ok && config->origin_header) {
+        origin_value = origin_header_value();
+        if (origin_value == NULL) {
+            fprintf(stderr, "warn: bridge: allocate origin header failed\n");
+            ok = false;
+        }
+    }
     if (ok) {
         natsConnection *conn = NULL;
         status = natsConnection_Connect(&conn, opts);
         ok = set_status(status, "connect");
+        if (ok && config->origin_header) {
+            ok = set_status(natsConnection_HasHeaderSupport(conn), "check header support");
+        }
         if (ok) {
             bridge->conn = conn;
+            bridge->origin_header_value = origin_value;
+            origin_value = NULL;
             bridge->started = true;
+        } else if (conn != NULL) {
+            natsConnection_Destroy(conn);
+            nats_Close();
         }
     }
 
     natsOptions_Destroy(opts);
     bridge_strings_free(&strings);
+    free(origin_value);
     return ok;
 }
 
@@ -215,8 +254,22 @@ void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload) {
     memcpy(bridge->subject_scratch, subject.ptr, subject.len);
     bridge->subject_scratch[subject.len] = '\0';
 
-    natsStatus status =
-        natsConnection_Publish((natsConnection *)bridge->conn, bridge->subject_scratch, payload.ptr, (int)payload.len);
+    natsStatus status = NATS_OK;
+    if (bridge->origin_header_value != NULL) {
+        natsMsg *msg = NULL;
+        status = natsMsg_Create(&msg, bridge->subject_scratch, NULL, (const char *)payload.ptr, (int)payload.len);
+        if (status == NATS_OK) {
+            status = natsMsgHeader_Set(msg, MB_BRIDGE_ORIGIN_HEADER, bridge->origin_header_value);
+        }
+        if (status == NATS_OK) {
+            status = natsConnection_PublishMsg((natsConnection *)bridge->conn, msg);
+        }
+        if (msg != NULL) {
+            natsMsg_Destroy(msg);
+        }
+    } else {
+        status = natsConnection_Publish((natsConnection *)bridge->conn, bridge->subject_scratch, payload.ptr, (int)payload.len);
+    }
     if (status == NATS_OK) {
         bridge->published += 1;
         return;
@@ -234,6 +287,7 @@ void mb_bridge_close(mb_bridge *bridge) {
         natsConnection_Destroy((natsConnection *)bridge->conn);
     }
     free(bridge->subject_scratch);
+    free(bridge->origin_header_value);
     if (bridge->started) {
         nats_Close();
     }

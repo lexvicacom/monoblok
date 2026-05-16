@@ -254,6 +254,10 @@ static bool load_bridge_form(pb_program *program, pb_values items) {
             if (!load_bridge_bool(value, "tls-skip-verify", &bridge.tls_skip_verify)) {
                 goto fail;
             }
+        } else if (pb_slice_eq_lit(key, "origin-header")) {
+            if (!load_bridge_bool(value, "origin-header", &bridge.origin_header)) {
+                goto fail;
+            }
         } else if (pb_slice_eq_lit(key, "connect-timeout-ms")) {
             if (!load_bridge_i64(value, "connect-timeout-ms", &bridge.connect_timeout_ms)) {
                 goto fail;

@@ -197,10 +197,11 @@ Zero or one `(bridge ...)` form in the patchbay file configures it:
   :creds    "/etc/monoblok/ngs.creds"
   :tls      true
   :name     "monoblok-prod-1"
+  :origin-header true
   :export   ["telemetry.>" "alerts.>"])
 ```
 
-A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.c.
+A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. With `:origin-header true`, forwarded messages also carry `x-monoblok: <hostname>` for remote-side provenance. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.c.
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./patchbay-cheatsheet.md).
 

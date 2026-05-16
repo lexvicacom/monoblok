@@ -218,12 +218,14 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
   :creds   "/etc/monoblok/ngs.creds"
   :tls     true
   :name    "monoblok-prod-1"
+  :origin-header true
   :export  ["telemetry.>" "alerts.>"])
 ```
 
 Other keywords: `:user` / `:password`, `:token`, `:tls-ca`, `:tls-cert`
 / `:tls-key`, `:tls-skip-verify` (dev only), `:connect-timeout-ms`,
 `:ping-interval-ms`, `:max-reconnect` (-1 unlimited), `:reconnect-wait-ms`.
+`:origin-header true` adds `x-monoblok: <hostname>` to forwarded messages.
 `:export` is a vector of subject filters; matched publishes are
 forwarded as-is. Nothing flows back. Both `:servers` and `:export`
 also accept the legacy `(...)` list syntax, but `[...]` is the

@@ -168,6 +168,7 @@ static void test_bridge_config_loads(void) {
                            "        :name \"monoblok\"\n"
                            "        :export [\"foo.>\" \"bar\"]\n"
                            "        :tls true\n"
+                           "        :origin-header true\n"
                            "        :max-reconnect 5\n"
                            "        :reconnect-wait-ms 250)\n"
                            "(on \"a\" (publish! \"b\" payload))\n");
@@ -181,6 +182,7 @@ static void test_bridge_config_loads(void) {
     CHECK(program.bridge.has_name);
     CHECK(slice_is(program.bridge.name, "monoblok"));
     CHECK(program.bridge.tls);
+    CHECK(program.bridge.origin_header);
     CHECK(program.bridge.has_max_reconnect);
     CHECK(program.bridge.max_reconnect == 5);
     CHECK(program.bridge.has_reconnect_wait_ms);

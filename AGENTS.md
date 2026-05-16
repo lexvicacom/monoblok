@@ -1,10 +1,10 @@
 # AGENTS.md
 
-Guidance for coding agents working in this C23/libuv Monoblok tree.
+Guidance for coding agents working in this C17/libuv Monoblok tree.
 
 ## Shape
 
-Monoblok is a compact C23 NATS-like daemon with a patchbay routing DSL,
+Monoblok is a compact C17 NATS-like daemon with a patchbay routing DSL,
 optional LVC, snapshots, JSON helpers, and an export-only NATS bridge through
 vendored `nats.c`.
 
@@ -149,8 +149,10 @@ never sent.
 
 ## C Style
 
-- Use C23 where it reduces noise, but keep code portable under the configured
-  compiler flags.
+- Project-owned code targets C17. The root CMake config sets
+  `CMAKE_C_STANDARD 17`, requires that standard, and disables compiler
+  extensions; do not introduce C23-only constructs just because a local
+  compiler accepts them.
 - The target and binary are named `monoblok`; avoid reintroducing `monoblok-c`
   in scripts, docs, or build targets.
 - The root `.clang-format` intentionally uses `ColumnLimit: 0` to avoid

@@ -36,6 +36,7 @@ cat > "$PATCHBAY" <<EOF
 (bridge
   :servers ["nats://127.0.0.1:${REMOTE_PORT}"]
   :name    "monoblok-bridge-smoke"
+  :origin-header true
   :export  ["telemetry.>"])
 
 (on "telemetry.*"
@@ -45,6 +46,7 @@ EOF
 cleanup() {
     [ -n "${MONO_PID:-}" ] && kill "$MONO_PID" 2>/dev/null || true
     [ -n "${SUB_PID:-}" ] && kill "$SUB_PID" 2>/dev/null || true
+    [ -n "${HDR_PID:-}" ] && kill "$HDR_PID" 2>/dev/null || true
     [ -n "${REMOTE_PID:-}" ] && kill "$REMOTE_PID" 2>/dev/null || true
     wait 2>/dev/null || true
     rm -f /tmp/bridge-smoke-*.log "$PATCHBAY"
@@ -97,6 +99,15 @@ if ! grep -q 'bridge: connected' /tmp/bridge-smoke-mono.log; then
 fi
 echo "ok: bridge connected"
 
+(
+    printf 'CONNECT {"headers":true}\r\n'
+    printf 'SUB telemetry.> 99\r\n'
+    printf 'PING\r\n'
+    sleep 2
+) | nc -w 3 127.0.0.1 "$REMOTE_PORT" > /tmp/bridge-smoke-headers.log &
+HDR_PID=$!
+sleep 0.2
+
 # Publish two telemetry messages + one unrelated. The rule also republishes
 # each telemetry.* as telemetry.*.echoed — both the original and the
 # rule-emitted subjects should land on the remote. The unrelated subject
@@ -130,6 +141,14 @@ if [ "$UNRELATED_COUNT" != "0" ]; then
 fi
 echo "ok: remote received 2x telemetry.temp + 2x telemetry.temp.echoed"
 echo "ok: unrelated.x filtered by export filters"
+
+wait "$HDR_PID" 2>/dev/null || true
+HEADER_COUNT=$(tr -d '\r' < /tmp/bridge-smoke-headers.log | grep -ci '^x-monoblok: ' || true)
+if [ "$HEADER_COUNT" -lt "4" ]; then
+    echo "FAIL: expected x-monoblok header on bridged messages, got $HEADER_COUNT"
+    cat /tmp/bridge-smoke-headers.log; exit 1
+fi
+echo "ok: bridged messages include x-monoblok origin header"
 
 # Spot-check the published counter moved.
 (
