@@ -22,7 +22,7 @@ Common ways of running monoblok:
 
 ![monoblok deployment modes](./docs/infographic.png)
 
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. There are no scientific measurements yet. 
+monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and benchmarks are part of the build; the [saved results](./bench-results) show low millions of msgs/sec on a 2-core ARM VPS, so monoblok is unlikely to be the bottleneck for many likely conditioning workloads. Treat the numbers as directional rather than scientific.
 
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation of the same idea, but for microcontrollers.
 

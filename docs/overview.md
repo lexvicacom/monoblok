@@ -20,7 +20,7 @@ Common ways of running monoblok:
 
 ![monoblok deployment modes](./infographic.png)
 
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be **fast**, even on entry level/shared hardware. There are no scientific measurements yet. There are some [benchmark scripts](../scripts) and [results](../bench-results).
+monoblok is written in C with libuv and builds on Linux and macOS. It aims to be **fast**, even on entry level/shared hardware. The [saved benchmarks](../bench-results) show low millions of msgs/sec on a 2-core ARM VPS, suggesting monoblok is unlikely to be the bottleneck in many likely conditioning workloads. The numbers are directional rather than scientific; see the [scripts](../scripts) if you want to rerun them.
 
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation of the same idea, but for microcontrollers.
 
@@ -81,13 +81,11 @@ Top-level forms are `(on SUBJECT-FILTER BODY)`. Wildcards are NATS-style: `*` ma
       (publish! (subject-append "stable"))))
 ```
 
-The root [`patchbay.edn`](../patchbay.edn) is a short tour.
-
 The vocabulary is borrowed from electronics (`squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
 
-JSON payloads like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep. The root [`patchbay.edn`](../patchbay.edn) includes a starter rule for this, while [`json-frames.edn`](../examples/json-frames.edn) shows the fuller version.
+JSON payloads like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep. [`json-frames.edn`](../examples/json-frames.edn) shows the fuller version.
 
-Time-windowed `bar!` closes and `moving-* :ms` evictions are driven by libuv timers scheduled at the next active patchbay deadline.
+Time-windowed operators cover OHLC bars, moving aggregates, silence detection, debounce, and sampling.
 
 The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives in [docs/patchbay.md](./patchbay.md), with a one-line operator summary in [docs/patchbay-cheatsheet.md](./patchbay-cheatsheet.md). Runnable examples live in [`examples/`](../examples/).
 
@@ -221,13 +219,13 @@ Patchbay state is usually per rule and per subject. Avoid unbounded subject toke
 
 ## Design
 
-Each monoblok process owns one libuv loop that owns accept, per-connection read/write completions, router state, and the LVC. Because everything happens on the loop thread, fan-out can append straight into each subscriber's outbound buffer with no locking and kick one `uv_write` per connection per publish.
+monoblok is intentionally simple at runtime: one process, one libuv loop, one application thread for protocol parsing, subject matching, patchbay evaluation, fan-out, write buffering, and LVC state. That makes the behavior predictable and keeps coordination costs out of the publish path.
 
-Everything application-level runs on a single thread: parsing, subject matching, rule evaluation, fan-out, write buffering. The kernel still uses your other cores for I/O, but once a byte arrives it's serial through monoblok. Adding a second thread would mean atomics or locks. The cap is one core's worth of throughput per instance, and the benchmarks below show that's a lot of headroom for signal conditioning workloads. 
+For lower-level details on ownership boundaries, snapshot I/O, libuv behavior, borrowed slices, and allocation policy, see [implementation notes](./implementation-notes.md).
 
 ## Deploying
 
-monoblok has low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good starting point. monoblok runs on one core; the kernel net stack and io_uring workers will use the other.
+monoblok has low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good starting point. monoblok runs on one application core; the operating system can still use other cores for networking and file I/O.
 
 The systemd unit plus `--snapshot` handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).
 
@@ -245,13 +243,13 @@ Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/pa
 
 ## How fast is it?
 
-tl;dr: It's likely to be fast enough. Getting meaningful benchmarks turned out to be trickier than I first realised. No specific percentages here; run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
+tl;dr: It's likely to be fast enough. The saved low-end VPS run is already in the low millions of messages/sec for simple pub/sub and fan-out cases. Getting meaningful benchmarks turned out to be trickier than I first realised, though, so run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
 
 The **shape** of the comparison vs. nats-server, though, is consistent across runs:
 
-- **nats-server wins on pure publish throughput on big machines.** Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over and there are spare cores to spread it across. On small ARM VPSes the gap narrows or disappears: nats-server has less parallelism to exploit, and monoblok's single-threaded design has no overhead to pay.
+- **nats-server wins on pure publish throughput on big machines.** Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over and there are spare cores to spread it across. On small ARM VPSes the gap narrows or disappears: nats-server has less parallelism to exploit, and monoblok has less coordination overhead to pay.
 - **The two are roughly comparable at low fan-out** (1-10 subscribers per publish).
-- **monoblok scales better with subscriber count.** The single-threaded deduped-kicks fan-out avoids the per-subscriber lock work a multi-threaded server pays. Crossover happens somewhere around 10-30 subscribers; the further past that you go, the bigger monoblok's lead.
+- **monoblok scales better with subscriber count.** Its fan-out model has low per-subscriber coordination overhead. Crossover happens somewhere around 10-30 subscribers; the further past that you go, the bigger monoblok's lead.
 
 Worth keeping in mind: nats-server has a decade of production-grade performance work behind it. Any monoblok win in these benches should be read as "the single-threaded design happens to fit this specific workload shape well," not "monoblok is faster than nats." The right tool for most pub/sub deployments is still nats-server; monoblok is for the cases where the patchbay or LVC features earn their place, and "fast enough on a small box" is a happy side-effect of the design, not the headline.
 
