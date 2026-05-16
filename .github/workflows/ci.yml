@@ -54,6 +54,34 @@ jobs:
       - name: Test ASan/UBSan
         run: ctest --test-dir build-asan --output-on-failure
 
+  coverage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install coverage dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcovr libssl-dev
+      - name: Configure coverage
+        run: >
+          CC=gcc cmake -S . -B build-coverage
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS_DEBUG="--coverage -O0 -g"
+          -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+      - name: Build coverage
+        run: cmake --build build-coverage --parallel
+      - name: Test coverage
+        run: ctest --test-dir build-coverage --output-on-failure
+      - name: Generate coverage report
+        run: >
+          gcovr -r .
+          --exclude 'vendor/.*'
+          --html --html-details
+          -o build-coverage/coverage.html
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build-coverage/coverage*
+
   smoke:
     needs:
       - test
