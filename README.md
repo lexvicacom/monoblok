@@ -80,13 +80,15 @@ I love the idea of Zig, but I know C better. I felt uneasy not being able to exp
 
 You could say that many of Zig's virtues come from being forced to think low-level: explicit allocators threaded through your code, no hidden control flow, etc. Zig's community is also fairly anti-AI, which is their call but adds friction for how I want to work. Vibe coding/AI slop is a problem, but one should assess on the **merits** of the LLM-assisted code and the **human contributor's** ability to explain it. 
 
-Claude and Codex, with responsible use, get shit done to a higher quality in amazingly compressed timescales. 
+Claude and Codex, with responsible use, gets shit done in amazingly compressed timescales. 
 
-(Personal note: I had a stroke in Dec 2026 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!)
 
 Anyway, this project is better in C. It has a small surface area an LLM can understand and spot flaws in, given its knowledge of an ancient target (C17). Combined with mature tooling: ASan, UBSan, an acceptable trade IMHO. I like the [Redis style of C](https://github.com/antirez/redis/blob/unstable/MANIFESTO), where you write a minimal domain-specific "not quite DSL" to use, without blurring actual functionality in frameworky BS or macro soup.
 
 Simple C code makes the codebase a breeze to work on by hand, as well as with modern tools. _This is just, like, my opinion, man._
+
+>Personal note: I had a stroke in Dec 2026 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!
+
 
 ## License
 
