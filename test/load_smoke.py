@@ -142,6 +142,7 @@ class Subscriber:
         self.error: BaseException | None = None
         self.sock: socket.socket | None = None
         self.raw_seen = 0
+        self.frames_seen = 0
         self.metric_seen = {
             "avg4": [0] * subjects,
             "sum8": [0] * subjects,
@@ -195,8 +196,9 @@ class Subscriber:
                 _, subject, sid, payload = op
                 self.check_msg(subject, sid, payload)
                 frames += 1
+                self.frames_seen = frames
             self.check_final_counts()
-        except BaseException as exc:
+        except Exception as exc:
             self.error = exc
         finally:
             self.ready.set()
@@ -335,6 +337,19 @@ def tail(path: Path, max_bytes: int = 12000) -> str:
     return data[-max_bytes:].decode("utf-8", "replace")
 
 
+def progress_summary(subscribers: list[Subscriber]) -> str:
+    if not subscribers:
+        return "subscribers=0"
+    ready = sum(1 for sub in subscribers if sub.ready.is_set())
+    done = sum(1 for sub in subscribers if sub.done.is_set())
+    errors = sum(1 for sub in subscribers if sub.error is not None)
+    frames = [sub.frames_seen for sub in subscribers]
+    return (
+        f"subscribers={len(subscribers)} ready={ready} done={done} errors={errors} "
+        f"frames=min:{min(frames)} max:{max(frames)}"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("monoblok", help="path to monoblok binary")
@@ -372,8 +387,12 @@ def main() -> int:
             stderr=stderr,
         )
         subscribers: list[Subscriber] = []
+        started = time.monotonic()
+        phase = "starting"
         try:
+            phase = "waiting for port"
             wait_for_port(host, port, proc, args.timeout)
+            phase = "starting subscribers"
             subscribers = [
                 Subscriber(i, host, port, args.subjects, args.messages_per_subject, base_step, args.timeout)
                 for i in range(args.subscribers)
@@ -381,15 +400,18 @@ def main() -> int:
             for sub in subscribers:
                 sub.start()
             for sub in subscribers:
+                phase = f"waiting for subscriber {sub.idx} readiness"
                 if not sub.ready.wait(args.timeout):
                     raise TimeoutError(f"subscriber {sub.idx} did not become ready")
                 if sub.error is not None:
                     raise sub.error
 
+            phase = "publishing"
             elapsed = publish_all(host, port, args.subjects, args.messages_per_subject, base_step, args.timeout)
 
             deadline = time.monotonic() + args.timeout
             for sub in subscribers:
+                phase = f"waiting for subscriber {sub.idx} drain"
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not sub.done.wait(remaining):
                     raise TimeoutError(f"subscriber {sub.idx} did not receive all frames")
@@ -405,8 +427,20 @@ def main() -> int:
                 f"delivered={delivered} publish_elapsed={elapsed:.3f}s"
             )
             return 0
-        except BaseException as exc:
+        except KeyboardInterrupt:
+            print(
+                f"load smoke interrupted: phase={phase} elapsed={time.monotonic() - started:.3f}s "
+                f"{progress_summary(subscribers)}",
+                file=sys.stderr,
+            )
+            raise
+        except Exception as exc:
             print(f"load smoke failed: {exc}", file=sys.stderr)
+            print(
+                f"load smoke phase: {phase} elapsed={time.monotonic() - started:.3f}s "
+                f"{progress_summary(subscribers)}",
+                file=sys.stderr,
+            )
             print("--- monoblok stderr ---", file=sys.stderr)
             print(tail(stderr_path), file=sys.stderr)
             print("--- monoblok stdout ---", file=sys.stderr)
