@@ -48,42 +48,13 @@
       background: #080a0c;
     }
 
-    .controls {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      color: #b9c3c6;
-      font-size: 14px;
-    }
-
-    .buttons {
-      display: flex;
-      gap: 8px;
-    }
-
-    button {
-      appearance: none;
-      border: 1px solid rgba(238, 242, 244, 0.18);
-      border-radius: 6px;
-      background: #182027;
-      color: #eef2f4;
-      font: inherit;
-      padding: 8px 12px;
-      cursor: pointer;
-    }
-
-    button:hover {
-      background: #22303a;
-    }
-
-    button:disabled {
-      cursor: not-allowed;
-      opacity: 0.45;
-    }
-
     a {
       color: #92d6c4;
+    }
+
+    .repo-link {
+      justify-self: end;
+      font-size: 14px;
     }
   </style>
 </head>
@@ -92,29 +63,17 @@
     <div class="stage-wrap">
       <canvas id="stage" width="1080" height="1350" aria-label="Animated Moonwell Codex terminal demo for LinkedIn"></canvas>
     </div>
-    <div class="controls">
-      <span>LinkedIn 4:5 export: Codex authors Moonwell, monoblok runs the patchbay, the pump publishes telemetry, and NATS subscribers show derived subjects.</span>
-      <div class="buttons">
-        <button id="restart">Replay</button>
-        <button id="record">Record WebM</button>
-        <a id="download" hidden>Download WebM</a>
-      </div>
-    </div>
+    <a class="repo-link" href="https://github.com/lexvicacom/monoblok/">GitHub</a>
   </main>
 
   <script>
     const canvas = document.getElementById("stage");
     const ctx = canvas.getContext("2d");
-    const restartButton = document.getElementById("restart");
-    const recordButton = document.getElementById("record");
-    const downloadLink = document.getElementById("download");
 
     const W = canvas.width;
     const H = canvas.height;
     let startMs = performance.now();
     let rafId = 0;
-    let recorder = null;
-    let recordedChunks = [];
 
     const palette = {
       bg: "#080a0c",
@@ -636,43 +595,6 @@
       rafId = requestAnimationFrame(tick);
     }
 
-    function startRecording() {
-      if (!canvas.captureStream || !window.MediaRecorder) {
-        alert("This browser does not support canvas MediaRecorder export.");
-        return;
-      }
-      restart();
-      recordedChunks = [];
-      downloadLink.hidden = true;
-      const stream = canvas.captureStream(24);
-      const preferredType = "video/webm;codecs=vp9";
-      const fallbackType = "video/webm";
-      const options = MediaRecorder.isTypeSupported(preferredType)
-        ? { mimeType: preferredType }
-        : { mimeType: fallbackType };
-      recorder = new MediaRecorder(stream, options);
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) recordedChunks.push(event.data);
-      };
-      recorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: "video/webm" });
-        const url = URL.createObjectURL(blob);
-        downloadLink.href = url;
-        downloadLink.download = "moonwell-linkedin-demo.webm";
-        downloadLink.hidden = false;
-        recordButton.disabled = false;
-        recordButton.textContent = "Record WebM";
-      };
-      recorder.start();
-      recordButton.disabled = true;
-      recordButton.textContent = "Recording...";
-      window.setTimeout(() => {
-        if (recorder && recorder.state === "recording") recorder.stop();
-      }, 30000);
-    }
-
-    restartButton.addEventListener("click", restart);
-    recordButton.addEventListener("click", startRecording);
     restart();
   </script>
 </body>
