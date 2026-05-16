@@ -30,7 +30,9 @@ See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runn
 
 ![monoblok deployment modes](./docs/infographic.png)
 
-## Install
+## Run it
+
+### Binary
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
@@ -45,7 +47,7 @@ The directory contains runnable examples. Run the `.sh` files.
 
 To add as a service on systemd Linux, run `scripts/install-systemd.sh`.
 
-## Container
+### Container
 
 Multi-arch image:
 
@@ -53,7 +55,7 @@ Multi-arch image:
 docker run --rm -p 14222:14222 ghcr.io/lexvicacom/monoblok:latest --port 14222
 ```
 
-## Build locally
+### Build
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
