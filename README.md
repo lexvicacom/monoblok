@@ -78,11 +78,15 @@ It did, but the good parts of Zig didn't justify its use in **this project**. A 
 
 I love the idea of Zig, but I know C better. I felt uneasy not being able to explain some of the tricky corners involving `@ptrCast`, `anytype`, `inline`, and `std.Io` that an LLM had generated. It's also a shifting target, which hurts. With a good prompt to force 0.16 semantics, Zig is fine with coding assistants, but that's churn and effort spent elsewhere.
 
-You could say that many of Zig's virtues come from being forced to think low-level: explicit allocators threaded through your code, no hidden control flow, etc. Zig's community is also fairly anti-AI, which is their call but adds friction for how I want to work. Vibe coding/AI slop is a problem, but one should assess on the **merits** of the LLM-assisted code and the **human contributor's** ability to explain it. Claude and Codex, with responsible use, get shit done to a higher quality in amazingly compressed timescales. (Personal note: I had a stroke in Dec 2026 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!)
+You could say that many of Zig's virtues come from being forced to think low-level: explicit allocators threaded through your code, no hidden control flow, etc. Zig's community is also fairly anti-AI, which is their call but adds friction for how I want to work. Vibe coding/AI slop is a problem, but one should assess on the **merits** of the LLM-assisted code and the **human contributor's** ability to explain it. 
 
-Anyway, this project is better in C. It has a small surface area an LLM can understand and spot flaws in, given its knowledge of an ancient target (C17). Combined with mature tooling: ASan, UBSan — this is an acceptable trade IMHO. I like the [Redis style of C](https://github.com/antirez/redis/blob/unstable/MANIFESTO), where you write a minimal domain-specific "not quite DSL" to use, without blurring actual functionality in frameworky BS or macro soup.
+Claude and Codex, with responsible use, get shit done to a higher quality in amazingly compressed timescales. 
 
-Simple C code makes the codebase a breeze to work on by hand. _This is just, like, my opinion, man._
+(Personal note: I had a stroke in Dec 2026 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!)
+
+Anyway, this project is better in C. It has a small surface area an LLM can understand and spot flaws in, given its knowledge of an ancient target (C17). Combined with mature tooling: ASan, UBSan, an acceptable trade IMHO. I like the [Redis style of C](https://github.com/antirez/redis/blob/unstable/MANIFESTO), where you write a minimal domain-specific "not quite DSL" to use, without blurring actual functionality in frameworky BS or macro soup.
+
+Simple C code makes the codebase a breeze to work on by hand, as well as with modern tools. _This is just, like, my opinion, man._
 
 ## License
 
