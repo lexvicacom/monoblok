@@ -20,20 +20,21 @@ monoblok speaks NATS. Point your NATS clients at it and the conditioning happens
 - Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
-![monoblok deployment modes](./docs/infographic.png)
-
+### Tiny and fast
 monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and benchmarks are part of the build; the [saved results](./bench-results) show low millions of msgs/sec on a 2-core ARM VPS, so monoblok is unlikely to be the bottleneck for many likely conditioning workloads. Treat the numbers as directional rather than scientific.
 
-[tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation of the same idea, but for microcontrollers.
+[tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation for microcontrollers relaying cleaned sensor data into NATS.
 
 See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+
+![monoblok deployment modes](./docs/infographic.png)
 
 ## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
 ```
-The [release helper](./scripts/start.sh) downloads monoblok (macOS/Linux) and extracts it into the current directory. To run the unpacked binary:
+The [release helper](./scripts/start.sh) downloads the latest monoblok (macOS/Linux) and extracts it into the current directory. To run the unpacked binary:
 
 ```sh
 ./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
