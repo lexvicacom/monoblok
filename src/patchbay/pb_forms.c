@@ -17,7 +17,9 @@
 #include "pb_form_text.c"
 #include "pb_form_state.c"
 #include "pb_form_bar.c"
+#if PB_ENABLE_JSON
 #include "pb_form_json.c"
+#endif
 #include "pb_form_windows.c"
 #include "pb_form_clocks.c"
 
@@ -53,9 +55,15 @@ pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args)
     case PB_FORM_SUBJECT_WITH: return call_subject_with(ctx, args);
     case PB_FORM_PUBLISH: return call_publish(ctx, args);
 
+#if PB_ENABLE_JSON
     // JSON forms.
     case PB_FORM_JSON_GET: return call_json_get(ctx, args);
     case PB_FORM_JSON_DEMUX: return call_json_demux(ctx, args);
+#else
+    case PB_FORM_JSON_GET:
+    case PB_FORM_JSON_DEMUX:
+        return fail(PB_EVAL_UNKNOWN_SYMBOL);
+#endif
 
     // Per-rule state forms.
     case PB_FORM_SQUELCH: return call_squelch(ctx, args);

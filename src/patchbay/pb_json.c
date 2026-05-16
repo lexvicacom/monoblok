@@ -1,5 +1,7 @@
 #include "pb_json.h"
 
+#if PB_ENABLE_JSON
+
 #include "array.h"
 
 #include "yyjson.h"
@@ -300,3 +302,12 @@ pb_parse_result pb_parse_patchbay_source(pb_arena *arena, const char *path, cons
     }
     return pb_parse_all(arena, src, len);
 }
+
+#else
+
+pb_parse_result pb_parse_patchbay_source(pb_arena *arena, const char *path, const char *src, size_t len) {
+    (void)path;
+    return pb_parse_all(arena, src, len);
+}
+
+#endif

@@ -85,10 +85,14 @@ typedef struct pb_program {
     bool uses_wall_clock;
     bool uses_clock_timer;
     size_t eval_depth;
+    pb_eval_symbol_fn user_symbol;
+    pb_eval_call_fn user_call;
+    void *user_ctx;
 } pb_program;
 
 bool pb_program_load_file(pb_program *program, const char *path);
 bool pb_program_load_source(pb_program *program, const char *label, const char *source, size_t source_len);
+void pb_program_set_eval_hooks(pb_program *program, pb_eval_symbol_fn user_symbol, pb_eval_call_fn user_call, void *user_ctx);
 void pb_program_free(pb_program *program);
 bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
                              uint64_t now_ms, int64_t wall_ms);

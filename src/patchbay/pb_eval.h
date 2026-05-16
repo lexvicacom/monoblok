@@ -5,6 +5,10 @@
 
 #include <stdint.h>
 
+#ifndef PB_ENABLE_JSON
+#define PB_ENABLE_JSON 1
+#endif
+
 typedef enum pb_eval_error {
     PB_EVAL_OK,
     PB_EVAL_OOM,
@@ -15,7 +19,11 @@ typedef enum pb_eval_error {
     PB_EVAL_PUBLISH_FAILED,
 } pb_eval_error;
 
+typedef struct pb_eval_ctx pb_eval_ctx;
+typedef struct pb_eval_result pb_eval_result;
 typedef bool (*pb_publish_fn)(void *ctx, pb_slice subject, pb_slice payload);
+typedef bool (*pb_eval_symbol_fn)(void *user_ctx, pb_eval_ctx *ctx, pb_slice name, pb_eval_result *out);
+typedef bool (*pb_eval_call_fn)(void *user_ctx, pb_eval_ctx *ctx, pb_slice name, pb_values args, pb_eval_result *out);
 
 typedef enum pb_eval_state_kind {
     PB_EVAL_STATE_EMPTY,
@@ -103,7 +111,7 @@ typedef struct pb_eval_state {
 } pb_eval_state;
 
 // Per-evaluation bindings and effect hooks; scratch allocations use arena.
-typedef struct pb_eval_ctx {
+struct pb_eval_ctx {
     pb_arena *arena;
     pb_eval_state *state;
     size_t rule_id;
@@ -113,13 +121,16 @@ typedef struct pb_eval_ctx {
     pb_slice payload;
     pb_publish_fn publish;
     void *publish_ctx;
-} pb_eval_ctx;
+    pb_eval_symbol_fn user_symbol;
+    pb_eval_call_fn user_call;
+    void *user_ctx;
+};
 
 // Evaluator return value; value is meaningful only when err is PB_EVAL_OK.
-typedef struct pb_eval_result {
+struct pb_eval_result {
     pb_eval_error err;
     pb_value value;
-} pb_eval_result;
+};
 
 pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr);
 pb_eval_result pb_eval_tick_state_entry(pb_eval_ctx *ctx, pb_eval_state_entry *entry);

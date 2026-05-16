@@ -160,7 +160,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
     pb_eval_state_free(&state);
     pb_arena_free(&scratch);
     if (r.err != PB_EVAL_OK) {
-        fprintf(stderr, "validate: rule eval failed: %s\n", pb_eval_error_name(r.err));
+        fprintf(stderr, "validate: rule %zu eval failed: %s\n", *rule_count - 1, pb_eval_error_name(r.err));
         return false;
     }
     return true;

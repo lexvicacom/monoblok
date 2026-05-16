@@ -172,9 +172,11 @@ static const pb_form_entry FORMS[] = {
     {.name = "publish!", .form = PB_FORM_PUBLISH},
     {.name = "publish", .form = PB_FORM_PUBLISH},
 
+#if PB_ENABLE_JSON
     // JSON forms.
     {.name = "json-get", .form = PB_FORM_JSON_GET},
     {.name = "json-demux!", .form = PB_FORM_JSON_DEMUX},
+#endif
 
     // Per-rule state forms.
     {.name = "squelch", .form = PB_FORM_SQUELCH},
@@ -437,6 +439,12 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
             }
             return ok((pb_value){.kind = PB_NUMBER, .number = n});
         }
+        if (ctx->user_symbol != NULL) {
+            pb_eval_result user = {0};
+            if (ctx->user_symbol(ctx->user_ctx, ctx, expr.text, &user)) {
+                return user;
+            }
+        }
         return fail(PB_EVAL_UNKNOWN_SYMBOL);
     case PB_VECTOR: {
         pb_value *items = pb_arena_alloc(ctx->arena, expr.seq.len * sizeof items[0], _Alignof(pb_value));
@@ -625,6 +633,17 @@ static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
     const pb_values raw_args = {.items = call.items + 1, .len = call.len - 1};
     const pb_form_entry *entry = find_form(head);
     if (entry == NULL) {
+        if (ctx->user_call != NULL) {
+            pb_values args = {0};
+            pb_eval_result er = eval_args(ctx, raw_args, &args);
+            if (er.err != PB_EVAL_OK) {
+                return er;
+            }
+            pb_eval_result user = {0};
+            if (ctx->user_call(ctx->user_ctx, ctx, head, args, &user)) {
+                return user;
+            }
+        }
         return fail(PB_EVAL_UNKNOWN_SYMBOL);
     }
 

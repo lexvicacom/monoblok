@@ -449,7 +449,14 @@ static void scan_clock_forms(pb_program *program, pb_value v) {
 }
 
 static bool load_source(pb_program *program, const char *label, const char *source, size_t source_len, bool log) {
-    *program = (pb_program){0};
+    pb_eval_symbol_fn user_symbol = program->user_symbol;
+    pb_eval_call_fn user_call = program->user_call;
+    void *user_ctx = program->user_ctx;
+    *program = (pb_program){
+        .user_symbol = user_symbol,
+        .user_call = user_call,
+        .user_ctx = user_ctx,
+    };
     const pb_parse_result parsed = pb_parse_patchbay_source(&program->parse_arena, label, source, source_len);
     if (parsed.err != PB_PARSE_OK) {
         fprintf(stderr, "patchbay: parse error in %s: %s at byte %zu\n", label, pb_parse_error_name(parsed.err),
@@ -482,6 +489,15 @@ static bool load_source(pb_program *program, const char *label, const char *sour
 
 bool pb_program_load_source(pb_program *program, const char *label, const char *source, size_t source_len) {
     return load_source(program, label, source, source_len, false);
+}
+
+void pb_program_set_eval_hooks(pb_program *program, pb_eval_symbol_fn user_symbol, pb_eval_call_fn user_call, void *user_ctx) {
+    if (program == NULL) {
+        return;
+    }
+    program->user_symbol = user_symbol;
+    program->user_call = user_call;
+    program->user_ctx = user_ctx;
 }
 
 bool pb_program_load_file(pb_program *program, const char *path) {
@@ -570,6 +586,9 @@ static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t
         .payload = payload,
         .publish = publish_cb,
         .publish_ctx = &pub,
+        .user_symbol = program->user_symbol,
+        .user_call = program->user_call,
+        .user_ctx = program->user_ctx,
     };
     const pb_eval_result r = pb_eval(&ctx, rule->body);
     if (r.err != PB_EVAL_OK) {
@@ -654,6 +673,9 @@ bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, in
                 .payload = {.ptr = "", .len = 0},
                 .publish = publish_cb,
                 .publish_ctx = &pub,
+                .user_symbol = program->user_symbol,
+                .user_call = program->user_call,
+                .user_ctx = program->user_ctx,
             };
             const pb_eval_result r = pb_eval_tick_state_entry(&ctx, entry);
             if (r.err != PB_EVAL_OK) {

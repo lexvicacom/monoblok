@@ -1,6 +1,15 @@
 #include "proto.h"
 
+#if __has_include("mb_version.h")
 #include "mb_version.h"
+#endif
+
+#ifndef MB_VERSION
+#define MB_VERSION "0.0.0"
+#endif
+#ifndef MB_BUILD_INFO
+#define MB_BUILD_INFO "unknown"
+#endif
 
 #include <ctype.h>
 #include <string.h>

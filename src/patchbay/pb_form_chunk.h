@@ -3,7 +3,9 @@
 
 #include "pb_eval_internal.h"
 
+#if PB_ENABLE_JSON
 #include "yyjson.h"
+#endif
 
 #include <math.h>
 #include <stddef.h>
