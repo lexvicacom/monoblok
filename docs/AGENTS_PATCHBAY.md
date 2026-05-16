@@ -2,8 +2,8 @@
 
 Paste the block below into an LLM coding agent's project instructions
 whenever you want the model to author or edit patchbay rule files for
-monoblok. It is self-contained: it does not assume the model has read
-the repo.
+monoblok or Tinyblok/Patchbay Lite. It is self-contained: it does not
+assume the model has read either repo.
 
 ## Install
 
@@ -26,14 +26,15 @@ patchbay files.
 Agent guidance
 ---
 
-You are writing rules for **monoblok's patchbay**, a small s-expression
-DSL that runs on top of a NATS-compatible message router. Rule files
-live on disk (conventionally `patchbay.edn`) and are loaded at daemon
-startup. When asked for a patchbay file, your output is always valid
-patchbay EDN, no prose outside EDN comments (`;` to end of line). When
-asked for companion files such as a pump driver, keep those files
-separate and make the driver publish subjects that the patchbay actually
-matches.
+You are writing rules for **monoblok patchbay** or **Tinyblok/Patchbay
+Lite**, a small s-expression DSL that runs on top of a NATS-compatible
+message router. Monoblok rule files live on disk (conventionally
+`patchbay.edn`) and are loaded at daemon startup. Tinyblok embeds
+`patchbay.edn` into firmware and parses it at boot. When asked for a
+patchbay file, your output is always valid patchbay EDN, no prose outside
+EDN comments (`;` to end of line). When asked for companion files such as
+a host-side pump driver, keep those files separate and make the driver
+publish subjects that the patchbay actually matches.
 
 ## Mental model
 
@@ -52,9 +53,69 @@ you genuinely want a multi-stage pipeline (e.g. `json-demux!` head rule
 emitting scalars that downstream rules condition); otherwise leave it
 off.
 
-There are also top-level config forms: `(lvc ["filter" ...])` opts matching
-subjects into `$LVC.*` last-value streams, and optional `(bridge ...)`
-forwards local publishes to a remote NATS cluster. The bridge is export-only.
+In full monoblok there are also top-level config forms: `(lvc ["filter"
+...])` opts matching subjects into `$LVC.*` last-value streams, and optional
+`(bridge ...)` forwards local publishes to a remote NATS cluster. The bridge is
+export-only.
+
+## Target runtime: monoblok vs Tinyblok
+
+This prompt covers both monoblok and Tinyblok/Patchbay Lite. Before authoring
+target-specific rules, determine the target runtime:
+
+- If the repo, path, command, or prompt clearly says monoblok daemon, use full
+  monoblok patchbay.
+- If it clearly says Tinyblok, ESP32, firmware, microcontroller, or Patchbay
+  Lite, use Patchbay Lite.
+- If the target is ambiguous and the answer would differ, ask the user to
+  confirm: monoblok daemon or Tinyblok/Patchbay Lite. If the requested rule is
+  genuinely portable ordinary `(on ...)` patchbay with no target-specific
+  features, you may proceed and keep it in the portable subset.
+
+For portable rules, prefer ordinary `(on ...)` rules; scalar bound values like
+`subject`, `payload`, `payload-float`, and `payload-int`; arithmetic,
+comparison, string, subject, state, window, clock, edge, bar, and `publish!`
+forms. This subset works for both runtimes unless a local build disables a form.
+
+Alert the user before using or recommending full monoblok-only features for a
+Tinyblok file. This includes top-level `(lvc ...)` and `(bridge ...)`, daemon
+flags such as `--snapshot`, runtime patch/config loading, dynamic graph edits,
+server-side subscriptions beyond Tinyblok's fixed request subjects, inbound
+bridges, LVC/snapshot policy, and fleet-management behavior. Tinyblok's vendored
+core can parse `lvc` and `bridge`, but they are not wired into firmware policy.
+
+JSON/event-document processing is also outside Patchbay Lite by default.
+Tinyblok can compile `json-get` and `json-demux!` behind
+`CONFIG_TINYBLOK_PATCHBAY_JSON`, but that option is disabled by default for
+firmware size. Do not introduce JSON forms in a Tinyblok patchbay unless the
+user explicitly enables that Kconfig option and accepts the size tradeoff.
+
+## Patchbay Lite additions
+
+Tinyblok embeds `patchbay.edn` into the firmware image and parses it once at
+boot. It supports normal `(on ...)` rules plus these Tinyblok-specific forms:
+
+- `(pump "subject" :from c_symbol :type TYPE :hz N)` registers a timed local
+  source. `TYPE` is `u32`, `i32`, `f32`, `u64`, or `uptime-s`; the C source is a
+  zero-argument read such as `uint32_t name(void)`, `int name(void)`,
+  `float name(void)`, or `uint64_t name(void)`. Add user-owned implementations
+  to `main/c/user.c` or another C file listed by `main/CMakeLists.txt`, then
+  register the native symbol in `main/c/tinyblok_patchbay.c`.
+- `(fn name :from c_symbol :type TYPE)` exposes a compiled zero-argument helper
+  as a rule value. `(fn name :from c_symbol :input bytes :type bytes)` exposes a
+  byte transformer that can be called from request handlers as `(name payload)`.
+  Scalar `:input` functions are firmware-version dependent; verify the local
+  Tinyblok native symbol table before using them.
+- `(on-req "subject" BODY)` registers a fixed NATS request subject. Tinyblok
+  subscribes to it after each broker connect, evaluates `BODY`, and sends
+  replies to the requester's reply inbox.
+- `(reply! VALUE)` sends a request reply from inside `on-req`. In a pipeline,
+  `(-> uptime-s (reply!))` replies with the threaded value. With no argument,
+  `reply!` replies with the original request payload.
+
+Tinyblok's `publish!` queues outbound records into the firmware TX ring for the
+main loop to drain to NATS. Keep pump, request, and publish paths deterministic:
+no per-tick heap allocation, blocking I/O, runtime parsing, or unbounded work.
 
 ## Grammar (s-expressions)
 
@@ -344,7 +405,16 @@ subjects/payloads. Time-based ops use the normal libxev clock path; if
 you do not want to wait for pending timers after stdin closes, add
 `--soundcheck-linger-ms 0`.
 
+For Tinyblok/Patchbay Lite, prefer the firmware repo's `make soundcheck` or
+`make test` because they build the host validator against the vendored
+monoblok patchbay and the embedded `patchbay.edn`.
+
 ## Companion pump drivers
+
+This section is for host-side monoblok examples. For Tinyblok/Patchbay Lite,
+do not create a Python pump driver unless explicitly asked; use top-level
+`(pump ...)` declarations backed by compiled C symbols and register those
+symbols in Tinyblok's native symbol table.
 
 If you are asked to generate a pump driver for the topology, create a
 small standalone script that publishes realistic sample traffic into
@@ -467,9 +537,10 @@ if __name__ == "__main__":
 
 Before returning a patchbay file, verify:
 
-1. Every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(bridge ...)`.
+1. For monoblok, every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(bridge ...)`. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)` or `(bridge ...)` there without alerting the user that they are beyond Lite.
 2. Every `publish!` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
 3. Every numeric op is fed a numeric value (`payload-float` / `payload-int` / arithmetic result), not raw `payload`.
 4. `N` in `moving-*` is a literal integer and consistent per call site.
 5. Pipelines built with `->` end in a side-effecting form (`publish!`); a pipeline that ends in a pure value is dead code.
-6. Comments start with `;` and never leak prose outside them.
+6. Tinyblok `(pump ...)` and `(fn ...)` declarations name registered native symbols, and `on-req` handlers reply with `reply!` rather than assuming arbitrary runtime subscriptions.
+7. Comments start with `;` and never leak prose outside them.
