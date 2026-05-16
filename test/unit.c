@@ -1,3 +1,5 @@
+#include "array.h"
+#include "fs.h"
 #include "proto.h"
 #include "router.h"
 #include "test_check.h"
@@ -5,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static mb_slice lit(const char *s) {
     return (mb_slice){.ptr = (const uint8_t *)s, .len = strlen(s)};
@@ -148,6 +151,60 @@ static void test_write_msg(void) {
     CHECK(mb_write_msg(&buf, lit("foo"), lit("1"), lit("hi")));
     check_buf_eq(&buf, "MSG foo 1 2\r\nhi\r\n");
     mb_buf_free(&buf);
+}
+
+static void test_buf_consume_and_swap(void) {
+    mb_buf buf = {0};
+    CHECK(mb_buf_append(&buf, "abcdef", 6));
+    mb_buf_consume(&buf, 2);
+    check_buf_eq(&buf, "cdef");
+    mb_buf_consume(&buf, 99);
+    CHECK(buf.len == 0);
+    mb_buf_free(&buf);
+
+    mb_buf a = {0};
+    mb_buf b = {0};
+    CHECK(mb_buf_append(&a, "left", 4));
+    CHECK(mb_buf_append(&b, "right", 5));
+    mb_buf_swap(&a, &b);
+    check_buf_eq(&a, "right");
+    check_buf_eq(&b, "left");
+    mb_buf_free(&a);
+    mb_buf_free(&b);
+}
+
+static void test_fs_read_write_helpers(void) {
+    mb_buf buf = {0};
+    CHECK(!mb_read_file(NULL, &buf));
+
+    char path[128];
+    snprintf(path, sizeof path, "/tmp/monoblok-fs-%ld.txt", (long)getpid());
+    remove(path);
+    CHECK(!mb_read_file(path, &buf));
+
+    CHECK(!mb_write_file_atomic(NULL, lit("x")));
+    CHECK(!mb_write_file_atomic(path, (mb_slice){.ptr = NULL, .len = 1}));
+    CHECK(mb_write_file_atomic(path, lit("hello")));
+    CHECK(mb_read_file(path, &buf));
+    check_buf_eq(&buf, "hello");
+
+    mb_buf_free(&buf);
+    remove(path);
+}
+
+static void test_array_reserve_helpers(void) {
+    size_t cap = 0;
+    int *items = NULL;
+    CHECK(!mb_array_reserve(NULL, &cap, 1, sizeof items[0], 1));
+    CHECK(!mb_array_reserve((void **)&items, NULL, 1, sizeof items[0], 1));
+    CHECK(!mb_array_reserve((void **)&items, &cap, 1, 0, 1));
+    CHECK(mb_array_reserve((void **)&items, &cap, 1, sizeof items[0], 0));
+    CHECK(cap >= 1);
+    items[0] = 7;
+    CHECK(mb_array_reserve((void **)&items, &cap, 9, sizeof items[0], 0));
+    CHECK(cap >= 9);
+    CHECK(items[0] == 7);
+    free(items);
 }
 
 static void test_write_info(void) {
@@ -477,6 +534,9 @@ TEST_MAIN(unit,
           test_parse_malformed_pub_trailer,
           test_write_info,
           test_write_msg,
+          test_buf_consume_and_swap,
+          test_fs_read_write_helpers,
+          test_array_reserve_helpers,
           test_router_one_sub,
           test_router_two_subs,
           test_router_queue_group,

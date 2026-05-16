@@ -207,6 +207,8 @@ endif()
 target_include_directories(monoblok PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_include_directories(monoblok PRIVATE src/server src/patchbay)
 
+add_test(NAME cli COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/cli_unit.sh $<TARGET_FILE:monoblok>)
+
 add_custom_target(smoke
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/smoke.sh $<TARGET_FILE:monoblok>
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/soundcheck.sh $<TARGET_FILE:monoblok>
