@@ -74,7 +74,7 @@ It's 2026, Claude and Codex help me a lot. All code is reviewed and iterated upo
 
 #### Didn't this used to be written in Zig?
 
-It did, but the good parts of Zig didn't justify its use in **this project**. A project like monoblok ought to be boring technically — a solid, tiny, trusted tool that just gets out of the way.
+It did, but the good parts of Zig didn't justify its use in **this project**. A project like monoblok ought to be boring technically... a solid, tiny, trusted tool that just gets out of the way.
 
 I love the idea of Zig, but I know C better. I felt uneasy not being able to explain some of the tricky corners involving `@ptrCast`, `anytype`, `inline`, and `std.Io` that an LLM had generated. It's also a shifting target, which hurts. With a good prompt to force 0.16 semantics, Zig is fine with coding assistants, but that's churn and effort spent elsewhere.
 
