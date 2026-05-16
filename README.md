@@ -72,9 +72,23 @@ Compiles cleanly on macOS and Linux. Dependencies are vendored.
 
 It's 2026, Claude and Codex help me a lot. All code is reviewed and iterated upon before being merged.
 
-### Didn't this used to be written in Zig?
+#### Didn't this used to be written in Zig?
 
-It did, but the good parts of Zig perhaps didn't justify its use **in this project**. I love the idea of Zig but I know C far better. I felt uneasy not being able to explain some of the tricky `@ptrCast` `anytype` `inline` `std.Io` corners that the LLM had generated. With a good prompt to force 0.16 semantics, there's no reason why Zig isn't a fine language to use with coding assistants. However, you could argue that many of Zig's virtues come from you being forced to think low level. **This project** has a small surface area that an LLM can statically analyse with its knowledge of an ancient target (C17). Combined with traditional tooling, this lowers the risk. I like the [Redis style of C](https://github.com/antirez/redis/blob/unstable/MANIFESTO) where you write a minimal domain-specific "not quite DSL" to use, without blurring actual functionality in frameworky BS or macro soup. Simple C code makes the codebase a breeze to work on by hand. Obviously, simple is good. _This is just like, my opinion, man._
+It did, but the good parts of Zig didn't justify its use in **this project**. A project like monoblok ought to be boring technically... a solid, tiny, trusted tool that just gets out of the way.
+
+I love the idea of Zig, but I know C better. I felt uneasy not being able to explain some of the tricky corners involving `@ptrCast`, `anytype`, `inline`, and `std.Io` that an LLM had generated. It's also a shifting target, which hurts. With a good prompt to force 0.16 semantics, Zig is fine with coding assistants, but that's churn and effort spent elsewhere.
+
+You could say that many of Zig's virtues come from being forced to think low-level: explicit allocators threaded through your code, no hidden control flow, etc. Zig's community is also fairly anti-AI, which is their call but adds friction for how I want to work. Vibe coding/AI slop is a problem, but one should assess on the **merits** of the LLM-assisted code and the **human contributor's** ability to explain it. 
+
+Claude and Codex, with responsible use, gets shit done in amazingly compressed timescales. 
+
+
+Anyway, this project is better in C. It has a small surface area an LLM can understand and spot flaws in, given its knowledge of an ancient target (C17). Combined with mature tooling: ASan, UBSan, an acceptable trade IMHO. I like the [Redis style of C](https://github.com/antirez/redis/blob/unstable/MANIFESTO), where you write a minimal domain-specific "not quite DSL" to use, without blurring actual functionality in frameworky BS or macro soup.
+
+Simple C code makes the codebase a breeze to work on by hand, as well as with modern tools. _This is just, like, my opinion, man._
+
+>Personal note: I had a stroke in Dec 2026 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!
+
 
 ## License
 
