@@ -271,6 +271,13 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
+
+
 def positive_float(value: str) -> float:
     parsed = float(value)
     if parsed <= 0:
@@ -299,12 +306,20 @@ def wait_for_port(host: str, port: int, proc: subprocess.Popen[object], timeout_
     raise TimeoutError(f"timed out waiting for {host}:{port}: {last_error}")
 
 
-def publish_all(host: str, port: int, subjects: int, messages_per_subject: int, base_step: int, timeout_s: float) -> float:
+def wait_for_pong(reader: ProtoReader, deadline: float) -> None:
+    while True:
+        op = read_server_op(reader, deadline)
+        if op[0] == "PONG":
+            return
+
+
+def publish_all(host: str, port: int, subjects: int, messages_per_subject: int, base_step: int, timeout_s: float, flush_every: int) -> float:
     deadline = time.monotonic() + timeout_s
     sock, reader = connect_client(host, port, deadline)
     started = time.monotonic()
     try:
         pending = bytearray()
+        sent = 0
         for local_idx in range(messages_per_subject):
             for subject_idx in range(subjects):
                 subject = f"load.{subject_idx}".encode("ascii")
@@ -319,13 +334,18 @@ def publish_all(host: str, port: int, subjects: int, messages_per_subject: int, 
                 if len(pending) >= 65536:
                     sock.sendall(pending)
                     pending.clear()
+                sent += 1
+                if flush_every != 0 and sent % flush_every == 0:
+                    if pending:
+                        sock.sendall(pending)
+                        pending.clear()
+                    sock.sendall(b"PING\r\n")
+                    wait_for_pong(reader, deadline)
         if pending:
             sock.sendall(pending)
         sock.sendall(b"PING\r\n")
-        while True:
-            op = read_server_op(reader, deadline)
-            if op[0] == "PONG":
-                return time.monotonic() - started
+        wait_for_pong(reader, deadline)
+        return time.monotonic() - started
     finally:
         sock.close()
 
@@ -362,6 +382,7 @@ def parse_args() -> argparse.Namespace:
         type=positive_int,
         default=int(os.environ.get("MB_LOAD_MESSAGES_PER_SUBJECT", "512")),
     )
+    parser.add_argument("--flush-every", type=nonnegative_int, default=int(os.environ.get("MB_LOAD_FLUSH_EVERY", "0")))
     parser.add_argument("--timeout", type=positive_float, default=float(os.environ.get("MB_LOAD_TIMEOUT", "30")))
     parser.add_argument("--keep-temp", action="store_true")
     return parser.parse_args()
@@ -407,7 +428,9 @@ def main() -> int:
                     raise sub.error
 
             phase = "publishing"
-            elapsed = publish_all(host, port, args.subjects, args.messages_per_subject, base_step, args.timeout)
+            elapsed = publish_all(
+                host, port, args.subjects, args.messages_per_subject, base_step, args.timeout, args.flush_every
+            )
 
             deadline = time.monotonic() + args.timeout
             for sub in subscribers:
@@ -424,7 +447,8 @@ def main() -> int:
                 "load smoke passed: "
                 f"subscribers={args.subscribers} subjects={args.subjects} "
                 f"pubs={total_pubs} frames/sub={frames_per_sub} "
-                f"delivered={delivered} publish_elapsed={elapsed:.3f}s"
+                f"delivered={delivered} flush_every={args.flush_every} "
+                f"publish_elapsed={elapsed:.3f}s"
             )
             return 0
         except KeyboardInterrupt:
