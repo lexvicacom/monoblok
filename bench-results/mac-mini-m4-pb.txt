@@ -1,0 +1,23 @@
+=== Host ===
+
+macOS 26.2 
+arm64 · 10 cores · 16 GB
+
+monoblok 0.2.6 (Darwin/arm64 AppleClang 17.0.0.17000013 Release)
+nats cli 0.3.2
+monoblok libuv mode: platform default
+
+Running monoblok benchmarks...
+Running monoblok+patchbay (1 rule) benchmarks...
+Running monoblok+patchbay (50 rules) benchmarks...
+
+=== Results (msgs/sec) ===
+
+Workload                no patchbay       1 rule       Δ     50 rules       Δ
+--------                -----------       ------      ---     --------      ---
+1 pub × 1M × 64B        6,762,283    5,595,402     -17%    5,219,718     -23%
+2 pub × 500k × 64B     10,190,555    5,565,183     -45%    5,903,364     -42%
+8 pub × 200k × 128B     8,276,418    4,370,728     -47%    4,541,222     -45%
+1 pub → 1 sub           4,761,018    5,090,450      +7%    4,891,532      +3%
+1 pub → 10 subs        16,468,789   13,802,019     -16%   16,744,049      +2%
+1 pub → 50 subs        18,323,357   17,337,046      -5%   17,080,790      -7%
