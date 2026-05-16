@@ -41,7 +41,7 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-  sanitizer:
+  test-asan:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +57,7 @@ jobs:
   smoke:
     needs:
       - test
-      - sanitizer
+      - test-asan
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
