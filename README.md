@@ -1,6 +1,6 @@
 # monoblok
 
-A NATS-core compatible messaging system that conditions subjects before subscribers see them.
+A NATS-core compatible messaging system that conditions messages, before subscribers see them.
 
 > Fix raw input streams once, not in every subscriber.
 >
