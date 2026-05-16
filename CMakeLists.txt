@@ -79,15 +79,26 @@ set(MB_CORE
 
 set(PB_CORE
   src/patchbay/pb_arena.c
-  src/patchbay/pb_builtins.c
+  src/patchbay/pb_forms.c
   src/patchbay/pb_eval.c
   src/patchbay/pb_json.c
   src/patchbay/pb_program.c
   src/patchbay/pb_sexpr.c
   src/patchbay/pb_soundcheck.c
   src/patchbay/pb_validate.c
-  src/patchbay/pb_window_builtins.c
 )
+
+set(PB_FORM_FRAGMENTS
+  src/patchbay/pb_form_chunk.h
+  src/patchbay/pb_form_bar.c
+  src/patchbay/pb_form_clocks.c
+  src/patchbay/pb_form_json.c
+  src/patchbay/pb_form_numbers.c
+  src/patchbay/pb_form_state.c
+  src/patchbay/pb_form_text.c
+  src/patchbay/pb_form_windows.c
+)
+set_source_files_properties(${PB_FORM_FRAGMENTS} PROPERTIES HEADER_FILE_ONLY TRUE)
 
 add_library(yyjson STATIC vendor/yyjson/src/yyjson.c)
 target_include_directories(yyjson PUBLIC vendor/yyjson/src)
@@ -101,7 +112,7 @@ add_executable(unit-tests test/unit.c)
 target_link_libraries(unit-tests PRIVATE monoblok_core)
 target_compile_options(unit-tests PRIVATE ${MB_WARNINGS})
 
-add_library(patchbay_sexpr STATIC ${PB_CORE})
+add_library(patchbay_sexpr STATIC ${PB_CORE} ${PB_FORM_FRAGMENTS})
 target_include_directories(patchbay_sexpr PUBLIC src)
 target_include_directories(patchbay_sexpr PUBLIC src/patchbay)
 target_include_directories(patchbay_sexpr PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/generated)

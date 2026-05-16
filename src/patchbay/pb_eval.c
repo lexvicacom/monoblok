@@ -124,80 +124,95 @@ bool value_eq(pb_value a, pb_value b) {
 
 static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call);
 
-typedef struct pb_builtin_entry {
+typedef struct pb_form_entry {
     const char *name;
-    pb_builtin builtin;
+    pb_form form;
     bool special;
-} pb_builtin_entry;
+} pb_form_entry;
 
-static const pb_builtin_entry BUILTINS[] = {
-    {.name = "do", .builtin = PB_BUILTIN_DO, .special = true},
-    {.name = "if", .builtin = PB_BUILTIN_IF, .special = true},
-    {.name = "when", .builtin = PB_BUILTIN_WHEN, .special = true},
-    {.name = "and", .builtin = PB_BUILTIN_AND, .special = true},
-    {.name = "or", .builtin = PB_BUILTIN_OR, .special = true},
-    {.name = "->", .builtin = PB_BUILTIN_THREAD, .special = true},
-    {.name = "transition", .builtin = PB_BUILTIN_TRANSITION, .special = true},
-    {.name = "dropout", .builtin = PB_BUILTIN_DROPOUT, .special = true},
-    {.name = "now", .builtin = PB_BUILTIN_NOW},
-    {.name = "not", .builtin = PB_BUILTIN_NOT},
-    {.name = "=", .builtin = PB_BUILTIN_EQ},
-    {.name = ">", .builtin = PB_BUILTIN_GT},
-    {.name = "<", .builtin = PB_BUILTIN_LT},
-    {.name = ">=", .builtin = PB_BUILTIN_GE},
-    {.name = "<=", .builtin = PB_BUILTIN_LE},
-    {.name = "+", .builtin = PB_BUILTIN_ADD},
-    {.name = "-", .builtin = PB_BUILTIN_SUB},
-    {.name = "*", .builtin = PB_BUILTIN_MUL},
-    {.name = "/", .builtin = PB_BUILTIN_DIV},
-    {.name = "str-concat", .builtin = PB_BUILTIN_STR_CONCAT},
-    {.name = "contains?", .builtin = PB_BUILTIN_CONTAINS},
-    {.name = "starts-with?", .builtin = PB_BUILTIN_STARTS_WITH},
-    {.name = "ends-with?", .builtin = PB_BUILTIN_ENDS_WITH},
-    {.name = "subject-append", .builtin = PB_BUILTIN_SUBJECT_APPEND},
-    {.name = "subject-token", .builtin = PB_BUILTIN_SUBJECT_TOKEN},
-    {.name = "subject-with", .builtin = PB_BUILTIN_SUBJECT_WITH},
-    {.name = "publish!", .builtin = PB_BUILTIN_PUBLISH},
-    {.name = "publish", .builtin = PB_BUILTIN_PUBLISH},
-    {.name = "json-get", .builtin = PB_BUILTIN_JSON_GET},
-    {.name = "json-demux!", .builtin = PB_BUILTIN_JSON_DEMUX},
-    {.name = "round", .builtin = PB_BUILTIN_ROUND},
-    {.name = "quantize", .builtin = PB_BUILTIN_QUANTIZE},
-    {.name = "clamp", .builtin = PB_BUILTIN_CLAMP},
-    {.name = "min", .builtin = PB_BUILTIN_MIN},
-    {.name = "max", .builtin = PB_BUILTIN_MAX},
-    {.name = "abs", .builtin = PB_BUILTIN_ABS},
-    {.name = "sign", .builtin = PB_BUILTIN_SIGN},
-    {.name = "squelch", .builtin = PB_BUILTIN_SQUELCH},
-    {.name = "deadband", .builtin = PB_BUILTIN_DEADBAND},
-    {.name = "changed?", .builtin = PB_BUILTIN_CHANGED},
-    {.name = "hold-off", .builtin = PB_BUILTIN_HOLD_OFF},
-    {.name = "rising-edge", .builtin = PB_BUILTIN_RISING_EDGE},
-    {.name = "falling-edge", .builtin = PB_BUILTIN_FALLING_EDGE},
-    {.name = "delta", .builtin = PB_BUILTIN_DELTA},
-    {.name = "count!", .builtin = PB_BUILTIN_COUNT},
-    {.name = "count", .builtin = PB_BUILTIN_COUNT},
-    {.name = "moving-avg", .builtin = PB_BUILTIN_MOVING_AVG},
-    {.name = "moving-sum", .builtin = PB_BUILTIN_MOVING_SUM},
-    {.name = "moving-max", .builtin = PB_BUILTIN_MOVING_MAX},
-    {.name = "moving-min", .builtin = PB_BUILTIN_MOVING_MIN},
-    {.name = "median", .builtin = PB_BUILTIN_MEDIAN},
-    {.name = "percentile", .builtin = PB_BUILTIN_PERCENTILE},
-    {.name = "stddev", .builtin = PB_BUILTIN_STDDEV},
-    {.name = "variance", .builtin = PB_BUILTIN_VARIANCE},
-    {.name = "rate", .builtin = PB_BUILTIN_RATE},
-    {.name = "throttle", .builtin = PB_BUILTIN_THROTTLE},
-    {.name = "debounce!", .builtin = PB_BUILTIN_DEBOUNCE},
-    {.name = "sample!", .builtin = PB_BUILTIN_SAMPLE},
-    {.name = "aggregate!", .builtin = PB_BUILTIN_AGGREGATE},
-    {.name = "bar!", .builtin = PB_BUILTIN_BAR},
-    {.name = "bar", .builtin = PB_BUILTIN_BAR},
+static const pb_form_entry FORMS[] = {
+    // Special forms evaluate raw arguments in pb_eval.c.
+    {.name = "do", .form = PB_FORM_DO, .special = true},
+    {.name = "if", .form = PB_FORM_IF, .special = true},
+    {.name = "when", .form = PB_FORM_WHEN, .special = true},
+    {.name = "and", .form = PB_FORM_AND, .special = true},
+    {.name = "or", .form = PB_FORM_OR, .special = true},
+    {.name = "->", .form = PB_FORM_THREAD, .special = true},
+    {.name = "transition", .form = PB_FORM_TRANSITION, .special = true},
+    {.name = "dropout", .form = PB_FORM_DROPOUT, .special = true},
+
+    // Numeric, boolean, comparison, arithmetic, and wall-clock forms.
+    {.name = "now", .form = PB_FORM_NOW},
+    {.name = "not", .form = PB_FORM_NOT},
+    {.name = "=", .form = PB_FORM_EQ},
+    {.name = ">", .form = PB_FORM_GT},
+    {.name = "<", .form = PB_FORM_LT},
+    {.name = ">=", .form = PB_FORM_GE},
+    {.name = "<=", .form = PB_FORM_LE},
+    {.name = "+", .form = PB_FORM_ADD},
+    {.name = "-", .form = PB_FORM_SUB},
+    {.name = "*", .form = PB_FORM_MUL},
+    {.name = "/", .form = PB_FORM_DIV},
+    {.name = "round", .form = PB_FORM_ROUND},
+    {.name = "quantize", .form = PB_FORM_QUANTIZE},
+    {.name = "clamp", .form = PB_FORM_CLAMP},
+    {.name = "min", .form = PB_FORM_MIN},
+    {.name = "max", .form = PB_FORM_MAX},
+    {.name = "abs", .form = PB_FORM_ABS},
+    {.name = "sign", .form = PB_FORM_SIGN},
+
+    // Text, subject, and publish forms.
+    {.name = "str-concat", .form = PB_FORM_STR_CONCAT},
+    {.name = "contains?", .form = PB_FORM_CONTAINS},
+    {.name = "starts-with?", .form = PB_FORM_STARTS_WITH},
+    {.name = "ends-with?", .form = PB_FORM_ENDS_WITH},
+    {.name = "subject-append", .form = PB_FORM_SUBJECT_APPEND},
+    {.name = "subject-token", .form = PB_FORM_SUBJECT_TOKEN},
+    {.name = "subject-with", .form = PB_FORM_SUBJECT_WITH},
+    {.name = "publish!", .form = PB_FORM_PUBLISH},
+    {.name = "publish", .form = PB_FORM_PUBLISH},
+
+    // JSON forms.
+    {.name = "json-get", .form = PB_FORM_JSON_GET},
+    {.name = "json-demux!", .form = PB_FORM_JSON_DEMUX},
+
+    // Per-rule state forms.
+    {.name = "squelch", .form = PB_FORM_SQUELCH},
+    {.name = "deadband", .form = PB_FORM_DEADBAND},
+    {.name = "changed?", .form = PB_FORM_CHANGED},
+    {.name = "hold-off", .form = PB_FORM_HOLD_OFF},
+    {.name = "rising-edge", .form = PB_FORM_RISING_EDGE},
+    {.name = "falling-edge", .form = PB_FORM_FALLING_EDGE},
+    {.name = "delta", .form = PB_FORM_DELTA},
+    {.name = "count!", .form = PB_FORM_COUNT},
+    {.name = "count", .form = PB_FORM_COUNT},
+
+    // Ring-window forms.
+    {.name = "moving-avg", .form = PB_FORM_MOVING_AVG},
+    {.name = "moving-sum", .form = PB_FORM_MOVING_SUM},
+    {.name = "moving-max", .form = PB_FORM_MOVING_MAX},
+    {.name = "moving-min", .form = PB_FORM_MOVING_MIN},
+    {.name = "median", .form = PB_FORM_MEDIAN},
+    {.name = "percentile", .form = PB_FORM_PERCENTILE},
+    {.name = "stddev", .form = PB_FORM_STDDEV},
+    {.name = "variance", .form = PB_FORM_VARIANCE},
+    {.name = "rate", .form = PB_FORM_RATE},
+    {.name = "throttle", .form = PB_FORM_THROTTLE},
+
+    // Clocked publish forms.
+    {.name = "debounce!", .form = PB_FORM_DEBOUNCE},
+    {.name = "sample!", .form = PB_FORM_SAMPLE},
+    {.name = "aggregate!", .form = PB_FORM_AGGREGATE},
+
+    // Bar/OHLC forms.
+    {.name = "bar!", .form = PB_FORM_BAR},
+    {.name = "bar", .form = PB_FORM_BAR},
 };
 
-static const pb_builtin_entry *find_builtin(pb_slice name) {
-    for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i += 1) {
-        if (text_eq(name, BUILTINS[i].name)) {
-            return &BUILTINS[i];
+static const pb_form_entry *find_form(pb_slice name) {
+    for (size_t i = 0; i < sizeof FORMS / sizeof FORMS[0]; i += 1) {
+        if (text_eq(name, FORMS[i].name)) {
+            return &FORMS[i];
         }
     }
     return NULL;
@@ -456,7 +471,7 @@ static pb_eval_result eval_args(pb_eval_ctx *ctx, pb_values raw, pb_values *out)
         items[i] = r.value;
     }
     *out = (pb_values){.items = items, .len = raw.len};
-    return ok((pb_value){.kind = PB_NIL});
+    return nil();
 }
 
 static pb_eval_result eval_do(pb_eval_ctx *ctx, pb_values args) {
@@ -485,7 +500,7 @@ static pb_eval_result eval_if(pb_eval_ctx *ctx, pb_values args) {
     if (args.len == 3) {
         return pb_eval(ctx, args.items[2]);
     }
-    return ok((pb_value){.kind = PB_NIL});
+    return nil();
 }
 
 static pb_eval_result eval_when(pb_eval_ctx *ctx, pb_values args) {
@@ -497,7 +512,7 @@ static pb_eval_result eval_when(pb_eval_ctx *ctx, pb_values args) {
         return cond;
     }
     if (!truthy(cond.value)) {
-        return ok((pb_value){.kind = PB_NIL});
+        return nil();
     }
     return eval_do(ctx, (pb_values){.items = args.items + 1, .len = args.len - 1});
 }
@@ -527,7 +542,7 @@ static pb_eval_result eval_or(pb_eval_ctx *ctx, pb_values args) {
             return ok(r.value);
         }
     }
-    return ok((pb_value){.kind = PB_NIL});
+    return nil();
 }
 
 static pb_eval_result eval_call_with_threaded(pb_eval_ctx *ctx, pb_value form, pb_value threaded) {
@@ -587,7 +602,7 @@ static pb_eval_result eval_transition(pb_eval_ctx *ctx, pb_values args) {
     if (slot->kind == PB_EVAL_STATE_EMPTY) {
         slot->kind = PB_EVAL_STATE_NUMBER;
         slot->number = cur ? 1.0 : 0.0;
-        return ok((pb_value){.kind = PB_NIL});
+        return nil();
     }
 
     if (slot->kind != PB_EVAL_STATE_NUMBER) {
@@ -602,27 +617,27 @@ static pb_eval_result eval_transition(pb_eval_ctx *ctx, pb_values args) {
     if (prev && !cur) {
         return pb_eval(ctx, args.items[2]);
     }
-    return ok((pb_value){.kind = PB_NIL});
+    return nil();
 }
 
 static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
     const pb_slice head = call.items[0].text;
     const pb_values raw_args = {.items = call.items + 1, .len = call.len - 1};
-    const pb_builtin_entry *entry = find_builtin(head);
+    const pb_form_entry *entry = find_form(head);
     if (entry == NULL) {
         return fail(PB_EVAL_UNKNOWN_SYMBOL);
     }
 
     if (entry->special) {
-        switch (entry->builtin) {
-        case PB_BUILTIN_DO: return eval_do(ctx, raw_args);
-        case PB_BUILTIN_IF: return eval_if(ctx, raw_args);
-        case PB_BUILTIN_WHEN: return eval_when(ctx, raw_args);
-        case PB_BUILTIN_AND: return eval_and(ctx, raw_args);
-        case PB_BUILTIN_OR: return eval_or(ctx, raw_args);
-        case PB_BUILTIN_THREAD: return eval_thread(ctx, raw_args);
-        case PB_BUILTIN_TRANSITION: return eval_transition(ctx, raw_args);
-        case PB_BUILTIN_DROPOUT: return pb_eval_call_dropout(ctx, raw_args);
+        switch (entry->form) {
+        case PB_FORM_DO: return eval_do(ctx, raw_args);
+        case PB_FORM_IF: return eval_if(ctx, raw_args);
+        case PB_FORM_WHEN: return eval_when(ctx, raw_args);
+        case PB_FORM_AND: return eval_and(ctx, raw_args);
+        case PB_FORM_OR: return eval_or(ctx, raw_args);
+        case PB_FORM_THREAD: return eval_thread(ctx, raw_args);
+        case PB_FORM_TRANSITION: return eval_transition(ctx, raw_args);
+        case PB_FORM_DROPOUT: return pb_eval_call_dropout(ctx, raw_args);
         default: return fail(PB_EVAL_UNKNOWN_SYMBOL);
         }
     }
@@ -632,7 +647,7 @@ static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
     if (er.err != PB_EVAL_OK) {
         return er;
     }
-    return pb_eval_call_builtin(ctx, entry->builtin, args);
+    return pb_eval_call_form(ctx, entry->form, args);
 }
 
 const char *pb_eval_error_name(pb_eval_error err) {

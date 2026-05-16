@@ -3,66 +3,66 @@
 
 #include "pb_eval.h"
 
-typedef enum pb_builtin {
-    PB_BUILTIN_DO,
-    PB_BUILTIN_IF,
-    PB_BUILTIN_WHEN,
-    PB_BUILTIN_AND,
-    PB_BUILTIN_OR,
-    PB_BUILTIN_THREAD,
-    PB_BUILTIN_TRANSITION,
-    PB_BUILTIN_DROPOUT,
-    PB_BUILTIN_NOW,
-    PB_BUILTIN_NOT,
-    PB_BUILTIN_EQ,
-    PB_BUILTIN_GT,
-    PB_BUILTIN_LT,
-    PB_BUILTIN_GE,
-    PB_BUILTIN_LE,
-    PB_BUILTIN_ADD,
-    PB_BUILTIN_SUB,
-    PB_BUILTIN_MUL,
-    PB_BUILTIN_DIV,
-    PB_BUILTIN_STR_CONCAT,
-    PB_BUILTIN_CONTAINS,
-    PB_BUILTIN_STARTS_WITH,
-    PB_BUILTIN_ENDS_WITH,
-    PB_BUILTIN_SUBJECT_APPEND,
-    PB_BUILTIN_SUBJECT_TOKEN,
-    PB_BUILTIN_SUBJECT_WITH,
-    PB_BUILTIN_PUBLISH,
-    PB_BUILTIN_JSON_GET,
-    PB_BUILTIN_JSON_DEMUX,
-    PB_BUILTIN_ROUND,
-    PB_BUILTIN_QUANTIZE,
-    PB_BUILTIN_CLAMP,
-    PB_BUILTIN_MIN,
-    PB_BUILTIN_MAX,
-    PB_BUILTIN_ABS,
-    PB_BUILTIN_SIGN,
-    PB_BUILTIN_SQUELCH,
-    PB_BUILTIN_DEADBAND,
-    PB_BUILTIN_CHANGED,
-    PB_BUILTIN_HOLD_OFF,
-    PB_BUILTIN_RISING_EDGE,
-    PB_BUILTIN_FALLING_EDGE,
-    PB_BUILTIN_DELTA,
-    PB_BUILTIN_COUNT,
-    PB_BUILTIN_MOVING_AVG,
-    PB_BUILTIN_MOVING_SUM,
-    PB_BUILTIN_MOVING_MAX,
-    PB_BUILTIN_MOVING_MIN,
-    PB_BUILTIN_MEDIAN,
-    PB_BUILTIN_PERCENTILE,
-    PB_BUILTIN_STDDEV,
-    PB_BUILTIN_VARIANCE,
-    PB_BUILTIN_RATE,
-    PB_BUILTIN_THROTTLE,
-    PB_BUILTIN_DEBOUNCE,
-    PB_BUILTIN_SAMPLE,
-    PB_BUILTIN_AGGREGATE,
-    PB_BUILTIN_BAR,
-} pb_builtin;
+typedef enum pb_form {
+    PB_FORM_DO,
+    PB_FORM_IF,
+    PB_FORM_WHEN,
+    PB_FORM_AND,
+    PB_FORM_OR,
+    PB_FORM_THREAD,
+    PB_FORM_TRANSITION,
+    PB_FORM_DROPOUT,
+    PB_FORM_NOW,
+    PB_FORM_NOT,
+    PB_FORM_EQ,
+    PB_FORM_GT,
+    PB_FORM_LT,
+    PB_FORM_GE,
+    PB_FORM_LE,
+    PB_FORM_ADD,
+    PB_FORM_SUB,
+    PB_FORM_MUL,
+    PB_FORM_DIV,
+    PB_FORM_STR_CONCAT,
+    PB_FORM_CONTAINS,
+    PB_FORM_STARTS_WITH,
+    PB_FORM_ENDS_WITH,
+    PB_FORM_SUBJECT_APPEND,
+    PB_FORM_SUBJECT_TOKEN,
+    PB_FORM_SUBJECT_WITH,
+    PB_FORM_PUBLISH,
+    PB_FORM_JSON_GET,
+    PB_FORM_JSON_DEMUX,
+    PB_FORM_ROUND,
+    PB_FORM_QUANTIZE,
+    PB_FORM_CLAMP,
+    PB_FORM_MIN,
+    PB_FORM_MAX,
+    PB_FORM_ABS,
+    PB_FORM_SIGN,
+    PB_FORM_SQUELCH,
+    PB_FORM_DEADBAND,
+    PB_FORM_CHANGED,
+    PB_FORM_HOLD_OFF,
+    PB_FORM_RISING_EDGE,
+    PB_FORM_FALLING_EDGE,
+    PB_FORM_DELTA,
+    PB_FORM_COUNT,
+    PB_FORM_MOVING_AVG,
+    PB_FORM_MOVING_SUM,
+    PB_FORM_MOVING_MAX,
+    PB_FORM_MOVING_MIN,
+    PB_FORM_MEDIAN,
+    PB_FORM_PERCENTILE,
+    PB_FORM_STDDEV,
+    PB_FORM_VARIANCE,
+    PB_FORM_RATE,
+    PB_FORM_THROTTLE,
+    PB_FORM_DEBOUNCE,
+    PB_FORM_SAMPLE,
+    PB_FORM_AGGREGATE,
+    PB_FORM_BAR,
+} pb_form;
 
 pb_eval_result pb_eval_ok(pb_value v);
 pb_eval_result pb_eval_fail(pb_eval_error err);
@@ -76,13 +76,16 @@ bool pb_eval_value_eq(pb_value a, pb_value b);
 pb_eval_state_entry *pb_eval_state_slot(pb_eval_ctx *ctx, const char *op_lit);
 bool pb_eval_state_set_bytes(pb_eval_state_entry *e, pb_slice bytes);
 bool pb_eval_state_set_emit_subject(pb_eval_state_entry *e, pb_slice bytes);
-pb_eval_result pb_eval_call_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_values args);
-pb_eval_result pb_eval_call_window_builtin(pb_eval_ctx *ctx, pb_builtin builtin, pb_values args);
+pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args);
 pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args);
-pb_eval_result pb_eval_tick_clock_state_entry(pb_eval_ctx *ctx, pb_eval_state_entry *entry);
 
-// Short aliases used as local sugar in evaluator builtin implementations.
+static inline pb_eval_result pb_eval_nil(void) {
+    return pb_eval_ok((pb_value){.kind = PB_NIL});
+}
+
+// Short aliases used as local sugar in evaluator form implementations.
 #define ok pb_eval_ok
+#define nil pb_eval_nil
 #define fail pb_eval_fail
 #define text_eq pb_eval_text_eq
 #define truthy pb_eval_truthy
