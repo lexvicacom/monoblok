@@ -127,6 +127,10 @@ add_executable(eval-tests test/eval_unit.c)
 target_link_libraries(eval-tests PRIVATE patchbay_sexpr)
 target_compile_options(eval-tests PRIVATE ${MB_WARNINGS})
 
+add_executable(correctness-tests test/correctness_unit.c)
+target_link_libraries(correctness-tests PRIVATE patchbay_sexpr)
+target_compile_options(correctness-tests PRIVATE ${MB_WARNINGS})
+
 add_executable(json-tests test/json_unit.c)
 target_link_libraries(json-tests PRIVATE patchbay_sexpr)
 target_compile_options(json-tests PRIVATE ${MB_WARNINGS})
@@ -151,6 +155,7 @@ enable_testing()
 add_test(NAME unit COMMAND unit-tests)
 add_test(NAME sexpr COMMAND sexpr-tests)
 add_test(NAME eval COMMAND eval-tests)
+add_test(NAME correctness COMMAND correctness-tests)
 add_test(NAME json COMMAND json-tests)
 add_test(NAME program COMMAND program-tests)
 add_test(NAME snapshot COMMAND snapshot-tests)
@@ -204,6 +209,19 @@ add_custom_target(smoke
 
 add_custom_target(soundcheck
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/soundcheck.sh $<TARGET_FILE:monoblok>
+  DEPENDS monoblok
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(load-smoke
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/test/load_smoke.py $<TARGET_FILE:monoblok>
+  DEPENDS monoblok
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_target(load-soak
+  COMMAND ${CMAKE_COMMAND} -E env MB_LOAD_SUBSCRIBERS=64 MB_LOAD_MESSAGES_PER_SUBJECT=1024 MB_LOAD_TIMEOUT=60
+          python3 ${CMAKE_CURRENT_SOURCE_DIR}/test/load_smoke.py $<TARGET_FILE:monoblok>
   DEPENDS monoblok
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )

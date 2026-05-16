@@ -65,6 +65,32 @@ cmake --build build
 
 Compiles cleanly on macOS and Linux. Dependencies are vendored. System `openssl` required.
 
+## Running tests
+
+```sh
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+End-to-end smoke targets:
+
+```sh
+cmake --build build --target smoke
+cmake --build build --target soundcheck
+```
+
+Load correctness checks:
+
+```sh
+cmake --build build --target load-smoke
+cmake --build build --target load-soak
+```
+
+`load-smoke` starts a temporary daemon and verifies exact TCP fan-out plus
+derived `moving-avg`, `moving-sum`, and `count!` streams. `load-soak` runs the
+same check with a heavier subscriber/message profile.
+
 ## Still reading?
 
 See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
