@@ -12,11 +12,11 @@ It is not uncommon for systems to contain some _caretaker_ services that subscri
 
 **Declare it once, as rules, in the broker.**
 
-monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small S-expression DSL. It is easy to get started as [patchbay lends itself well to help from coding assistants](https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_terminal_demo.html)
+monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small S-expression DSL. It is easy to get started as [patchbay lends itself well to help from coding assistants](https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_terminal_demo.html).
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
-Common ways of running monoblok:
+#### Common ways of running monoblok:
 - Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
@@ -30,29 +30,22 @@ See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runn
 
 ## Install
 
-The [release helper](./scripts/start.sh) downloads monoblok (macOS/Linux) into the current directory:
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
 ```
-
-Then run the unpacked binary:
+The [release helper](./scripts/start.sh) downloads monoblok (macOS/Linux) and extracts it into the current directory. To run the unpacked binary:
 
 ```sh
 ./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
 ```
 
-To add as a service on systemd Linux, the release tarball includes `install-systemd.sh`.
+The directory contains runnable examples. Run the `.sh` files.
+
+To add as a service on systemd Linux, run `scripts/install-systemd.sh`.
 
 ## Container
 
-Pull the latest container image (arm64, x86_64 multi arch):
-
-```sh
-docker pull ghcr.io/lexvicacom/monoblok:latest
-```
-
-Run monoblok from the image:
+Multi-arch image:
 
 ```sh
 docker run --rm -p 14222:14222 ghcr.io/lexvicacom/monoblok:latest --port 14222
@@ -66,7 +59,11 @@ cmake --build build
 ./build/monoblok --port 14222 --patchbay patchbay.edn
 ```
 
-Compiles cleanly on macOS and Linux. Dependencies are vendored.
+Compiles cleanly on macOS and Linux. Dependencies are vendored. System `openssl` required.
+
+## Still reading?
+
+See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ## AI
 
