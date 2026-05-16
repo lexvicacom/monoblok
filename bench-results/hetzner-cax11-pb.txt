@@ -1,0 +1,24 @@
+=== Host ===
+
+Linux 6.8.0-107-generic
+aarch64 · 2 cores · 4 GB
+
+monoblok 0.2.6 (Linux/aarch64 GNU 11.4.0 Release)
+nats cli 0.3.2
+monoblok libuv mode: io_uring
+
+Running monoblok benchmarks...
+Running monoblok+patchbay (1 rule) benchmarks...
+Running monoblok+patchbay (50 rules) benchmarks...
+
+=== Results (msgs/sec) ===
+
+Workload                no patchbay       1 rule       Δ     50 rules       Δ
+--------                -----------       ------      ---     --------      ---
+1 pub × 1M × 64B        2,269,311    2,087,901      -8%    2,030,049     -11%
+2 pub × 500k × 64B      3,195,038    1,995,704     -38%    2,069,157     -35%
+8 pub × 200k × 128B     2,631,684    1,629,924     -38%    1,545,403     -41%
+1 pub → 1 sub           1,251,811    1,103,786     -12%    1,194,598      -5%
+1 pub → 10 subs         2,380,210    2,419,383      +2%    2,354,165      -1%
+1 pub → 50 subs         2,616,902    2,612,500      -0%    2,649,702      +1%
+

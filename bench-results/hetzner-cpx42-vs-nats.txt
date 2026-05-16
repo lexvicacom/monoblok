@@ -1,0 +1,23 @@
+=== Host ===
+
+Linux 6.8.0-106-generic
+x86_64 · 8 cores · 15 GB
+
+monoblok 0.2.6 (Linux/x86_64 GNU 11.4.0 Release)
+nats cli 0.4.0
+nats-server: v2.10.7
+monoblok libuv mode: io_uring
+
+Running monoblok benchmarks...
+Running nats-server benchmarks...
+
+=== Results (msgs/sec) ===
+
+Workload                       monoblok    nats-server    delta
+--------                     ----------    -----------    -----
+1 pub x 1M x 64B              2,258,036      1,766,687     +28%
+2 pub x 1M x 64B              4,603,975      4,330,691      +6%
+8 pub x 250k x 128B           3,968,787      4,691,383     -15%
+1 pub -> 1 sub x 500k         1,979,569      2,158,333      -8%
+1 pub -> 10 subs x 100k       6,934,853      3,042,136    +128%
+1 pub -> 50 subs x 50k        6,866,141      2,451,754    +180%
