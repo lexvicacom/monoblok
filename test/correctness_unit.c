@@ -12,6 +12,8 @@ enum {
     HOT_LITERAL_SUBS = 96,
     HOT_WILDCARD_SUBS = 32,
     HOT_PUBS = 3072,
+    PARSER_HAMMER_SUBJECTS = 16,
+    PARSER_HAMMER_PUBS = 65536,
     NUM_SUBJECTS = 3,
     NUM_METRIC_SUBS = 8,
     NUM_PUBS_PER_SUBJECT = 256,
@@ -118,6 +120,25 @@ static bool write_subject(char *buf, size_t cap, const char *prefix, size_t idx)
 static bool write_metric_subject(char *buf, size_t cap, size_t idx, const char *suffix) {
     const int n = snprintf(buf, cap, "num.%zu.%s", idx, suffix);
     return n >= 0 && (size_t)n < cap;
+}
+
+static bool write_parser_hammer_payload(char *buf, size_t cap, size_t subject_idx, size_t pub_idx) {
+    const int n = snprintf(buf, cap, "payload-%zu-%zu", subject_idx, pub_idx);
+    return n >= 0 && (size_t)n < cap;
+}
+
+static void append_parser_hammer_pub(mb_buf *buf, size_t pub_idx) {
+    const size_t subject_idx = pub_idx % PARSER_HAMMER_SUBJECTS;
+    char subject[32];
+    char payload[64];
+    char frame[128];
+
+    CHECK(write_subject(subject, sizeof subject, "load.", subject_idx));
+    CHECK(write_parser_hammer_payload(payload, sizeof payload, subject_idx, pub_idx));
+
+    const int n = snprintf(frame, sizeof frame, "PUB %s %zu\r\n%s\r\n", subject, strlen(payload), payload);
+    CHECK(n >= 0 && (size_t)n < sizeof frame);
+    CHECK(mb_buf_append(buf, frame, (size_t)n));
 }
 
 static msg_frame read_msg_frame(const mb_buf *buf, size_t *pos) {
@@ -312,6 +333,39 @@ static void test_patchbay_numeric_streams_exact_under_fanout(void) {
     mb_router_free(&router);
 }
 
+static void test_parser_hammer_large_pub_stream_in_memory(void) {
+    mb_buf stream = {0};
+
+    for (size_t i = 0; i < PARSER_HAMMER_PUBS; i += 1) {
+        append_parser_hammer_pub(&stream, i);
+    }
+
+    size_t cursor = 0;
+    for (size_t i = 0; i < PARSER_HAMMER_PUBS; i += 1) {
+        const size_t subject_idx = i % PARSER_HAMMER_SUBJECTS;
+        char subject[32];
+        char payload[64];
+        char frame[128];
+
+        CHECK(write_subject(subject, sizeof subject, "load.", subject_idx));
+        CHECK(write_parser_hammer_payload(payload, sizeof payload, subject_idx, i));
+        const int n = snprintf(frame, sizeof frame, "PUB %s %zu\r\n%s\r\n", subject, strlen(payload), payload);
+        CHECK(n >= 0 && (size_t)n < sizeof frame);
+
+        const mb_parse_result r = mb_parse_client_op(stream.ptr + cursor, stream.len - cursor);
+        CHECK(r.status == MB_PARSE_OK);
+        CHECK(r.op.kind == MB_OP_PUB);
+        CHECK(r.consumed == (size_t)n);
+        check_slice_lit(r.op.subject, subject);
+        check_slice_lit(r.op.payload, payload);
+        cursor += r.consumed;
+    }
+
+    CHECK(cursor == stream.len);
+    mb_buf_free(&stream);
+}
+
 TEST_MAIN(correctness,
           test_router_hot_subject_fanout_exact_counts,
-          test_patchbay_numeric_streams_exact_under_fanout)
+          test_patchbay_numeric_streams_exact_under_fanout,
+          test_parser_hammer_large_pub_stream_in_memory)
