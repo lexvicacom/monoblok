@@ -40,14 +40,19 @@ class ProtoReader:
         self.buf = bytearray()
 
     def _recv_more(self, deadline: float) -> None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("timed out waiting for protocol data")
-        self.sock.settimeout(min(1.0, remaining))
-        chunk = self.sock.recv(65536)
-        if not chunk:
-            raise EOFError("socket closed")
-        self.buf.extend(chunk)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("timed out waiting for protocol data")
+            self.sock.settimeout(min(1.0, remaining))
+            try:
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                continue
+            if not chunk:
+                raise EOFError("socket closed")
+            self.buf.extend(chunk)
+            return
 
     def read_line(self, deadline: float) -> bytes:
         while True:
