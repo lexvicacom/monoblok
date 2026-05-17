@@ -23,6 +23,7 @@ enum {
 typedef struct msg_frame {
     mb_slice subject;
     mb_slice sid;
+    mb_slice reply_to;
     mb_slice payload;
 } msg_frame;
 
@@ -70,6 +71,18 @@ static mb_slice read_until_byte(const mb_buf *buf, size_t *pos, uint8_t delim) {
         *pos += 1;
     }
     CHECK(*pos < buf->len);
+    const mb_slice out = {.ptr = buf->ptr + start, .len = *pos - start};
+    *pos += 1;
+    return out;
+}
+
+static mb_slice read_msg_token(const mb_buf *buf, size_t *pos, uint8_t *delim) {
+    const size_t start = *pos;
+    while (*pos < buf->len && buf->ptr[*pos] != ' ' && buf->ptr[*pos] != '\r') {
+        *pos += 1;
+    }
+    CHECK(*pos < buf->len);
+    *delim = buf->ptr[*pos];
     const mb_slice out = {.ptr = buf->ptr + start, .len = *pos - start};
     *pos += 1;
     return out;
@@ -145,7 +158,14 @@ static msg_frame read_msg_frame(const mb_buf *buf, size_t *pos) {
     expect_bytes(buf, pos, "MSG ");
     const mb_slice subject = read_until_byte(buf, pos, ' ');
     const mb_slice sid = read_until_byte(buf, pos, ' ');
-    const mb_slice len_token = read_until_byte(buf, pos, '\r');
+    uint8_t delim = 0;
+    const mb_slice token = read_msg_token(buf, pos, &delim);
+    mb_slice reply_to = {0};
+    mb_slice len_token = token;
+    if (delim == ' ') {
+        reply_to = token;
+        len_token = read_until_byte(buf, pos, '\r');
+    }
     expect_bytes(buf, pos, "\n");
 
     const size_t payload_len = parse_size_slice(len_token);
@@ -154,7 +174,7 @@ static msg_frame read_msg_frame(const mb_buf *buf, size_t *pos) {
     *pos += payload_len;
     expect_bytes(buf, pos, "\r\n");
 
-    return (msg_frame){.subject = subject, .sid = sid, .payload = payload};
+    return (msg_frame){.subject = subject, .sid = sid, .reply_to = reply_to, .payload = payload};
 }
 
 static size_t check_frames(const mb_buf *buf, frame_check_fn check, void *ctx) {

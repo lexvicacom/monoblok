@@ -854,21 +854,21 @@ static bool queue_conn_close(mb_router *router, mb_router_conn *conn,
     return true;
 }
 
-static bool deliver_to_sub(mb_router *router, mb_subscription *sub, mb_slice subject, mb_slice payload,
+static bool deliver_to_sub(mb_router *router, mb_subscription *sub, mb_slice subject, mb_slice payload, mb_slice reply_to,
                            mb_router_conn **kicked, size_t *kicked_len,
                            mb_router_conn **closed, size_t *closed_len) {
     const mb_slice sid = {.ptr = sub->sid, .len = sub->sid_len};
     const size_t prefix_len = sub->is_lvc ? sizeof(MB_LVC_PREFIX) - 1 : 0;
     size_t frame_len = 0;
-    if (!mb_msg_frame_len_prefixed(&frame_len, prefix_len, subject, sid, payload)) {
+    if (!mb_msg_frame_len_prefixed_with_reply(&frame_len, prefix_len, subject, sid, reply_to, payload)) {
         return false;
     }
     if (sub->conn->out.len > MB_MAX_PENDING || frame_len > MB_MAX_PENDING - sub->conn->out.len) {
         return queue_conn_close(router, sub->conn, closed, closed_len);
     }
     const bool wrote = sub->is_lvc
-                           ? mb_write_msg_prefixed(&sub->conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, payload)
-                           : mb_write_msg(&sub->conn->out, subject, sid, payload);
+                           ? mb_write_msg_prefixed_with_reply(&sub->conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, reply_to, payload)
+                           : mb_write_msg_with_reply(&sub->conn->out, subject, sid, reply_to, payload);
     if (!wrote) {
         return false;
     }
@@ -894,7 +894,7 @@ static void remove_delivered_max(mb_router *router, mb_sub_list *list) {
     }
 }
 
-static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice subject, mb_slice payload,
+static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice subject, mb_slice payload, mb_slice reply_to,
                                   bool check_filter, mb_router_conn **kicked, size_t *kicked_len,
                                   mb_router_conn **closed, size_t *closed_len) {
     size_t group_len = 0;
@@ -915,7 +915,7 @@ static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice
         if (!sub_deliverable(router, sub, subject, check_filter) || !queue_selected(router, sub, i, group_len)) {
             continue;
         }
-        if (!deliver_to_sub(router, sub, subject, payload, kicked, kicked_len, closed, closed_len)) {
+        if (!deliver_to_sub(router, sub, subject, payload, reply_to, kicked, kicked_len, closed, closed_len)) {
             remove_delivered_max(router, list);
             return false;
         }
@@ -925,7 +925,14 @@ static bool deliver_matching_list(mb_router *router, mb_sub_list *list, mb_slice
 }
 
 bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload) {
+    return mb_router_publish_with_reply(router, subject, payload, (mb_slice){0});
+}
+
+bool mb_router_publish_with_reply(mb_router *router, mb_slice subject, mb_slice payload, mb_slice reply_to) {
     if (!mb_proto_subject_valid(subject, false)) {
+        return false;
+    }
+    if (reply_to.len != 0 && !mb_proto_subject_valid(reply_to, false)) {
         return false;
     }
     if (mb_router_subject_has_lvc_prefix(subject) || !lvc_store(router, subject, payload)) {
@@ -947,18 +954,18 @@ bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload) {
     bool ok = true;
 
     mb_literal_bucket *lit = literal_bucket(router, subject, false);
-    if (lit != NULL && !deliver_matching_list(router, &lit->subs, subject, payload, false, kicked, &kicked_len, closed, &closed_len)) {
+    if (lit != NULL && !deliver_matching_list(router, &lit->subs, subject, payload, reply_to, false, kicked, &kicked_len, closed, &closed_len)) {
         ok = false;
     }
 
     if (ok) {
         const mb_slice first = first_token(subject);
         mb_wildcard_bucket *wild = wildcard_bucket(router, first, false);
-        if (wild != NULL && !deliver_matching_list(router, &wild->subs, subject, payload, true, kicked, &kicked_len, closed, &closed_len)) {
+        if (wild != NULL && !deliver_matching_list(router, &wild->subs, subject, payload, reply_to, true, kicked, &kicked_len, closed, &closed_len)) {
             ok = false;
         }
     }
-    if (ok && !deliver_matching_list(router, &router->wildcard_global, subject, payload, true, kicked, &kicked_len, closed, &closed_len)) {
+    if (ok && !deliver_matching_list(router, &router->wildcard_global, subject, payload, reply_to, true, kicked, &kicked_len, closed, &closed_len)) {
         ok = false;
     }
 

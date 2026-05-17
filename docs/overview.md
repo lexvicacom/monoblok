@@ -183,7 +183,7 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 |---|---|
 | `PUB` / `SUB` / `UNSUB` / `MSG` | yes |
 | wildcards | yes |
-| request/reply / reply-to | no; reply-to is tinyblok-only |
+| request/reply / reply-to | yes, local core reply-to; bridge remains export-only |
 | queue groups | yes |
 | headers | no |
 | `$LVC.*` last-value replay | yes, monoblok extension |

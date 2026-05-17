@@ -98,6 +98,21 @@ static void test_parse_pub(void) {
     CHECK(r.op.kind == MB_OP_PUB);
     CHECK(r.op.subject.len == 3);
     CHECK(memcmp(r.op.subject.ptr, "foo", 3) == 0);
+    CHECK(r.op.reply_to.len == 0);
+    CHECK(r.op.payload.len == 2);
+    CHECK(memcmp(r.op.payload.ptr, "hi", 2) == 0);
+    CHECK(r.consumed == strlen(src));
+}
+
+static void test_parse_pub_with_reply_to(void) {
+    const char *src = "PUB foo _INBOX.1 2\r\nhi\r\n";
+    const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
+    CHECK(r.status == MB_PARSE_OK);
+    CHECK(r.op.kind == MB_OP_PUB);
+    CHECK(r.op.subject.len == 3);
+    CHECK(memcmp(r.op.subject.ptr, "foo", 3) == 0);
+    CHECK(r.op.reply_to.len == strlen("_INBOX.1"));
+    CHECK(memcmp(r.op.reply_to.ptr, "_INBOX.1", strlen("_INBOX.1")) == 0);
     CHECK(r.op.payload.len == 2);
     CHECK(memcmp(r.op.payload.ptr, "hi", 2) == 0);
     CHECK(r.consumed == strlen(src));
@@ -140,6 +155,12 @@ static void test_parse_rejects_pub_wildcards(void) {
     CHECK(r.status == MB_PARSE_INVALID_ARGS);
 }
 
+static void test_parse_rejects_pub_reply_wildcards(void) {
+    const char *src = "PUB foo _INBOX.* 1\r\nx\r\n";
+    const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
+    CHECK(r.status == MB_PARSE_INVALID_ARGS);
+}
+
 static void test_parse_malformed_pub_trailer(void) {
     const char *src = "PUB foo 1\r\nxz";
     const mb_parse_result r = mb_parse_client_op((const uint8_t *)src, strlen(src));
@@ -150,6 +171,13 @@ static void test_write_msg(void) {
     mb_buf buf = {0};
     CHECK(mb_write_msg(&buf, lit("foo"), lit("1"), lit("hi")));
     check_buf_eq(&buf, "MSG foo 1 2\r\nhi\r\n");
+    mb_buf_free(&buf);
+}
+
+static void test_write_msg_with_reply_to(void) {
+    mb_buf buf = {0};
+    CHECK(mb_write_msg_with_reply(&buf, lit("foo"), lit("1"), lit("_INBOX.1"), lit("hi")));
+    check_buf_eq(&buf, "MSG foo 1 _INBOX.1 2\r\nhi\r\n");
     mb_buf_free(&buf);
 }
 
@@ -234,6 +262,17 @@ static void test_router_one_sub(void) {
     CHECK(mb_router_subscribe(&router, &conn, lit("foo"), lit("1")));
     CHECK(mb_router_publish(&router, lit("foo"), lit("hi")));
     check_buf_eq(&conn.out, "MSG foo 1 2\r\nhi\r\n");
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+}
+
+static void test_router_publish_with_reply_to(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit("foo"), lit("1")));
+    CHECK(mb_router_publish_with_reply(&router, lit("foo"), lit("hi"), lit("_INBOX.1")));
+    check_buf_eq(&conn.out, "MSG foo 1 _INBOX.1 2\r\nhi\r\n");
     mb_buf_free(&conn.out);
     mb_router_free(&router);
 }
@@ -366,6 +405,19 @@ static void test_router_lvc_live_wildcard(void) {
     CHECK(mb_router_subscribe(&router, &conn, lit("$LVC.sensors.*"), lit("7")));
     CHECK(mb_router_publish(&router, lit("sensors.temp"), lit("31")));
     check_buf_eq(&conn.out, "MSG $LVC.sensors.temp 7 2\r\n31\r\n");
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+}
+
+static void test_router_lvc_live_reply_to(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_slice filters[] = {lit("sensors.*")};
+    CHECK(mb_router_configure_lvc(&router, filters, 1));
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit("$LVC.sensors.*"), lit("7")));
+    CHECK(mb_router_publish_with_reply(&router, lit("sensors.temp"), lit("31"), lit("_INBOX.1")));
+    check_buf_eq(&conn.out, "MSG $LVC.sensors.temp 7 _INBOX.1 2\r\n31\r\n");
     mb_buf_free(&conn.out);
     mb_router_free(&router);
 }
@@ -546,19 +598,23 @@ TEST_MAIN(unit,
           test_parse_queue_sub,
           test_parse_unsub,
           test_parse_pub,
+          test_parse_pub_with_reply_to,
           test_parse_fragmented_pub,
           test_parse_bad_command,
           test_parse_payload_too_large,
           test_parse_control_line_too_long,
           test_parse_rejects_control_bytes_in_tokens,
           test_parse_rejects_pub_wildcards,
+          test_parse_rejects_pub_reply_wildcards,
           test_parse_malformed_pub_trailer,
           test_write_info,
           test_write_msg,
+          test_write_msg_with_reply_to,
           test_buf_consume_and_swap,
           test_fs_read_write_helpers,
           test_array_reserve_helpers,
           test_router_one_sub,
+          test_router_publish_with_reply_to,
           test_router_two_subs,
           test_router_queue_group,
           test_router_queue_group_by_filter,
@@ -567,6 +623,7 @@ TEST_MAIN(unit,
           test_router_wildcards,
           test_router_lvc_replay,
           test_router_lvc_live_wildcard,
+          test_router_lvc_live_reply_to,
           test_router_lvc_rejects_writes,
           test_router_lvc_disabled,
           test_router_lvc_filter_gates_cache,

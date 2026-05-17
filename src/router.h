@@ -143,6 +143,7 @@ bool mb_router_subscribe_queue(mb_router *router, mb_router_conn *conn, mb_slice
 void mb_router_unsubscribe(mb_router *router, mb_router_conn *conn, mb_slice sid, size_t max_msgs, bool has_max_msgs);
 void mb_router_remove_all_for(mb_router *router, mb_router_conn *conn);
 bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload);
+bool mb_router_publish_with_reply(mb_router *router, mb_slice subject, mb_slice payload, mb_slice reply_to);
 bool mb_router_subject_has_lvc_prefix(mb_slice subject);
 bool mb_router_subject_has_stats_prefix(mb_slice subject);
 bool mb_router_subject_matches(mb_slice filter, mb_slice subject);

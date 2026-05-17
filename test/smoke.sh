@@ -46,10 +46,10 @@ sleep 0.1
 nc 127.0.0.1 "$port" <"$pub_in" >"$pub_out" &
 pub_pid=$!
 exec 4>"$pub_in"
-printf 'PING\r\nPUB foo 2\r\nhi\r\nPUB sensors.temp 2\r\n31\r\nPUB $STATS.bad 1\r\nx\r\n' >&4
+printf 'PING\r\nPUB foo _INBOX.7 2\r\nhi\r\nPUB sensors.temp 2\r\n31\r\nPUB $STATS.bad 1\r\nx\r\n' >&4
 sleep 0.3
 
-grep 'MSG foo 1 2' "$sub_out" >/dev/null
+grep 'MSG foo 1 _INBOX.7 2' "$sub_out" >/dev/null
 grep 'hi' "$sub_out" >/dev/null
 grep 'MSG sensors.temp.seen 2 2' "$sub_out" >/dev/null
 grep '31' "$sub_out" >/dev/null

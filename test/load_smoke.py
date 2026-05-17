@@ -84,11 +84,11 @@ def read_server_op(reader: ProtoReader, deadline: float) -> tuple[str, str, str,
             raise ProtocolError(f"unexpected server line: {line!r}")
 
         parts = line.rstrip(b"\r\n").split(b" ")
-        if len(parts) != 4:
+        if len(parts) not in (4, 5):
             raise ProtocolError(f"bad MSG line: {line!r}")
         subject = parts[1].decode("ascii")
         sid = parts[2].decode("ascii")
-        payload_len = int(parts[3])
+        payload_len = int(parts[4] if len(parts) == 5 else parts[3])
         payload = reader.read_exact(payload_len, deadline)
         trailer = reader.read_exact(2, deadline)
         if trailer != b"\r\n":

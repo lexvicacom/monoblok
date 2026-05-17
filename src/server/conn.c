@@ -103,8 +103,13 @@ static void trace_op(mb_conn *conn, mb_op op) {
                 (int)op.sid.len, op.sid.ptr);
         break;
     case MB_OP_PUB:
-        fprintf(stderr, "trace: conn %" PRIu64 " PUB %.*s %zu\n", conn->client_id,
-                (int)op.subject.len, op.subject.ptr, op.payload.len);
+        if (op.reply_to.len != 0) {
+            fprintf(stderr, "trace: conn %" PRIu64 " PUB %.*s %.*s %zu\n", conn->client_id,
+                    (int)op.subject.len, op.subject.ptr, (int)op.reply_to.len, op.reply_to.ptr, op.payload.len);
+        } else {
+            fprintf(stderr, "trace: conn %" PRIu64 " PUB %.*s %zu\n", conn->client_id,
+                    (int)op.subject.len, op.subject.ptr, op.payload.len);
+        }
         break;
     }
 }
@@ -150,7 +155,7 @@ static void handle_op(mb_conn *conn, mb_op op) {
             write_err_or_close(conn, "$LVC is read-only");
         } else if (mb_router_subject_has_stats_prefix(op.subject)) {
             write_err_or_close(conn, "$STATS is read-only");
-        } else if (!mb_router_publish(&conn->server->router, op.subject, op.payload)) {
+        } else if (!mb_router_publish_with_reply(&conn->server->router, op.subject, op.payload, op.reply_to)) {
             write_err_or_close(conn, "Publish Failed");
         } else {
             published = true;

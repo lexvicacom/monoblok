@@ -183,13 +183,22 @@ static mb_parse_result parse_unsub(mb_slice rest, size_t consumed) {
 
 static mb_parse_result parse_pub(const uint8_t *buf, size_t len, mb_slice rest, size_t line_end) {
     mb_slice subject = {0};
+    mb_slice reply_to = {0};
     mb_slice bytes_str = {0};
-    mb_slice extra = {0};
-    if (!next_token(&rest, &subject) || !next_token(&rest, &bytes_str)) {
+    mb_slice second = {0};
+    mb_slice third = {0};
+    if (!next_token(&rest, &subject) || !next_token(&rest, &second)) {
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
-    if (next_token(&rest, &extra)) {
-        return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
+    if (next_token(&rest, &third)) {
+        mb_slice extra = {0};
+        if (next_token(&rest, &extra)) {
+            return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
+        }
+        reply_to = second;
+        bytes_str = third;
+    } else {
+        bytes_str = second;
     }
 
     size_t payload_len = 0;
@@ -197,6 +206,9 @@ static mb_parse_result parse_pub(const uint8_t *buf, size_t len, mb_slice rest, 
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
     if (!mb_proto_subject_valid(subject, false)) {
+        return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
+    }
+    if (reply_to.len != 0 && !mb_proto_subject_valid(reply_to, false)) {
         return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
     }
     if (payload_len > MB_MAX_PAYLOAD) {
@@ -237,6 +249,7 @@ static mb_parse_result parse_pub(const uint8_t *buf, size_t len, mb_slice rest, 
         .op = {
             .kind = MB_OP_PUB,
             .subject = subject,
+            .reply_to = reply_to,
             .payload = {.ptr = payload, .len = payload_len},
         },
         .consumed = line_end + payload_len + trailer_len,
@@ -407,10 +420,19 @@ bool mb_write_err(mb_buf *out, const char *msg) {
 }
 
 bool mb_write_msg(mb_buf *out, mb_slice subject, mb_slice sid, mb_slice payload) {
-    return mb_write_msg_prefixed(out, "", 0, subject, sid, payload);
+    return mb_write_msg_with_reply(out, subject, sid, (mb_slice){0}, payload);
+}
+
+bool mb_write_msg_with_reply(mb_buf *out, mb_slice subject, mb_slice sid, mb_slice reply_to, mb_slice payload) {
+    return mb_write_msg_prefixed_with_reply(out, "", 0, subject, sid, reply_to, payload);
 }
 
 bool mb_msg_frame_len_prefixed(size_t *out, size_t prefix_len, mb_slice subject, mb_slice sid, mb_slice payload) {
+    return mb_msg_frame_len_prefixed_with_reply(out, prefix_len, subject, sid, (mb_slice){0}, payload);
+}
+
+bool mb_msg_frame_len_prefixed_with_reply(size_t *out, size_t prefix_len, mb_slice subject, mb_slice sid,
+                                          mb_slice reply_to, mb_slice payload) {
     if (out == NULL) {
         return false;
     }
@@ -420,8 +442,15 @@ bool mb_msg_frame_len_prefixed(size_t *out, size_t prefix_len, mb_slice subject,
         !add_size(&frame_len, subject.len) ||
         !add_size(&frame_len, 1) ||
         !add_size(&frame_len, sid.len) ||
-        !add_size(&frame_len, 1) ||
-        !add_size(&frame_len, decimal_len(payload.len)) ||
+        !add_size(&frame_len, 1)) {
+        return false;
+    }
+    if (reply_to.len != 0 &&
+        (!add_size(&frame_len, reply_to.len) ||
+         !add_size(&frame_len, 1))) {
+        return false;
+    }
+    if (!add_size(&frame_len, decimal_len(payload.len)) ||
         !add_size(&frame_len, 2) ||
         !add_size(&frame_len, payload.len) ||
         !add_size(&frame_len, 2)) {
@@ -433,18 +462,30 @@ bool mb_msg_frame_len_prefixed(size_t *out, size_t prefix_len, mb_slice subject,
 
 bool mb_write_msg_prefixed(mb_buf *out, const char *prefix, size_t prefix_len,
                            mb_slice subject, mb_slice sid, mb_slice payload) {
+    return mb_write_msg_prefixed_with_reply(out, prefix, prefix_len, subject, sid, (mb_slice){0}, payload);
+}
+
+bool mb_write_msg_prefixed_with_reply(mb_buf *out, const char *prefix, size_t prefix_len,
+                                      mb_slice subject, mb_slice sid, mb_slice reply_to, mb_slice payload) {
     size_t frame_len = 0;
-    if (!mb_msg_frame_len_prefixed(&frame_len, prefix_len, subject, sid, payload)) {
+    if (!mb_msg_frame_len_prefixed_with_reply(&frame_len, prefix_len, subject, sid, reply_to, payload)) {
         return false;
     }
-    return mb_buf_reserve(out, frame_len) &&
-           mb_buf_append(out, "MSG ", 4) &&
-           mb_buf_append(out, prefix, prefix_len) &&
-           mb_buf_append(out, subject.ptr, subject.len) &&
-           mb_buf_append_byte(out, ' ') &&
-           mb_buf_append(out, sid.ptr, sid.len) &&
-           mb_buf_append_byte(out, ' ') &&
-           append_decimal(out, payload.len) &&
+    if (!mb_buf_reserve(out, frame_len) ||
+        !mb_buf_append(out, "MSG ", 4) ||
+        !mb_buf_append(out, prefix, prefix_len) ||
+        !mb_buf_append(out, subject.ptr, subject.len) ||
+        !mb_buf_append_byte(out, ' ') ||
+        !mb_buf_append(out, sid.ptr, sid.len) ||
+        !mb_buf_append_byte(out, ' ')) {
+        return false;
+    }
+    if (reply_to.len != 0 &&
+        (!mb_buf_append(out, reply_to.ptr, reply_to.len) ||
+         !mb_buf_append_byte(out, ' '))) {
+        return false;
+    }
+    return append_decimal(out, payload.len) &&
            mb_buf_append(out, "\r\n", 2) &&
            mb_buf_append(out, payload.ptr, payload.len) &&
            mb_buf_append(out, "\r\n", 2);

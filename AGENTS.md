@@ -144,12 +144,12 @@ outbound buffering.
 
 ## NATS Protocol Scope
 
-Core only: `CONNECT`, `PUB`, `SUB`, `UNSUB`, `MSG`, `PING`, `PONG`, `INFO`,
-`+OK`, `-ERR`.
+Core only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`, `PING`, `PONG`,
+`INFO`, `+OK`, `-ERR`.
 
 There is no auth on the server side, headers, JetStream, mixer, or `$SYS.*`
-request-reply. `CONNECT` bodies are accepted and ignored. `+OK` is
-never sent.
+service request-reply. The bridge remains export-only and does not route remote
+replies back. `CONNECT` bodies are accepted and ignored. `+OK` is never sent.
 
 ## C Style
 
