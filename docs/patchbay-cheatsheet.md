@@ -9,6 +9,7 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 | `(on FILTER [:reentrant true] BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. `:reentrant true` (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8. |
 | `(lvc [FILTER ...])` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings. Legacy `(lvc FILTER ...)` is accepted. |
 | `(bridge :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. See bridge keywords below. |
+| `(import :servers ... :subject ...)` | optional, zero or one. Inbound NATS tap into patchbay. See import keywords below. |
 
 ## EDN / JSON side by side
 
@@ -31,6 +32,7 @@ symbols in rule expressions.
 | `(moving-avg :ms 5000 payload-float)` | `["moving-avg", {"ms":5000}, "payload-float"]` |
 | `(on "MARKET.*" :reentrant true (bar! 60 payload-float))` | `["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "payload-float"]]` |
 | `(bridge :servers ["nats://127.0.0.1:4223"] :export ["demo.>"])` | `["bridge", {"servers":["nats://127.0.0.1:4223"], "export":["demo.>"]}]` |
+| `(import :servers ["nats://127.0.0.1:4223"] :subject ["raw.>"])` | `["import", {"servers":["nats://127.0.0.1:4223"], "subject":["raw.>"]}]` |
 
 ## Bound symbols
 
@@ -195,3 +197,25 @@ outbound NATS forwarder. Counters land on `$STATS.bridge.published` /
 | `:max-reconnect` | number | -1 for unlimited |
 | `:reconnect-wait-ms` | number | tuning |
 | `:export` | vector of strings | subject filters to forward (standard NATS wildcards). e.g. `["telemetry.>" "alerts.>"]` |
+
+## Import keywords
+
+A single optional `(import ...)` form at top level configures inbound tap mode
+from a real NATS cluster. Imported raw messages run through patchbay but are not
+visible to direct monoblok subscribers unless a rule republishes them. Local
+socket clients may still subscribe, but client `PUB` commands are rejected while
+import mode is configured.
+
+Counters land on `$STATS.import.received`, `.processed`, `.dropped`, and
+`.failed` on the normal stats tick.
+
+Connection keywords match bridge: `:servers`, `:name`, `:creds`, `:user` /
+`:password`, `:token`, `:tls`, `:tls-ca`, `:tls-cert` / `:tls-key`,
+`:tls-skip-verify`, `:connect-timeout-ms`, `:ping-interval-ms`,
+`:max-reconnect`, and `:reconnect-wait-ms`.
+
+| keyword | type | meaning |
+|---------|------|---------|
+| `:subject` / `:subjects` | string or vector of strings | remote subject filters to subscribe to |
+| `:origin-header` | bool | when true, imported messages carrying `x-monoblok` are ignored |
+| `:max-pending` | number | bounded NATS-to-loop queue length; default 4096 |

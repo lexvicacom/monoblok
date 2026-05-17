@@ -120,6 +120,84 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
         }
         return true;
     }
+    if (pb_slice_eq_lit(items.items[0].text, "import")) {
+        if (items.len < 3 || (items.len % 2) == 0) {
+            fprintf(stderr, "validate: import expects keyword/value options\n");
+            return false;
+        }
+        bool has_servers = false;
+        bool has_subjects = false;
+        for (size_t i = 1; i < items.len; i += 2) {
+            if (items.items[i].kind != PB_KEYWORD) {
+                fprintf(stderr, "validate: import option must be keyword\n");
+                return false;
+            }
+            pb_slice key = items.items[i].text;
+            pb_value value = items.items[i + 1];
+            if (pb_slice_eq_lit(key, "servers") || pb_slice_eq_lit(key, "subject") || pb_slice_eq_lit(key, "subjects")) {
+                if (pb_slice_eq_lit(key, "servers")) {
+                    has_servers = true;
+                } else {
+                    has_subjects = true;
+                }
+                if (value.kind == PB_STRING) {
+                    if (value.text.len == 0) {
+                        fprintf(stderr, "validate: import :%.*s must not be empty\n", (int)key.len, key.ptr);
+                        return false;
+                    }
+                    continue;
+                }
+                if (value.kind != PB_VECTOR && value.kind != PB_LIST) {
+                    fprintf(stderr, "validate: import :%.*s expects string or vector of strings\n", (int)key.len,
+                            key.ptr);
+                    return false;
+                }
+                if (value.seq.len == 0) {
+                    fprintf(stderr, "validate: import :%.*s must not be empty\n", (int)key.len, key.ptr);
+                    return false;
+                }
+                for (size_t j = 0; j < value.seq.len; j += 1) {
+                    if (value.seq.items[j].kind != PB_STRING || value.seq.items[j].text.len == 0) {
+                        fprintf(stderr, "validate: import :%.*s values must be non-empty strings\n", (int)key.len,
+                                key.ptr);
+                        return false;
+                    }
+                }
+            } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
+                       pb_slice_eq_lit(key, "origin-header")) {
+                if (value.kind != PB_BOOL) {
+                    fprintf(stderr, "validate: import :%.*s expects boolean\n", (int)key.len, key.ptr);
+                    return false;
+                }
+            } else if (pb_slice_eq_lit(key, "connect-timeout-ms") || pb_slice_eq_lit(key, "ping-interval-ms") ||
+                       pb_slice_eq_lit(key, "reconnect-wait-ms") || pb_slice_eq_lit(key, "max-reconnect") ||
+                       pb_slice_eq_lit(key, "max-pending")) {
+                if (value.kind != PB_NUMBER) {
+                    fprintf(stderr, "validate: import :%.*s expects number\n", (int)key.len, key.ptr);
+                    return false;
+                }
+            } else if (pb_slice_eq_lit(key, "name") || pb_slice_eq_lit(key, "creds") || pb_slice_eq_lit(key, "user") ||
+                       pb_slice_eq_lit(key, "password") || pb_slice_eq_lit(key, "token") || pb_slice_eq_lit(key, "tls-ca") ||
+                       pb_slice_eq_lit(key, "tls-cert") || pb_slice_eq_lit(key, "tls-key")) {
+                if (value.kind != PB_STRING || value.text.len == 0) {
+                    fprintf(stderr, "validate: import :%.*s expects non-empty string\n", (int)key.len, key.ptr);
+                    return false;
+                }
+            } else {
+                fprintf(stderr, "validate: unknown import option: %.*s\n", (int)key.len, key.ptr);
+                return false;
+            }
+        }
+        if (!has_servers) {
+            fprintf(stderr, "validate: import requires :servers\n");
+            return false;
+        }
+        if (!has_subjects) {
+            fprintf(stderr, "validate: import requires :subject\n");
+            return false;
+        }
+        return true;
+    }
     if (!pb_slice_eq_lit(items.items[0].text, "on")) {
         return true;
     }

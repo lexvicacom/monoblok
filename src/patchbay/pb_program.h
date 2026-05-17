@@ -71,6 +71,46 @@ typedef struct pb_bridge_config {
     bool has_max_reconnect;
 } pb_bridge_config;
 
+// Top-level `(import ...)` remote NATS subscription config.
+typedef struct pb_import_config {
+    pb_slice *servers;
+    size_t servers_len;
+    size_t servers_cap;
+    pb_slice *subjects;
+    size_t subjects_len;
+    size_t subjects_cap;
+    pb_slice name;
+    pb_slice creds;
+    pb_slice user;
+    pb_slice password;
+    pb_slice token;
+    pb_slice tls_ca;
+    pb_slice tls_cert;
+    pb_slice tls_key;
+    int64_t connect_timeout_ms;
+    int64_t ping_interval_ms;
+    int64_t reconnect_wait_ms;
+    int max_reconnect;
+    size_t max_pending;
+    bool present;
+    bool tls;
+    bool tls_skip_verify;
+    bool origin_header;
+    bool has_name;
+    bool has_creds;
+    bool has_user;
+    bool has_password;
+    bool has_token;
+    bool has_tls_ca;
+    bool has_tls_cert;
+    bool has_tls_key;
+    bool has_connect_timeout_ms;
+    bool has_ping_interval_ms;
+    bool has_reconnect_wait_ms;
+    bool has_max_reconnect;
+    bool has_max_pending;
+} pb_import_config;
+
 // The loaded and validated patchbay program: rules/config plus runtime state and eval scratch.
 typedef struct pb_program {
     pb_arena parse_arena;
@@ -84,6 +124,7 @@ typedef struct pb_program {
     pb_rule_ref_list rule_global;
     pb_lvc_config lvc;
     pb_bridge_config bridge;
+    pb_import_config importer;
     bool uses_wall_clock;
     bool uses_clock_timer;
     size_t eval_depth;

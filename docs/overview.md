@@ -172,6 +172,10 @@ The server publishes cumulative decimal counters on `$STATS.*` every 60 seconds 
 | `$STATS.rules.<i>.suppressed` | gate/window suppressions by rule, 0-based |
 | `$STATS.bridge.published` | publishes forwarded to the remote NATS cluster |
 | `$STATS.bridge.dropped` | bridge publishes that failed or were dropped |
+| `$STATS.import.received` | remote NATS messages accepted by import |
+| `$STATS.import.processed` | imported messages evaluated by patchbay |
+| `$STATS.import.dropped` | imported messages dropped before evaluation |
+| `$STATS.import.failed` | imported messages whose patchbay evaluation failed |
 
 Client publishes to `$STATS.*` are rejected. Subscribe to `$STATS.>` for the live stream, or add `(lvc ["$STATS.>"])` if late joiners should receive the most recent tick immediately.
 
@@ -189,17 +193,20 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | `$LVC.*` last-value replay | yes, monoblok extension |
 | `$STATS.*` live counters | yes, monoblok extension |
 | bridge to real NATS | export-only |
+| import from real NATS | yes, as private patchbay ingress |
 | TLS/auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
 | JetStream | no |
 | clustering | no |
 
-### As a bridging client to a NATS server
+### As a bridging/importing client to a NATS server
 
 <p align="center">
   <img src="bridge.png" alt="bridge" width="720">
 </p>
 
-monoblok can forward a subset of local publishes to a real NATS cluster. **Export-only**: nothing flows in from the remote. TLS and `.creds` files are supported via vendored [nats.c](https://github.com/nats-io/nats.c).
+monoblok can forward a subset of local publishes to a real NATS cluster, or
+subscribe to remote subjects and run those messages through patchbay. TLS and
+`.creds` files are supported via vendored [nats.c](https://github.com/nats-io/nats.c).
 
 Zero or one `(bridge ...)` form in the patchbay file configures it:
 
@@ -214,6 +221,20 @@ Zero or one `(bridge ...)` form in the patchbay file configures it:
 ```
 
 A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. With `:origin-header true`, forwarded messages also carry `x-monoblok: <hostname>` for remote-side provenance. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.c.
+
+Zero or one `(import ...)` form configures inbound tap mode:
+
+```edn
+(import
+  :servers ["nats://raw.example:4222"]
+  :name    "monoblok-import-prod-1"
+  :subject ["raw.>" "replay.>"])
+```
+
+Imported messages are patchbay inputs only. Direct monoblok subscribers do not
+see the raw imported subject unless a rule republishes it. In import mode, the
+local socket remains available for subscribers, but client `PUB` commands are
+rejected.
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./patchbay-cheatsheet.md).
 

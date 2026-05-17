@@ -86,9 +86,9 @@ appears*, not by a sigil:
   error.
 - Inside top-level config forms, sequences are data. In `(lvc ...)`,
   a single vector or list is read as the filter set. Inside
-  `(bridge ...)` and `(mixer ...)`, after a keyword like `:servers`,
-  `:export`, or `:workers`, a list is read as a literal sequence of
-  values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
+  `(bridge ...)`, `(import ...)`, and `(mixer ...)`, after a keyword like
+  `:servers`, `:export`, `:subject`, or `:workers`, a list is read as a
+  literal sequence of values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
   two-element list of strings, not a call to `nats://a:4222`. Same
   parser, different consumer. See [`mixer.md`](./mixer.md) for the
   mixer config form.
@@ -98,9 +98,49 @@ square brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors
 self-evaluate (each element is evaluated, the result is returned as
 a vector), they never dispatch on a head, and they're what
 `contains?` checks for membership against. Config readers (`bridge`,
-`mixer`) accept either `(...)` or `[...]` for keyword-tagged
+`import`, `mixer`) accept either `(...)` or `[...]` for keyword-tagged
 collections; vectors read more naturally and are the recommended
 form.
+
+## NATS bridge/import config
+
+`(bridge ...)` exports monoblok publishes to a real NATS cluster:
+
+```edn
+(bridge
+  :servers ["nats://127.0.0.1:4223"]
+  :name    "monoblok-bridge"
+  :export  ["sensors.*.stable" "alerts.>"])
+```
+
+`(import ...)` subscribes to subjects on a real NATS cluster and feeds
+those messages into patchbay as ingress:
+
+```edn
+(import
+  :servers ["nats://127.0.0.1:4223"]
+  :name    "monoblok-import"
+  :subject ["raw.>" "replay.>"]
+  :max-pending 4096)
+
+(on "raw.temp"
+  (publish! "clean.temp" payload))
+```
+
+When `(import ...)` is present, monoblok's local NATS socket remains open for
+`SUB`, `UNSUB`, `PING`, and LVC/stats reads, but client `PUB` commands are
+rejected. Imported messages are private inputs. A direct monoblok subscriber to
+`raw.>` will not see the imported `raw.temp`; subscribers only see subjects
+emitted explicitly by rules, such as `clean.temp` above.
+
+Both forms accept the same connection keywords: `:creds`, `:user` /
+`:password`, `:token`, `:tls`, `:tls-ca`, `:tls-cert` / `:tls-key`,
+`:tls-skip-verify` (dev only), `:connect-timeout-ms`,
+`:ping-interval-ms`, `:max-reconnect` (-1 unlimited), and
+`:reconnect-wait-ms`. For import, `:origin-header true` ignores
+messages carrying monoblok's `x-monoblok` header, useful when bridge
+and import touch the same cluster. `:max-pending` bounds the
+cross-thread import queue; the default is 4096 messages.
 
 ## Values
 

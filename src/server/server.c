@@ -73,6 +73,13 @@ bool mb_server_emit_stats(mb_server *server) {
         ok = publish_stat(server, "$STATS.bridge.published", *server->bridge_published) && ok;
         ok = publish_stat(server, "$STATS.bridge.dropped", *server->bridge_dropped) && ok;
     }
+    if (server->import_received != NULL && server->import_processed != NULL &&
+        server->import_dropped != NULL && server->import_failed != NULL) {
+        ok = publish_stat(server, "$STATS.import.received", *server->import_received) && ok;
+        ok = publish_stat(server, "$STATS.import.processed", *server->import_processed) && ok;
+        ok = publish_stat(server, "$STATS.import.dropped", *server->import_dropped) && ok;
+        ok = publish_stat(server, "$STATS.import.failed", *server->import_failed) && ok;
+    }
     return ok;
 }
 
@@ -248,7 +255,7 @@ static void make_server_id(char out[35]) {
 
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
-                    uint64_t stats_tick_ms, bool trace) {
+                    uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace) {
     *server = (mb_server){
         .host = host,
         .port = port,
@@ -257,6 +264,7 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         .snapshot_path = snapshot_path,
         .snapshot_every_ms = snapshot_every_ms,
         .stats_tick_ms = stats_tick_ms == 0 ? MB_DEFAULT_STATS_TICK_MS : stats_tick_ms,
+        .client_pubs_enabled = client_pubs_enabled,
         .trace = trace,
     };
     make_server_id(server->server_id);

@@ -1,0 +1,22 @@
+;; Tap raw telemetry from a real NATS server, keep raw private to patchbay,
+;; and expose only the conditioned output from monoblok.
+;;
+;; The example script starts nats-server on this port:
+;;   nats-server -p 14889
+;; Then it starts monoblok with this patchbay:
+;;   ./build/monoblok --port 14222 --patchbay examples/import.edn
+;; Publish raw input to the real NATS server:
+;;   nats -s nats://127.0.0.1:14889 pub raw.temp 42.04
+;; Subscribe to the processed local stream:
+;;   nats -s nats://127.0.0.1:14222 sub clean.temp
+(import
+  :servers ["nats://127.0.0.1:14889"]
+  :name    "monoblok-import-example"
+  :subject ["raw.>"]
+  :max-pending 64)
+
+(on "raw.temp"
+  (-> payload-float
+      (round 1)
+      (squelch)
+      (publish! "clean.temp")))

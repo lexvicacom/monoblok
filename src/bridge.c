@@ -3,6 +3,7 @@
 #include "bridge.h"
 
 #include "array.h"
+#include "nats_common.h"
 #include "router.h"
 
 #include "nats.h"
@@ -11,66 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-
-#define MB_BRIDGE_ORIGIN_HEADER "x-monoblok"
-
-typedef struct bridge_strings {
-    char **items;
-    size_t len;
-    size_t cap;
-} bridge_strings;
-
-static void bridge_strings_free(bridge_strings *strings) {
-    for (size_t i = 0; i < strings->len; i += 1) {
-        free(strings->items[i]);
-    }
-    free(strings->items);
-    *strings = (bridge_strings){0};
-}
-
-static char *slice_to_cstr(pb_slice slice) {
-    char *s = malloc(slice.len + 1);
-    if (s == NULL) {
-        return NULL;
-    }
-    memcpy(s, slice.ptr, slice.len);
-    s[slice.len] = '\0';
-    return s;
-}
-
-static char *cstr_dup(const char *s) {
-    const size_t len = strlen(s);
-    char *copy = malloc(len + 1);
-    if (copy == NULL) {
-        return NULL;
-    }
-    memcpy(copy, s, len + 1);
-    return copy;
-}
-
-static char *origin_header_value(void) {
-    char host[256];
-    if (gethostname(host, sizeof host) != 0 || host[0] == '\0') {
-        return cstr_dup("unknown");
-    }
-    host[sizeof host - 1] = '\0';
-    return cstr_dup(host);
-}
-
-static char *track_cstr(bridge_strings *strings, pb_slice slice) {
-    if (!mb_array_reserve((void **)&strings->items, &strings->cap, strings->len + 1,
-                          sizeof strings->items[0], 8)) {
-        return NULL;
-    }
-    char *s = slice_to_cstr(slice);
-    if (s == NULL) {
-        return NULL;
-    }
-    strings->items[strings->len] = s;
-    strings->len += 1;
-    return s;
-}
 
 static bool set_status(natsStatus status, const char *what) {
     if (status == NATS_OK) {
@@ -78,106 +19,6 @@ static bool set_status(natsStatus status, const char *what) {
     }
     fprintf(stderr, "warn: bridge: %s failed: %s\n", what, natsStatus_GetText(status));
     return false;
-}
-
-static bool set_bridge_options(natsOptions *opts, const pb_bridge_config *config, bridge_strings *strings) {
-    if (config->servers_len > (size_t)INT_MAX) {
-        fprintf(stderr, "warn: bridge: too many configured servers\n");
-        return false;
-    }
-    const char **servers = calloc(config->servers_len, sizeof servers[0]);
-    if (servers == NULL) {
-        return false;
-    }
-    for (size_t i = 0; i < config->servers_len; i += 1) {
-        servers[i] = track_cstr(strings, config->servers[i]);
-        if (servers[i] == NULL) {
-            free(servers);
-            return false;
-        }
-    }
-    bool ok = set_status(natsOptions_SetServers(opts, servers, (int)config->servers_len), "set servers");
-    free(servers);
-    if (!ok) {
-        return false;
-    }
-
-    if (config->has_name) {
-        char *name = track_cstr(strings, config->name);
-        if (name == NULL || !set_status(natsOptions_SetName(opts, name), "set name")) {
-            return false;
-        }
-    }
-
-    if (config->has_creds) {
-        char *creds = track_cstr(strings, config->creds);
-        if (creds == NULL ||
-            !set_status(natsOptions_SetUserCredentialsFromFiles(opts, creds, NULL), "set credentials")) {
-            return false;
-        }
-    } else if (config->has_user || config->has_password) {
-        if (!config->has_user || !config->has_password) {
-            fprintf(stderr, "warn: bridge: :user and :password must be configured together\n");
-            return false;
-        }
-        char *user = track_cstr(strings, config->user);
-        char *password = track_cstr(strings, config->password);
-        if (user == NULL || password == NULL ||
-            !set_status(natsOptions_SetUserInfo(opts, user, password), "set user info")) {
-            return false;
-        }
-    } else if (config->has_token) {
-        char *token = track_cstr(strings, config->token);
-        if (token == NULL || !set_status(natsOptions_SetToken(opts, token), "set token")) {
-            return false;
-        }
-    }
-
-    if (config->tls || config->has_tls_ca || config->has_tls_cert || config->tls_skip_verify) {
-        if (!set_status(natsOptions_SetSecure(opts, true), "enable TLS")) {
-            return false;
-        }
-    }
-    if (config->has_tls_ca) {
-        char *ca = track_cstr(strings, config->tls_ca);
-        if (ca == NULL || !set_status(natsOptions_LoadCATrustedCertificates(opts, ca), "load CA")) {
-            return false;
-        }
-    }
-    if (config->has_tls_cert || config->has_tls_key) {
-        if (!config->has_tls_cert || !config->has_tls_key) {
-            fprintf(stderr, "warn: bridge: :tls-cert and :tls-key must be configured together\n");
-            return false;
-        }
-        char *cert = track_cstr(strings, config->tls_cert);
-        char *key = track_cstr(strings, config->tls_key);
-        if (cert == NULL || key == NULL ||
-            !set_status(natsOptions_LoadCertificatesChain(opts, cert, key), "load client certificate")) {
-            return false;
-        }
-    }
-    if (config->tls_skip_verify &&
-        !set_status(natsOptions_SkipServerVerification(opts, true), "set TLS skip verification")) {
-        return false;
-    }
-
-    if (config->has_connect_timeout_ms &&
-        !set_status(natsOptions_SetTimeout(opts, config->connect_timeout_ms), "set connect timeout")) {
-        return false;
-    }
-    if (config->has_ping_interval_ms &&
-        !set_status(natsOptions_SetPingInterval(opts, config->ping_interval_ms), "set ping interval")) {
-        return false;
-    }
-    if (config->has_max_reconnect &&
-        !set_status(natsOptions_SetMaxReconnect(opts, config->max_reconnect), "set max reconnect")) {
-        return false;
-    }
-    if (config->has_reconnect_wait_ms &&
-        !set_status(natsOptions_SetReconnectWait(opts, config->reconnect_wait_ms), "set reconnect wait")) {
-        return false;
-    }
-    return true;
 }
 
 bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config) {
@@ -192,11 +33,12 @@ bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config) {
         return false;
     }
 
-    bridge_strings strings = {0};
-    bool ok = set_bridge_options(opts, config, &strings);
+    mb_nats_strings strings = {0};
+    const mb_nats_options_config options = mb_nats_options_from_bridge(config);
+    bool ok = mb_nats_set_options(opts, &options, &strings);
     char *origin_value = NULL;
     if (ok && config->origin_header) {
-        origin_value = origin_header_value();
+        origin_value = mb_nats_origin_header_value();
         if (origin_value == NULL) {
             fprintf(stderr, "warn: bridge: allocate origin header failed\n");
             ok = false;
@@ -204,6 +46,7 @@ bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config) {
     }
     if (ok) {
         natsConnection *conn = NULL;
+        mb_nats_retain();
         status = natsConnection_Connect(&conn, opts);
         ok = set_status(status, "connect");
         if (ok && config->origin_header) {
@@ -216,12 +59,14 @@ bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config) {
             bridge->started = true;
         } else if (conn != NULL) {
             natsConnection_Destroy(conn);
-            nats_Close();
+        }
+        if (!ok) {
+            mb_nats_release();
         }
     }
 
     natsOptions_Destroy(opts);
-    bridge_strings_free(&strings);
+    mb_nats_strings_free(&strings);
     free(origin_value);
     return ok;
 }
@@ -259,7 +104,7 @@ void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload) {
         natsMsg *msg = NULL;
         status = natsMsg_Create(&msg, bridge->subject_scratch, NULL, (const char *)payload.ptr, (int)payload.len);
         if (status == NATS_OK) {
-            status = natsMsgHeader_Set(msg, MB_BRIDGE_ORIGIN_HEADER, bridge->origin_header_value);
+            status = natsMsgHeader_Set(msg, MB_NATS_ORIGIN_HEADER, bridge->origin_header_value);
         }
         if (status == NATS_OK) {
             status = natsConnection_PublishMsg((natsConnection *)bridge->conn, msg);
@@ -289,7 +134,7 @@ void mb_bridge_close(mb_bridge *bridge) {
     free(bridge->subject_scratch);
     free(bridge->origin_header_value);
     if (bridge->started) {
-        nats_Close();
+        mb_nats_release();
     }
     *bridge = (mb_bridge){0};
 }

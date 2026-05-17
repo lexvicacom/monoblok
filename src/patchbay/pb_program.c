@@ -94,7 +94,7 @@ static bool load_lvc_form(pb_program *program, pb_values items) {
     return true;
 }
 
-static bool bridge_vec_append(pb_slice **items, size_t *len, size_t *cap, pb_slice value) {
+static bool slice_vec_append(pb_slice **items, size_t *len, size_t *cap, pb_slice value) {
     if (!mb_array_reserve((void **)items, cap, *len + 1, sizeof (*items)[0], 4)) {
         return false;
     }
@@ -103,81 +103,114 @@ static bool bridge_vec_append(pb_slice **items, size_t *len, size_t *cap, pb_sli
     return true;
 }
 
-static bool load_bridge_string(pb_value value, const char *name, pb_slice *out) {
+static bool load_remote_string(pb_value value, const char *form, const char *name, pb_slice *out) {
     if (value.kind != PB_STRING) {
-        fprintf(stderr, "patchbay: bridge :%s expects string\n", name);
+        fprintf(stderr, "patchbay: %s :%s expects string\n", form, name);
         return false;
     }
     if (value.text.len == 0) {
-        fprintf(stderr, "patchbay: bridge :%s must not be empty\n", name);
+        fprintf(stderr, "patchbay: %s :%s must not be empty\n", form, name);
         return false;
     }
     *out = value.text;
     return true;
 }
 
-static bool load_bridge_bool(pb_value value, const char *name, bool *out) {
+static bool load_remote_bool(pb_value value, const char *form, const char *name, bool *out) {
     if (value.kind != PB_BOOL) {
-        fprintf(stderr, "patchbay: bridge :%s expects boolean\n", name);
+        fprintf(stderr, "patchbay: %s :%s expects boolean\n", form, name);
         return false;
     }
     *out = value.boolean;
     return true;
 }
 
-static bool load_bridge_i64(pb_value value, const char *name, int64_t *out) {
+static bool load_remote_i64(pb_value value, const char *form, const char *name, int64_t *out) {
     if (value.kind != PB_NUMBER) {
-        fprintf(stderr, "patchbay: bridge :%s expects number\n", name);
+        fprintf(stderr, "patchbay: %s :%s expects number\n", form, name);
         return false;
     }
     const int64_t n = (int64_t)value.number;
     if ((double)n != value.number) {
-        fprintf(stderr, "patchbay: bridge :%s expects integer number\n", name);
+        fprintf(stderr, "patchbay: %s :%s expects integer number\n", form, name);
         return false;
     }
     *out = n;
     return true;
 }
 
-static bool load_bridge_int(pb_value value, const char *name, int *out) {
+static bool load_remote_int(pb_value value, const char *form, const char *name, int *out) {
     int64_t n = 0;
-    if (!load_bridge_i64(value, name, &n)) {
+    if (!load_remote_i64(value, form, name, &n)) {
         return false;
     }
     if (n < INT_MIN || n > INT_MAX) {
-        fprintf(stderr, "patchbay: bridge :%s is outside int range\n", name);
+        fprintf(stderr, "patchbay: %s :%s is outside int range\n", form, name);
         return false;
     }
     *out = (int)n;
     return true;
 }
 
-static bool load_bridge_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *name) {
+static bool load_remote_size(pb_value value, const char *form, const char *name, size_t *out) {
+    int64_t n = 0;
+    if (!load_remote_i64(value, form, name, &n)) {
+        return false;
+    }
+    if (n <= 0 || (uint64_t)n > SIZE_MAX) {
+        fprintf(stderr, "patchbay: %s :%s must be a positive integer\n", form, name);
+        return false;
+    }
+    *out = (size_t)n;
+    return true;
+}
+
+static bool load_remote_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *form, const char *name) {
     if (value.kind == PB_STRING) {
         if (value.text.len == 0) {
-            fprintf(stderr, "patchbay: bridge :%s values must not be empty\n", name);
+            fprintf(stderr, "patchbay: %s :%s values must not be empty\n", form, name);
             return false;
         }
-        return bridge_vec_append(out, len, cap, value.text);
+        return slice_vec_append(out, len, cap, value.text);
     }
     if (value.kind != PB_VECTOR && value.kind != PB_LIST) {
-        fprintf(stderr, "patchbay: bridge :%s expects string or vector of strings\n", name);
+        fprintf(stderr, "patchbay: %s :%s expects string or vector of strings\n", form, name);
         return false;
     }
     if (value.seq.len == 0) {
-        fprintf(stderr, "patchbay: bridge :%s must not be empty\n", name);
+        fprintf(stderr, "patchbay: %s :%s must not be empty\n", form, name);
         return false;
     }
     for (size_t i = 0; i < value.seq.len; i += 1) {
         if (value.seq.items[i].kind != PB_STRING || value.seq.items[i].text.len == 0) {
-            fprintf(stderr, "patchbay: bridge :%s values must be non-empty strings\n", name);
+            fprintf(stderr, "patchbay: %s :%s values must be non-empty strings\n", form, name);
             return false;
         }
-        if (!bridge_vec_append(out, len, cap, value.seq.items[i].text)) {
+        if (!slice_vec_append(out, len, cap, value.seq.items[i].text)) {
             return false;
         }
     }
     return true;
+}
+
+static bool load_bridge_string(pb_value value, const char *name, pb_slice *out) {
+    return load_remote_string(value, "bridge", name, out);
+}
+
+static bool load_bridge_bool(pb_value value, const char *name, bool *out) {
+    return load_remote_bool(value, "bridge", name, out);
+}
+
+static bool load_bridge_i64(pb_value value, const char *name, int64_t *out) {
+    return load_remote_i64(value, "bridge", name, out);
+}
+
+static bool load_bridge_int(pb_value value, const char *name, int *out) {
+    return load_remote_int(value, "bridge", name, out);
+}
+
+static bool load_bridge_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *name) {
+    return load_remote_list(out, len, cap, value, "bridge", name);
 }
 
 static bool load_bridge_form(pb_program *program, pb_values items) {
@@ -298,6 +331,157 @@ fail:
     return false;
 }
 
+static bool load_import_string(pb_value value, const char *name, pb_slice *out) {
+    return load_remote_string(value, "import", name, out);
+}
+
+static bool load_import_bool(pb_value value, const char *name, bool *out) {
+    return load_remote_bool(value, "import", name, out);
+}
+
+static bool load_import_i64(pb_value value, const char *name, int64_t *out) {
+    return load_remote_i64(value, "import", name, out);
+}
+
+static bool load_import_int(pb_value value, const char *name, int *out) {
+    return load_remote_int(value, "import", name, out);
+}
+
+static bool load_import_size(pb_value value, const char *name, size_t *out) {
+    return load_remote_size(value, "import", name, out);
+}
+
+static bool load_import_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *name) {
+    return load_remote_list(out, len, cap, value, "import", name);
+}
+
+static bool load_import_form(pb_program *program, pb_values items) {
+    if (program->importer.present) {
+        fprintf(stderr, "patchbay: duplicate import form\n");
+        return false;
+    }
+    if (items.len < 3 || (items.len % 2) == 0) {
+        fprintf(stderr, "patchbay: import expects keyword/value options\n");
+        return false;
+    }
+
+    pb_import_config importer = {0};
+    importer.present = true;
+    for (size_t i = 1; i < items.len; i += 2) {
+        if (items.items[i].kind != PB_KEYWORD) {
+            fprintf(stderr, "patchbay: import option must be keyword\n");
+            goto fail;
+        }
+        pb_slice key = items.items[i].text;
+        pb_value value = items.items[i + 1];
+        if (pb_slice_eq_lit(key, "servers")) {
+            if (!load_import_list(&importer.servers, &importer.servers_len, &importer.servers_cap, value, "servers")) {
+                goto fail;
+            }
+        } else if (pb_slice_eq_lit(key, "subject") || pb_slice_eq_lit(key, "subjects")) {
+            if (!load_import_list(&importer.subjects, &importer.subjects_len, &importer.subjects_cap, value, "subject")) {
+                goto fail;
+            }
+        } else if (pb_slice_eq_lit(key, "name")) {
+            if (!load_import_string(value, "name", &importer.name)) {
+                goto fail;
+            }
+            importer.has_name = true;
+        } else if (pb_slice_eq_lit(key, "creds")) {
+            if (!load_import_string(value, "creds", &importer.creds)) {
+                goto fail;
+            }
+            importer.has_creds = true;
+        } else if (pb_slice_eq_lit(key, "user")) {
+            if (!load_import_string(value, "user", &importer.user)) {
+                goto fail;
+            }
+            importer.has_user = true;
+        } else if (pb_slice_eq_lit(key, "password")) {
+            if (!load_import_string(value, "password", &importer.password)) {
+                goto fail;
+            }
+            importer.has_password = true;
+        } else if (pb_slice_eq_lit(key, "token")) {
+            if (!load_import_string(value, "token", &importer.token)) {
+                goto fail;
+            }
+            importer.has_token = true;
+        } else if (pb_slice_eq_lit(key, "tls")) {
+            if (!load_import_bool(value, "tls", &importer.tls)) {
+                goto fail;
+            }
+        } else if (pb_slice_eq_lit(key, "tls-ca")) {
+            if (!load_import_string(value, "tls-ca", &importer.tls_ca)) {
+                goto fail;
+            }
+            importer.has_tls_ca = true;
+        } else if (pb_slice_eq_lit(key, "tls-cert")) {
+            if (!load_import_string(value, "tls-cert", &importer.tls_cert)) {
+                goto fail;
+            }
+            importer.has_tls_cert = true;
+        } else if (pb_slice_eq_lit(key, "tls-key")) {
+            if (!load_import_string(value, "tls-key", &importer.tls_key)) {
+                goto fail;
+            }
+            importer.has_tls_key = true;
+        } else if (pb_slice_eq_lit(key, "tls-skip-verify")) {
+            if (!load_import_bool(value, "tls-skip-verify", &importer.tls_skip_verify)) {
+                goto fail;
+            }
+        } else if (pb_slice_eq_lit(key, "origin-header")) {
+            if (!load_import_bool(value, "origin-header", &importer.origin_header)) {
+                goto fail;
+            }
+        } else if (pb_slice_eq_lit(key, "connect-timeout-ms")) {
+            if (!load_import_i64(value, "connect-timeout-ms", &importer.connect_timeout_ms)) {
+                goto fail;
+            }
+            importer.has_connect_timeout_ms = true;
+        } else if (pb_slice_eq_lit(key, "ping-interval-ms")) {
+            if (!load_import_i64(value, "ping-interval-ms", &importer.ping_interval_ms)) {
+                goto fail;
+            }
+            importer.has_ping_interval_ms = true;
+        } else if (pb_slice_eq_lit(key, "reconnect-wait-ms")) {
+            if (!load_import_i64(value, "reconnect-wait-ms", &importer.reconnect_wait_ms)) {
+                goto fail;
+            }
+            importer.has_reconnect_wait_ms = true;
+        } else if (pb_slice_eq_lit(key, "max-reconnect")) {
+            if (!load_import_int(value, "max-reconnect", &importer.max_reconnect)) {
+                goto fail;
+            }
+            importer.has_max_reconnect = true;
+        } else if (pb_slice_eq_lit(key, "max-pending")) {
+            if (!load_import_size(value, "max-pending", &importer.max_pending)) {
+                goto fail;
+            }
+            importer.has_max_pending = true;
+        } else {
+            fprintf(stderr, "patchbay: unknown import option: %.*s\n", (int)key.len, key.ptr);
+            goto fail;
+        }
+    }
+
+    if (importer.servers_len == 0) {
+        fprintf(stderr, "patchbay: import requires :servers\n");
+        goto fail;
+    }
+    if (importer.subjects_len == 0) {
+        fprintf(stderr, "patchbay: import requires :subject\n");
+        goto fail;
+    }
+    program->importer = importer;
+    return true;
+
+fail:
+    free(importer.servers);
+    free(importer.subjects);
+    return false;
+}
+
 static bool load_on_form(pb_program *program, pb_value form) {
     if (form.kind != PB_LIST || form.seq.len == 0 || form.seq.items[0].kind != PB_SYMBOL) {
         fprintf(stderr, "patchbay: top-level form must be a list headed by a symbol\n");
@@ -309,6 +493,9 @@ static bool load_on_form(pb_program *program, pb_value form) {
     }
     if (pb_slice_eq_lit(items.items[0].text, "bridge")) {
         return load_bridge_form(program, items);
+    }
+    if (pb_slice_eq_lit(items.items[0].text, "import")) {
+        return load_import_form(program, items);
     }
     if (!pb_slice_eq_lit(items.items[0].text, "on")) {
         return true;
@@ -523,6 +710,8 @@ void pb_program_free(pb_program *program) {
     free(program->lvc.filters);
     free(program->bridge.servers);
     free(program->bridge.exports);
+    free(program->importer.servers);
+    free(program->importer.subjects);
     pb_arena_free(&program->scratch);
     pb_arena_free(&program->parse_arena);
     *program = (pb_program){0};

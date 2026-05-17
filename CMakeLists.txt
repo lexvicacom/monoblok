@@ -153,7 +153,7 @@ add_executable(snapshot-tests test/snapshot_unit.c src/snapshot.c)
 target_link_libraries(snapshot-tests PRIVATE patchbay_sexpr)
 target_compile_options(snapshot-tests PRIVATE ${MB_WARNINGS})
 
-add_executable(bridge-tests test/bridge_unit.c test/fake_nats.c src/bridge.c)
+add_executable(bridge-tests test/bridge_unit.c test/fake_nats.c src/bridge.c src/nats_common.c)
 target_include_directories(bridge-tests PRIVATE test/fakes src/patchbay)
 target_link_libraries(bridge-tests PRIVATE monoblok_core)
 target_compile_options(bridge-tests PRIVATE ${MB_WARNINGS})
@@ -202,8 +202,16 @@ else()
   set(MB_NATS_TARGET "")
 endif()
 
+add_executable(importer-tests test/importer_unit.c test/fake_nats.c src/importer.c src/nats_common.c)
+target_include_directories(importer-tests PRIVATE test/fakes src/patchbay)
+target_link_libraries(importer-tests PRIVATE monoblok_core ${MB_UV_TARGET})
+target_compile_options(importer-tests PRIVATE ${MB_WARNINGS})
+add_test(NAME importer COMMAND importer-tests)
+
 add_executable(monoblok
   src/bridge.c
+  src/importer.c
+  src/nats_common.c
   src/snapshot.c
   src/server/conn.c
   src/main.c

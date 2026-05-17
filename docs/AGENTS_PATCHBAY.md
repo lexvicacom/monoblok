@@ -55,8 +55,10 @@ off.
 
 In full monoblok there are also top-level config forms: `(lvc ["filter"
 ...])` opts matching subjects into `$LVC.*` last-value streams, and optional
-`(bridge ...)` forwards local publishes to a remote NATS cluster. The bridge is
-export-only.
+`(bridge ...)` forwards local publishes to a remote NATS cluster. Optional
+`(import ...)` subscribes to a remote NATS cluster and feeds matching messages
+into patchbay as private ingress. Imported raw subjects are not visible to
+direct monoblok subscribers unless a rule republishes them explicitly.
 
 ## Target runtime: monoblok vs Tinyblok
 
@@ -79,10 +81,11 @@ forms. This subset works for both runtimes unless a local build disables a form.
 
 Alert the user before using or recommending full monoblok-only features for a
 Tinyblok file. This includes top-level `(lvc ...)` and `(bridge ...)`, daemon
-flags such as `--snapshot`, runtime patch/config loading, dynamic graph edits,
-server-side subscriptions beyond Tinyblok's fixed request subjects, inbound
-bridges, LVC/snapshot policy, and fleet-management behavior. Tinyblok's vendored
-core can parse `lvc` and `bridge`, but they are not wired into firmware policy.
+or `(import ...)`, daemon flags such as `--snapshot`, runtime patch/config
+loading, dynamic graph edits, server-side subscriptions beyond Tinyblok's fixed
+request subjects, inbound/outbound bridges, LVC/snapshot policy, and
+fleet-management behavior. Tinyblok's vendored core can parse `lvc` and
+`bridge`, but they are not wired into firmware policy.
 
 JSON/event-document processing is also outside Patchbay Lite by default.
 Tinyblok can compile `json-get` and `json-demux!` behind
@@ -292,6 +295,27 @@ also accept the legacy `(...)` list syntax, but `[...]` is the
 recommended form. LVC follows the same recommendation:
 `(lvc ["sensors.>" "alerts.>"])`, with legacy `(lvc "sensors.>")`
 still accepted.
+
+## Import form (optional, zero or one at top level)
+
+```edn
+(import
+  :servers ["tls://a.example:4222" "tls://b.example:4222"]
+  :creds   "/etc/monoblok/ngs.creds"
+  :name    "monoblok-import-prod-1"
+  :origin-header true
+  :subject ["raw.>" "replay.>"]
+  :max-pending 4096)
+```
+
+Connection keywords match `(bridge ...)`. `:subject` is a string or vector of
+remote subject filters to subscribe to. With `(import ...)` configured, local
+socket clients may still subscribe but client `PUB` commands are rejected.
+Imported messages run through `(on ...)` rules but are not routed to local
+subscribers as raw publishes; only explicit rule outputs become visible.
+`:origin-header true` ignores remote messages that carry monoblok's
+`x-monoblok` header. `:max-pending` bounds the NATS-to-loop queue; default is
+4096 messages.
 
 ## Worked examples
 
@@ -537,7 +561,7 @@ if __name__ == "__main__":
 
 Before returning a patchbay file, verify:
 
-1. For monoblok, every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(bridge ...)`. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)` or `(bridge ...)` there without alerting the user that they are beyond Lite.
+1. For monoblok, every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(bridge ...)` / `(import ...)`. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)`, `(bridge ...)`, or `(import ...)` there without alerting the user that they are beyond Lite.
 2. Every `publish!` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
 3. Every numeric op is fed a numeric value (`payload-float` / `payload-int` / arithmetic result), not raw `payload`.
 4. `N` in `moving-*` is a literal integer and consistent per call site.

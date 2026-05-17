@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "bridge.h"
+#include "importer.h"
 #include "server.h"
 #include "pb_soundcheck.h"
 #include "pb_validate.h"
@@ -74,6 +75,19 @@ static const char *os_name(void) {
 #else
     return "unknown";
 #endif
+}
+
+static bool import_ingress(void *ctx, mb_slice subject, mb_slice payload) {
+    mb_server *server = ctx;
+    if (server == NULL || server->closing) {
+        return false;
+    }
+    server->total_pubs += 1;
+    uv_update_time(&server->loop);
+    const bool ok = pb_program_eval_publish(server->program, &server->router, subject, payload,
+                                            uv_now(&server->loop), mb_wall_clock_ms());
+    mb_server_reschedule_patchbay_clock(server);
+    return ok;
 }
 
 typedef enum {
@@ -243,13 +257,16 @@ int main(int argc, char **argv) {
     fprintf(stderr, "info: stats: enabled every=%" PRIu64 "ms\n", stats_tick_ms);
 
     mb_bridge bridge = {0};
+    mb_importer importer = {0};
 
     mb_server server;
+    const bool client_pubs_enabled = !program.importer.present;
     if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_runtime_enabled, snapshot_path,
-                        snapshot_every_ms, stats_tick_ms, trace)) {
+                        snapshot_every_ms, stats_tick_ms, client_pubs_enabled, trace)) {
         pb_program_free(&program);
         return 1;
     }
+    fprintf(stderr, "info: client pubs: %s\n", client_pubs_enabled ? "enabled" : "disabled (import mode)");
     if (program.bridge.present) {
         if (!mb_bridge_start(&bridge, &program.bridge)) {
             mb_server_close(&server);
@@ -266,11 +283,31 @@ int main(int argc, char **argv) {
     } else {
         fprintf(stderr, "info: bridge: disabled\n");
     }
+    if (program.importer.present) {
+        if (!mb_importer_start(&importer, &server.loop, &program.importer, import_ingress, &server)) {
+            mb_importer_close(&importer);
+            mb_server_close(&server);
+            mb_bridge_close(&bridge);
+            pb_program_free(&program);
+            return 1;
+        }
+        server.import_received = &importer.received;
+        server.import_processed = &importer.processed;
+        server.import_dropped = &importer.dropped;
+        server.import_failed = &importer.failed;
+        fprintf(stderr, "info: import: connected to NATS (%zu server%s, %zu subject filter%s, max-pending=%zu)\n",
+                program.importer.servers_len, program.importer.servers_len == 1 ? "" : "s",
+                program.importer.subjects_len, program.importer.subjects_len == 1 ? "" : "s",
+                program.importer.has_max_pending ? program.importer.max_pending : (size_t)MB_IMPORT_DEFAULT_MAX_PENDING);
+    } else {
+        fprintf(stderr, "info: import: disabled\n");
+    }
 
     // block
     const int rc = mb_server_run(&server);
 
     // bye
+    mb_importer_close(&importer);
     mb_server_close(&server);
     mb_bridge_close(&bridge);
     pb_program_free(&program);

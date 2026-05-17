@@ -11,10 +11,12 @@ typedef enum natsStatus {
     NATS_NO_MEMORY = 2,
     NATS_TIMEOUT = 3,
     NATS_NOT_CONNECTED = 4,
+    NATS_NOT_FOUND = 5,
 } natsStatus;
 
 typedef struct natsOptions natsOptions;
 typedef struct natsConnection natsConnection;
+typedef struct natsSubscription natsSubscription;
 typedef struct natsMsg natsMsg;
 
 // Test control and call ledger for the fake NATS client.
@@ -39,7 +41,11 @@ typedef struct fake_nats_state {
     natsStatus msg_header_set_status;
     natsStatus publish_msg_status;
     natsStatus publish_status;
+    natsStatus subscribe_sync_status;
+    natsStatus next_msg_status;
+    natsStatus header_get_status;
     bool connect_returns_conn_on_failure;
+    bool next_msg_has_origin_header;
 
     int options_create_calls;
     int options_destroy_calls;
@@ -65,6 +71,13 @@ typedef struct fake_nats_state {
     int publish_msg_calls;
     int msg_destroy_calls;
     int publish_calls;
+    int subscribe_sync_calls;
+    int next_msg_calls;
+    int subscription_destroy_calls;
+    int msg_subject_calls;
+    int msg_data_calls;
+    int msg_data_len_calls;
+    int msg_header_get_calls;
 
     int last_set_servers_count;
     int last_publish_payload_len;
@@ -81,6 +94,7 @@ typedef struct fake_nats_state {
 
 void fake_nats_reset(void);
 fake_nats_state *fake_nats_get(void);
+void fake_nats_deliver(const char *subject, const char *payload);
 
 const char *natsStatus_GetText(natsStatus status);
 natsStatus natsOptions_Create(natsOptions **opts);
@@ -107,5 +121,12 @@ natsStatus natsMsgHeader_Set(natsMsg *msg, const char *key, const char *value);
 natsStatus natsConnection_PublishMsg(natsConnection *conn, natsMsg *msg);
 void natsMsg_Destroy(natsMsg *msg);
 natsStatus natsConnection_Publish(natsConnection *conn, const char *subj, const void *data, int dataLen);
+natsStatus natsConnection_SubscribeSync(natsSubscription **sub, natsConnection *nc, const char *subject);
+natsStatus natsSubscription_NextMsg(natsMsg **nextMsg, natsSubscription *sub, int64_t timeout);
+void natsSubscription_Destroy(natsSubscription *sub);
+const char *natsMsg_GetSubject(const natsMsg *msg);
+const char *natsMsg_GetData(const natsMsg *msg);
+int natsMsg_GetDataLength(const natsMsg *msg);
+natsStatus natsMsgHeader_Get(natsMsg *msg, const char *key, const char **value);
 
 #endif
