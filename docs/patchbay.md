@@ -101,7 +101,8 @@ such as `payload`, `payload-float`, `payload-int`, and `subject` lower
 as symbols; other scalar arguments lower as strings unless they are
 numbers, booleans, nulls, or keywords like `:ms`. See
 [`examples/rental-car.yml`](../examples/rental-car.yml) for the fuller
-shape.
+shape and [`patchbay-yaml-schema.md`](./patchbay-yaml-schema.md) for the
+YAML shape reference.
 
 ### EDN is the notation; the patchbay is the evaluator
 
