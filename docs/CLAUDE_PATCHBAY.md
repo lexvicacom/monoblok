@@ -173,7 +173,7 @@ Strings / subjects:
   - `:date` -> `"YYYY-MM-DD"` (10 chars)
   - `:hour` -> `"YYYY-MM-DDTHH"` (13 chars, RFC 3339 `T` separator)
   - `:minute` -> `"YYYY-MM-DDTHHMM"` (15 chars, RFC 3339 basic form, no `:` so it's subject-token-safe)
-  All three share one threadlocal buffer keyed by the minute, so any combination of granularities in a hot loop costs one integer compare and a slice (recompute only on a minute boundary). Wall-clock comes from `Context.wall_ms` (stamped per-PUB by the server, distinct from the monotonic `now_ms` used by `hold-off` and time windows). Pair with `subject-with` or `subject-append` for bucketing: `(publish! (subject-with "logs" (now :date) "errors") payload)` lands on `logs.2026-05-04.errors`. `:minute` is high cardinality (525,600 unique subject tokens per year per topic); prefer `:hour` or `:date` unless you really mean it.
+  Each call formats the result into the eval arena. Wall-clock comes from `Context.wall_ms` (stamped per-PUB by the server, distinct from the monotonic `now_ms` used by `hold-off` and time windows). Pair with `subject-with` or `subject-append` for bucketing: `(publish! (subject-with "logs" (now :date) "errors") payload)` lands on `logs.2026-05-04.errors`. `:minute` is high cardinality (525,600 unique subject tokens per year per topic); prefer `:hour` or `:date` unless you really mean it.
 - `(contains? coll item)` substring on strings (`(contains? payload "ERROR")`), membership on vectors (`(contains? [1 2 3] payload-int)`). Strict equality, so `"1"` does not match `1`.
 - `(starts-with? text prefix)`, `(ends-with? text suffix)` strings only
 - `(subject-token N [S])` Nth dot token, 0-indexed, of `S` (default: `subject`)
@@ -196,7 +196,7 @@ Idempotent filters (per-rule, per-subject state; first sight always passes / is 
 Windows (used as the first arg(s) of windowed ops):
 
 - bare integer `N`: last N samples; ring is fixed-cap, allocated once
-- `:ms N`: last N ms of wall-clock time (ingress timestamp); samples evict by age, and the server arms one timer per active time-windowed slot so quiet streams don't keep stale data
+- `:ms N`: last N ms of wall-clock time (ingress timestamp); samples evict by age, active slots expose deadlines, and the server keeps one rescheduled timer pointed at the earliest active deadline so quiet streams don't keep stale data
 
 Windowed aggregates (per `(rule, subject, op, window-kind)` slot; tick and time variants on the same rule + subject keep distinct state):
 
@@ -566,7 +566,7 @@ Before returning a patchbay file, verify:
 1. For monoblok, every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(export ...)` / `(import ...)`. Deprecated `(bridge ...)` is accepted as an export alias. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)`, `(export ...)`, deprecated `(bridge ...)`, or `(import ...)` there without alerting the user that they are beyond Lite.
 2. Every `publish!` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
 3. Every numeric op is fed a numeric value (`payload-float` / `payload-int` / arithmetic result), not raw `payload`.
-4. `N` in `moving-*` is a literal integer and consistent per call site.
+4. `N` in `moving-*` is a literal integer and consistent per `(rule, subject, op/window kind)` slot.
 5. Pipelines built with `->` end in a side-effecting form (`publish!`); a pipeline that ends in a pure value is dead code.
 6. Tinyblok `(pump ...)` and `(fn ...)` declarations name registered native symbols, and `on-req` handlers reply with `reply!` rather than assuming arbitrary runtime subscriptions.
 7. Comments start with `;` and never leak prose outside them.

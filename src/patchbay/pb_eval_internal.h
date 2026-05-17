@@ -11,6 +11,7 @@ typedef enum pb_form {
     PB_FORM_OR,
     PB_FORM_THREAD,
     PB_FORM_TRANSITION,
+    PB_FORM_ON_SILENCE,
     PB_FORM_DROPOUT,
     PB_FORM_NOW,
     PB_FORM_NOT,
@@ -30,6 +31,7 @@ typedef enum pb_form {
     PB_FORM_SUBJECT_APPEND,
     PB_FORM_SUBJECT_TOKEN,
     PB_FORM_SUBJECT_WITH,
+    PB_FORM_PRINT,
     PB_FORM_PUBLISH,
     PB_FORM_JSON_GET,
     PB_FORM_JSON_DEMUX,
@@ -78,6 +80,7 @@ bool pb_eval_state_set_bytes(pb_eval_state_entry *e, pb_slice bytes);
 bool pb_eval_state_set_emit_subject(pb_eval_state_entry *e, pb_slice bytes);
 void pb_eval_note_suppressed(pb_eval_ctx *ctx);
 pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args);
+pb_eval_result pb_eval_call_on_silence(pb_eval_ctx *ctx, pb_values raw_args);
 pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args);
 
 static inline pb_eval_result pb_eval_nil(void) {

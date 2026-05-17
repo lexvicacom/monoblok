@@ -85,7 +85,7 @@ appears*, not by a sigil:
   head symbol (`hold-off`, `publish!`, `+`, etc.). Unknown heads
   error.
 - Inside top-level config forms, sequences are data. In `(lvc ...)`,
-  a single vector or list is read as the filter set. Inside
+  a single vector is read as the filter set. Inside
   `(export ...)`, deprecated `(bridge ...)`, and `(import ...)`, after a keyword like
   `:servers`, `:export`, or `:subject`, a list is read as a
   literal sequence of values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
@@ -211,7 +211,7 @@ so it threads).
 | `(str-concat a b ...)`           | concatenates string/symbol args                     |
 | `(subject-append "suffix")`      | `"<current-subject>.suffix"`                        |
 | `(subject-with TOK ...)` / `(subject-with [TOK ...])` | join tokens with `.` to build a publishable subject (e.g. `(subject-with "sensors" room "temp")`). Numbers and bools coerce to strings; empty tokens error. Result is publish-validated. |
-| `(now :date)` / `(now :hour)` / `(now :minute)` | wall-clock UTC string at the chosen granularity: `"YYYY-MM-DD"`, `"YYYY-MM-DDTHH"`, `"YYYY-MM-DDTHHMM"` (RFC 3339 basic form, no `:` so it's subject-token-safe). Cached in a single threadlocal buffer keyed by the minute; cost on a hit is one integer compare. `:minute` is high cardinality (525,600 unique values per year per topic) when used as a subject token, prefer `:hour` or `:date` unless you really mean it. |
+| `(now :date)` / `(now :hour)` / `(now :minute)` | wall-clock UTC string at the chosen granularity: `"YYYY-MM-DD"`, `"YYYY-MM-DDTHH"`, `"YYYY-MM-DDTHHMM"` (RFC 3339 basic form, no `:` so it's subject-token-safe). The result is formatted into the eval arena for each call. `:minute` is high cardinality (525,600 unique values per year per topic) when used as a subject token, prefer `:hour` or `:date` unless you really mean it. |
 | `(contains? coll item)`          | substring check on strings (`(contains? payload "ERROR")`), membership check on vectors (`(contains? [1 2 3] payload-int)`, `(contains? ["red" "green"] payload)`). Strict equality, so `"1"` does not match `1`. |
 | `(starts-with? text prefix)`     | boolean prefix check (strings only)                 |
 | `(ends-with? text suffix)`       | boolean suffix check (strings only)                 |
@@ -297,7 +297,7 @@ goes to subscribers only and stops there.
 A reentrant rule whose emission matches its own filter would loop
 forever, so re-entry is depth-capped (default 8). The original PUB
 runs at depth 0, and each level of re-entry increments by one;
-emissions past the cap are dropped silently.
+emissions past the cap are dropped and logged to stderr.
 
 `:reentrant` is the only rule option currently recognised. Unknown
 options are a load error.
@@ -445,14 +445,15 @@ about the spacing.
 `WINDOW` is either a bare integer `N` (tick window) or `:ms N` (time
 window). Tick form counts the last `N` evaluations; time form counts
 pass timestamps in the last `N` ms and is evicted by the server's
-per-slot deadline timer. Per (rule, subject, window-kind).
+shared patchbay timer. Per (rule, subject, window-kind).
 
 ## Windowed aggregates
 
-A small windowing family for smoothing and window-based triggers. Every
-call site gets its own buffer, keyed by `(rule, subject, op, window
-kind)`, so a tick-windowed and a time-windowed `moving-avg` on the same
-rule and subject keep independent state.
+A small windowing family for smoothing and window-based triggers. State
+is keyed by `(rule, subject, op, window kind)`, so a tick-windowed and a
+time-windowed `moving-avg` on the same rule and subject keep independent
+state. Repeating the same op/window kind in the same rule and subject
+shares that slot; split it across rules if you need separate state.
 
 A window is either a tick count or a wall-clock duration:
 
@@ -467,11 +468,11 @@ Rule of thumb: `!` marks forms that emit or otherwise have an effect,
 
 Wall-clock time is the ingress timestamp stamped once per inbound PUB
 (same source `hold-off` reads). For windows that elapse without a new
-PUB, the server arms one timer per active time-windowed slot and fires
-it at that slot's exact next deadline. The timer evicts old samples and
-closes any time-windowed `bar!` whose window has fully passed, so a
-quiet feed doesn't leave you with a stale aggregate or an unflushed
-bar.
+PUB, each time-windowed slot exposes its next deadline and the server
+keeps one rescheduled timer pointed at the earliest active deadline. On
+each fire it scans due slots, evicts old samples, and closes any
+time-windowed `bar!` whose window has fully passed, so a quiet feed
+doesn't leave you with a stale aggregate or an unflushed bar.
 
 On snapshot warm-start, existing time-window slots are re-armed when the
 server starts. If a brief service bounce crossed a slot's deadline, that
@@ -484,17 +485,17 @@ bounce.
 | `(moving-avg WINDOW X)`    | number  | O(1) per update for tick form       |
 |                            |         | O(n) per update for `:ms` form      |
 | `(moving-sum WINDOW X)`    | number  | same as `moving-avg`                |
-| `(moving-max WINDOW X)`    | number  | O(1) amortized for tick form        |
+| `(moving-max WINDOW X)`    | number  | O(n) scan over the live window      |
 |                            |         | O(n) per update for `:ms` form      |
 | `(moving-min WINDOW X)`    | number  | same as `moving-max`                |
 
-Tick rings allocate `N × 8 B` plus a small deque for max/min and `N` is
-fixed at first call. Time rings grow with event rate × window: storage
-is unbounded in principle, bounded in practice by however many samples
-arrive inside the window. Aggregate readers do an O(n) scan over the
-live window, which is fine at sensor / ticker rates; if you want
-sub-microsecond updates over wide time windows, prefer the tick form
-with a generous `N`.
+Tick rings allocate `N × 8 B` and `N` is fixed at first call. Time rings
+grow with event rate × window: storage is unbounded in principle,
+bounded in practice by however many samples arrive inside the window.
+Aggregate readers such as `moving-min` and `moving-max` do an O(n) scan
+over the live window, which is fine at sensor / ticker rates; if you
+want sub-microsecond updates over wide time windows, prefer the tick
+form with a generous `N`.
 
 ```edn
 ; Smooth with a 10-sample moving average, and only emit when the
@@ -575,8 +576,9 @@ percentile/median (sort copy) and O(n) for stddev/variance.
 ### Clock-emitting forms
 
 Most patchbay forms run only while handling an inbound PUB. These forms
-also use the server's per-slot clock, so they can publish after time
-passes even if the feed goes quiet.
+store per-slot deadlines driven by the server's single rescheduled
+patchbay timer, so they can publish after time passes even if the feed
+goes quiet.
 
 | form                                  | behavior                                      |
 |---------------------------------------|-----------------------------------------------|

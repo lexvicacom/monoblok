@@ -633,7 +633,8 @@ static void scan_clock_forms(pb_program *program, pb_value v) {
         call_has_ms_window(v)) {
         program->uses_clock_timer = true;
     }
-    if (value_head_eq(v, "dropout") || value_head_eq(v, "debounce!") ||
+    if (value_head_eq(v, "on-silence") ||
+        value_head_eq(v, "dropout") || value_head_eq(v, "debounce!") ||
         value_head_eq(v, "sample!") || value_head_eq(v, "aggregate!")) {
         program->uses_clock_timer = true;
     }
@@ -642,6 +643,23 @@ static void scan_clock_forms(pb_program *program, pb_value v) {
             scan_clock_forms(program, v.seq.items[i]);
         }
     }
+}
+
+static size_t count_print_forms(pb_value v) {
+    size_t n = value_head_eq(v, "print!") ? 1 : 0;
+    if (v.kind == PB_LIST || v.kind == PB_VECTOR) {
+        for (size_t i = 0; i < v.seq.len; i += 1) {
+            n += count_print_forms(v.seq.items[i]);
+        }
+    }
+    return n;
+}
+
+static size_t count_rule_print_forms(pb_value v) {
+    if (!value_head_eq(v, "on") || v.seq.len < 3) {
+        return 0;
+    }
+    return count_print_forms(v.seq.items[v.seq.len - 1]);
 }
 
 static bool load_source(pb_program *program, const char *label, const char *source, size_t source_len, bool log) {
@@ -660,12 +678,19 @@ static bool load_source(pb_program *program, const char *label, const char *sour
         pb_program_free(program);
         return false;
     }
+    size_t print_calls = 0;
+    size_t print_rules = 0;
     for (size_t i = 0; i < parsed.forms.len; i += 1) {
         if (!load_on_form(program, parsed.forms.items[i])) {
             pb_program_free(program);
             return false;
         }
         scan_clock_forms(program, parsed.forms.items[i]);
+        const size_t form_prints = count_rule_print_forms(parsed.forms.items[i]);
+        if (form_prints != 0) {
+            print_calls += form_prints;
+            print_rules += 1;
+        }
     }
     if (!build_rule_index(program)) {
         pb_program_free(program);
@@ -678,6 +703,11 @@ static bool load_source(pb_program *program, const char *label, const char *sour
         }
         if (program->uses_clock_timer) {
             fprintf(stderr, "info: patchbay clock: enabled (one-shot deadlines)\n");
+        }
+        if (print_calls != 0) {
+            fprintf(stderr,
+                    "warning: patchbay contains %zu print! call(s) across %zu rule(s); will log payload data to stderr and add per-call overhead (debug aid, do not leave in production)\n",
+                    print_calls, print_rules);
         }
     }
     return true;

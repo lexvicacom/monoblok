@@ -139,6 +139,17 @@ static void test_subject_helpers(void) {
     CHECK(r.err == PB_EVAL_OK);
     check_text(r.value.text, "alerts.temp");
     pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src(&arena, "(subject-with \"alerts\" (subject-token 1 \"rack.7\") true 2)", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    check_text(r.value.text, "alerts.7.true.2");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src(&arena, "(subject-with \"alerts\" \"bad.*\")", &pub);
+    CHECK(r.err == PB_EVAL_INVALID_SUBJECT);
+    pb_arena_free(&arena);
 }
 
 static void test_publish(void) {
@@ -149,6 +160,15 @@ static void test_publish(void) {
     CHECK(r.value.kind == PB_NIL);
     CHECK(pub.count == 1);
     check_text(pub.subjects[0], "sensors.temp.high");
+    check_text(pub.payloads[0], "42");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src(&arena, "(publish-to \"alias\" payload)", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.subjects[0], "alias");
     check_text(pub.payloads[0], "42");
     pb_arena_free(&arena);
 }
@@ -654,6 +674,32 @@ static void test_now_and_bar(void) {
     pb_arena_free(&arena);
 
     pb_eval_state_free(&state);
+
+    state = (pb_eval_state){0};
+    pub = (published){0};
+    arena = (pb_arena){0};
+    r = eval_src_with_payload_state_clock(&arena, &state,
+                                          "(on-silence :ms 100 (publish! (subject-append \"quiet\") payload))",
+                                          "last", 1000, 0, &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 0);
+
+    tick_ctx = (pb_eval_ctx){
+        .arena = &arena,
+        .state = &state,
+        .now_ms = 1100,
+        .subject = {.ptr = "sensors.temp", .len = 12},
+        .payload = {.ptr = "", .len = 0},
+        .publish = publish_cb,
+        .publish_ctx = &pub,
+    };
+    r = pb_eval_tick_state_entry(&tick_ctx, &state.items[0]);
+    CHECK(r.err == PB_EVAL_OK && pub.count == 1);
+    check_text(pub.subjects[0], "sensors.temp.quiet");
+    check_text(pub.payloads[0], "last");
+    pb_arena_free(&arena);
+
+    pb_eval_state_free(&state);
 }
 
 static void test_json_get(void) {
@@ -690,10 +736,36 @@ static void test_json_demux(void) {
         &pub);
     CHECK(r.err == PB_EVAL_OK);
     CHECK(pub.count == 2);
+    check_text(pub.subjects[0], "sensors.temp.reading.temp");
+    check_text(pub.payloads[0], "31.5");
+    check_text(pub.subjects[1], "sensors.temp.state");
+    check_text(pub.payloads[1], "warm");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload(&arena,
+                              "(json-demux! :leaf \"reading.temp\" [\"reading.status\" \"state\"] payload)",
+                              "{\"reading\":{\"temp\":31.5,\"status\":\"warm\"}}",
+                              &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 2);
     check_text(pub.subjects[0], "sensors.temp.temp");
     check_text(pub.payloads[0], "31.5");
     check_text(pub.subjects[1], "sensors.temp.state");
     check_text(pub.payloads[1], "warm");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload(&arena,
+                              "(json-demux \"temp\" payload)",
+                              "{\"temp\":12.5}",
+                              &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.subjects[0], "sensors.temp.temp");
+    check_text(pub.payloads[0], "12.5");
     pb_arena_free(&arena);
 
     arena = (pb_arena){0};

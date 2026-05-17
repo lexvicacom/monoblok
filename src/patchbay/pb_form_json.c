@@ -4,6 +4,8 @@
 
 #include "pb_form_chunk.h"
 
+#include "router.h"
+
 static bool path_token(pb_slice path, size_t *pos, pb_slice *out) {
     if (*pos >= path.len) {
         return false;
@@ -55,6 +57,26 @@ static yyjson_val *json_lookup(yyjson_val *root, pb_slice path) {
         }
     }
     return pos == path.len ? cur : NULL;
+}
+
+static bool json_path_valid(pb_slice path) {
+    if (path.len == 0) {
+        return false;
+    }
+    size_t tokens = 1;
+    for (size_t i = 0; i < path.len; i += 1) {
+        if (path.ptr[i] != '.') {
+            continue;
+        }
+        if (i == 0 || i + 1 == path.len || path.ptr[i + 1] == '.') {
+            return false;
+        }
+        tokens += 1;
+        if (tokens > 4) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static void *json_arena_malloc(void *ctx, size_t size) {
@@ -114,7 +136,7 @@ static pb_eval_result call_json_get(pb_eval_ctx *ctx, pb_values args) {
     }
     pb_slice path = {0};
     pb_slice payload = {0};
-    if (!as_string(args.items[0], &path) || !as_string(args.items[1], &payload) || path.len == 0) {
+    if (!as_string(args.items[0], &path) || !as_string(args.items[1], &payload) || !json_path_valid(path)) {
         return fail(PB_EVAL_TYPE);
     }
 
@@ -138,53 +160,66 @@ static pb_slice path_leaf(pb_slice path) {
     return (pb_slice){.ptr = path.ptr + start, .len = path.len - start};
 }
 
-static bool demux_spec(pb_value spec, pb_slice *path, pb_slice *suffix) {
+static bool demux_override_spec(pb_value spec) {
+    return spec.kind == PB_VECTOR &&
+           spec.seq.len == 2 &&
+           (spec.seq.items[0].kind == PB_STRING || spec.seq.items[0].kind == PB_SYMBOL) &&
+           (spec.seq.items[1].kind == PB_STRING || spec.seq.items[1].kind == PB_SYMBOL);
+}
+
+static bool demux_spec(pb_value spec, bool leaf, pb_slice *path, pb_slice *suffix) {
     if (spec.kind == PB_STRING || spec.kind == PB_SYMBOL) {
         *path = spec.text;
-        *suffix = path_leaf(spec.text);
-        return path->len != 0 && suffix->len != 0;
+        *suffix = leaf ? path_leaf(spec.text) : spec.text;
+        return json_path_valid(*path) && suffix->len != 0;
     }
-    if (spec.kind == PB_VECTOR &&
-        spec.seq.len == 2 &&
-        (spec.seq.items[0].kind == PB_STRING || spec.seq.items[0].kind == PB_SYMBOL) &&
-        (spec.seq.items[1].kind == PB_STRING || spec.seq.items[1].kind == PB_SYMBOL)) {
+    if (demux_override_spec(spec)) {
         *path = spec.seq.items[0].text;
         *suffix = spec.seq.items[1].text;
-        return path->len != 0 && suffix->len != 0;
+        return json_path_valid(*path) && suffix->len != 0;
     }
     return false;
 }
 
-static bool publish_json_demux_one(pb_eval_ctx *ctx, yyjson_val *root, pb_value spec) {
+static pb_eval_error publish_json_demux_one(pb_eval_ctx *ctx, yyjson_val *root, pb_value spec, bool leaf) {
     pb_slice path = {0};
     pb_slice suffix = {0};
-    if (!demux_spec(spec, &path, &suffix)) {
-        return false;
+    if (!demux_spec(spec, leaf, &path, &suffix)) {
+        return PB_EVAL_TYPE;
     }
 
     pb_eval_result scalar = json_scalar_value(ctx, json_lookup(root, path));
     if (scalar.err != PB_EVAL_OK) {
-        return false;
+        return scalar.err;
     }
     if (scalar.value.kind == PB_NIL) {
-        return true;
+        return PB_EVAL_OK;
     }
 
     const size_t subject_len = ctx->subject.len + 1 + suffix.len;
     char *subject_ptr = pb_arena_alloc(ctx->arena, subject_len, 1);
     if (subject_ptr == NULL) {
-        return false;
+        return PB_EVAL_OOM;
     }
     memcpy(subject_ptr, ctx->subject.ptr, ctx->subject.len);
     subject_ptr[ctx->subject.len] = '.';
     memcpy(subject_ptr + ctx->subject.len + 1, suffix.ptr, suffix.len);
+    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject_ptr, .len = subject_len};
+    if (!mb_proto_subject_valid(mb_subject, false) ||
+        mb_router_subject_has_lvc_prefix(mb_subject) ||
+        mb_router_subject_has_stats_prefix(mb_subject)) {
+        return PB_EVAL_INVALID_SUBJECT;
+    }
 
     pb_slice payload = {0};
     if (!coerce_payload(ctx, scalar.value, &payload)) {
-        return false;
+        return PB_EVAL_TYPE;
     }
-    return ctx->publish != NULL &&
-           ctx->publish(ctx->publish_ctx, (pb_slice){.ptr = subject_ptr, .len = subject_len}, payload);
+    if (ctx->publish == NULL ||
+        !ctx->publish(ctx->publish_ctx, (pb_slice){.ptr = subject_ptr, .len = subject_len}, payload)) {
+        return PB_EVAL_PUBLISH_FAILED;
+    }
+    return PB_EVAL_OK;
 }
 
 static pb_eval_result call_json_demux(pb_eval_ctx *ctx, pb_values args) {
@@ -195,31 +230,45 @@ static pb_eval_result call_json_demux(pb_eval_ctx *ctx, pb_values args) {
     if (!as_string(args.items[args.len - 1], &payload)) {
         return fail(PB_EVAL_TYPE);
     }
+    bool leaf = false;
+    size_t spec_start = 0;
+    if (args.items[0].kind == PB_KEYWORD) {
+        if (!text_eq(args.items[0].text, "leaf")) {
+            return fail(PB_EVAL_UNKNOWN_SYMBOL);
+        }
+        leaf = true;
+        spec_start = 1;
+        if (spec_start + 1 >= args.len) {
+            return fail(PB_EVAL_ARITY);
+        }
+    }
 
     yyjson_doc *doc = read_json_slice(ctx, payload);
     if (doc == NULL) {
         return nil();
     }
 
-    bool ok_publish = true;
-    if (args.len == 2 && args.items[0].kind == PB_VECTOR) {
-        for (size_t i = 0; i < args.items[0].seq.len; i += 1) {
-            if (!publish_json_demux_one(ctx, yyjson_doc_get_root(doc), args.items[0].seq.items[i])) {
-                ok_publish = false;
+    pb_eval_error err = PB_EVAL_OK;
+    if (args.len == spec_start + 2 &&
+        args.items[spec_start].kind == PB_VECTOR &&
+        !demux_override_spec(args.items[spec_start])) {
+        for (size_t i = 0; i < args.items[spec_start].seq.len; i += 1) {
+            err = publish_json_demux_one(ctx, yyjson_doc_get_root(doc), args.items[spec_start].seq.items[i], leaf);
+            if (err != PB_EVAL_OK) {
                 break;
             }
         }
     } else {
-        for (size_t i = 0; i + 1 < args.len; i += 1) {
-            if (!publish_json_demux_one(ctx, yyjson_doc_get_root(doc), args.items[i])) {
-                ok_publish = false;
+        for (size_t i = spec_start; i + 1 < args.len; i += 1) {
+            err = publish_json_demux_one(ctx, yyjson_doc_get_root(doc), args.items[i], leaf);
+            if (err != PB_EVAL_OK) {
                 break;
             }
         }
     }
     yyjson_doc_free(doc);
-    if (!ok_publish) {
-        return fail(PB_EVAL_PUBLISH_FAILED);
+    if (err != PB_EVAL_OK) {
+        return fail(err);
     }
     return nil();
 }
