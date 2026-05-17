@@ -101,7 +101,7 @@ See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runn
 
 It's 2026, Claude and Codex help me a lot. All code is reviewed and iterated upon before being merged.
 
->Personal note: I had a stroke in Dec 2026 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!
+>Personal note: I had a stroke in Dec 2025 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!
 
 ## License
 
