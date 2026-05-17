@@ -98,8 +98,8 @@ a gate actually fired.
 nats sub '$STATS.>'
 ```
 
-`$STATS.*` is also read-only and intentionally excluded from the
-LVC (a stale counter snapshot isn't useful).
+`$STATS.*` is also read-only. It is only cached by LVC when the
+patchbay opts in explicitly, for example `(lvc ["$STATS.>"])`.
 
 ## Walkthroughs
 

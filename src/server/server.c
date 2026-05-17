@@ -3,6 +3,7 @@
 #include "conn.h"
 #include "snapshot.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@ struct mb_snapshot_job {
     bool ok;
 };
 
+static void on_stats_timer(uv_timer_t *timer);
 static void on_snapshot_timer(uv_timer_t *timer);
 
 int64_t mb_wall_clock_ms(void) {
@@ -32,6 +34,56 @@ static void on_patchbay_timer(uv_timer_t *timer) {
     uv_update_time(&server->loop);
     (void)pb_program_tick(server->program, &server->router, uv_now(&server->loop), mb_wall_clock_ms());
     mb_server_reschedule_patchbay_clock(server);
+}
+
+static bool publish_stat(mb_server *server, const char *subject, uint64_t value) {
+    char payload[32];
+    const int n = snprintf(payload, sizeof payload, "%" PRIu64, value);
+    if (n < 0 || (size_t)n >= sizeof payload) {
+        return false;
+    }
+    return mb_router_publish(&server->router,
+                             (mb_slice){.ptr = (const uint8_t *)subject, .len = strlen(subject)},
+                             (mb_slice){.ptr = (const uint8_t *)payload, .len = (size_t)n});
+}
+
+bool mb_server_emit_stats(mb_server *server) {
+    if (server == NULL) {
+        return false;
+    }
+    bool ok = publish_stat(server, "$STATS.global.pubs", server->total_pubs);
+
+    if (server->program != NULL) {
+        char subject[64];
+        for (size_t i = 0; i < server->program->len; i += 1) {
+            const int emitted = snprintf(subject, sizeof subject, "$STATS.rules.%zu.emitted", i);
+            if (emitted < 0 || (size_t)emitted >= sizeof subject ||
+                !publish_stat(server, subject, server->program->rules[i].publishes_emitted)) {
+                ok = false;
+            }
+            const int suppressed = snprintf(subject, sizeof subject, "$STATS.rules.%zu.suppressed", i);
+            if (suppressed < 0 || (size_t)suppressed >= sizeof subject ||
+                !publish_stat(server, subject, server->program->rules[i].publishes_suppressed)) {
+                ok = false;
+            }
+        }
+    }
+
+    if (server->bridge_published != NULL && server->bridge_dropped != NULL) {
+        ok = publish_stat(server, "$STATS.bridge.published", *server->bridge_published) && ok;
+        ok = publish_stat(server, "$STATS.bridge.dropped", *server->bridge_dropped) && ok;
+    }
+    return ok;
+}
+
+static void on_stats_timer(uv_timer_t *timer) {
+    mb_server *server = timer->data;
+    if (server->closing) {
+        return;
+    }
+    if (!mb_server_emit_stats(server)) {
+        fprintf(stderr, "warn: stats: emit failed\n");
+    }
 }
 
 static void snapshot_work_cb(uv_work_t *req) {
@@ -195,7 +247,8 @@ static void make_server_id(char out[35]) {
 }
 
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
-                    bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms, bool trace) {
+                    bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
+                    uint64_t stats_tick_ms, bool trace) {
     *server = (mb_server){
         .host = host,
         .port = port,
@@ -203,6 +256,7 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         .lvc_enabled = lvc_enabled,
         .snapshot_path = snapshot_path,
         .snapshot_every_ms = snapshot_every_ms,
+        .stats_tick_ms = stats_tick_ms == 0 ? MB_DEFAULT_STATS_TICK_MS : stats_tick_ms,
         .trace = trace,
     };
     make_server_id(server->server_id);
@@ -264,6 +318,12 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         server->patchbay_timer.data = server;
         server->patchbay_timer_started = true;
     }
+    if (uv_timer_init(&server->loop, &server->stats_timer) != 0) {
+        return false;
+    }
+    server->stats_timer.data = server;
+    server->stats_timer_started = true;
+    (void)uv_timer_start(&server->stats_timer, on_stats_timer, server->stats_tick_ms, server->stats_tick_ms);
     if (snapshot_path != NULL && snapshot_every_ms != 0) {
         if (uv_timer_init(&server->loop, &server->snapshot_timer) != 0) {
             return false;
@@ -312,6 +372,9 @@ void mb_server_close(mb_server *server) {
     }
     if (server->snapshot_timer_started && !uv_is_closing((uv_handle_t *)&server->snapshot_timer)) {
         uv_close((uv_handle_t *)&server->snapshot_timer, NULL);
+    }
+    if (server->stats_timer_started && !uv_is_closing((uv_handle_t *)&server->stats_timer)) {
+        uv_close((uv_handle_t *)&server->stats_timer, NULL);
     }
     if (server->sigint_started && !uv_is_closing((uv_handle_t *)&server->sigint)) {
         uv_close((uv_handle_t *)&server->sigint, NULL);

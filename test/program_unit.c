@@ -145,6 +145,25 @@ static void test_rule_dispatch_preserves_source_order(void) {
     pb_program_free(&program);
 }
 
+static void test_rule_stats_count_emits_and_suppression(void) {
+    pb_program program = {0};
+    load_program(&program, "(on \"a\" (publish! \"b\" (squelch payload)))\n");
+
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+    CHECK(pb_program_eval_publish(&program, &router, lit("a"), lit("x"), 0, 0));
+    CHECK(pb_program_eval_publish(&program, &router, lit("a"), lit("x"), 1, 0));
+    CHECK(program.rules[0].publishes_emitted == 1);
+    CHECK(program.rules[0].publishes_suppressed == 1);
+    CHECK(count_msgs(&conn.out) == 1);
+
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
 static void test_lvc_filters_load(void) {
     pb_program program = {0};
     load_program(&program, "(lvc [\"hot.>\" \"devices.*\"])\n"
@@ -203,6 +222,7 @@ TEST_MAIN(program,
           test_reentry_eval_failure_does_not_fail_publish,
           test_reentry_depth_cap,
           test_rule_dispatch_preserves_source_order,
+          test_rule_stats_count_emits_and_suppression,
           test_lvc_filters_load,
           test_bridge_config_loads,
           test_bridge_requires_servers)

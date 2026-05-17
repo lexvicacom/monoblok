@@ -38,6 +38,9 @@ static pb_eval_result stateful_changed(pb_eval_ctx *ctx, const char *op, pb_valu
             return fail(PB_EVAL_OOM);
         }
     }
+    if (!changed) {
+        note_suppressed(ctx);
+    }
     return ok(bool_mode ? bool_value(changed) : (changed ? v : (pb_value){.kind = PB_NIL}));
 }
 
@@ -79,6 +82,7 @@ static pb_eval_result call_hold_off(pb_eval_ctx *ctx, pb_values args) {
 
     const double now_ms = (double)ctx->now_ms;
     if (now_ms < slot->number || now_ms - slot->number < window_ms) {
+        note_suppressed(ctx);
         return nil();
     }
     slot->number = now_ms;
@@ -98,6 +102,7 @@ static pb_eval_result call_edge(pb_eval_ctx *ctx, pb_values args, bool rising) {
     if (slot->kind == PB_EVAL_STATE_EMPTY) {
         slot->kind = PB_EVAL_STATE_NUMBER;
         slot->number = cur ? 1.0 : 0.0;
+        note_suppressed(ctx);
         return nil();
     }
     if (slot->kind != PB_EVAL_STATE_NUMBER) {
@@ -107,6 +112,9 @@ static pb_eval_result call_edge(pb_eval_ctx *ctx, pb_values args, bool rising) {
     const bool prev = slot->number != 0.0;
     slot->number = cur ? 1.0 : 0.0;
     const bool fire = rising ? (!prev && cur) : (prev && !cur);
+    if (!fire) {
+        note_suppressed(ctx);
+    }
     return ok(fire ? bool_value(true) : (pb_value){.kind = PB_NIL});
 }
 
@@ -126,6 +134,7 @@ static pb_eval_result call_deadband(pb_eval_ctx *ctx, pb_values args) {
     }
     const bool pass = slot->kind != PB_EVAL_STATE_NUMBER || fabs(x - slot->number) >= threshold;
     if (!pass) {
+        note_suppressed(ctx);
         return nil();
     }
     slot->kind = PB_EVAL_STATE_NUMBER;
@@ -162,6 +171,7 @@ static pb_eval_result call_count(pb_eval_ctx *ctx, pb_values args) {
         return fail(PB_EVAL_OOM);
     }
     if (!inc) {
+        note_suppressed(ctx);
         return nil();
     }
 

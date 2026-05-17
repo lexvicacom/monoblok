@@ -3,14 +3,17 @@
 #include "fs.h"
 #include "pb_eval.h"
 #include "pb_json.h"
+#include "router.h"
 
 #include <stdio.h>
 
 static bool discard_publish(void *ctx, pb_slice subject, pb_slice payload) {
     (void)ctx;
-    (void)subject;
     (void)payload;
-    return true;
+    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject.ptr, .len = subject.len};
+    return mb_proto_subject_valid(mb_subject, false) &&
+           !mb_router_subject_has_lvc_prefix(mb_subject) &&
+           !mb_router_subject_has_stats_prefix(mb_subject);
 }
 
 static bool validate_on_form(pb_value form, size_t *rule_count) {

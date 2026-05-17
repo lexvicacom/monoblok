@@ -16,6 +16,7 @@ typedef struct publish_ctx {
     mb_router *router;
     uint64_t now_ms;
     int64_t wall_ms;
+    size_t rule_idx;
     size_t depth;
     bool reentrant;
 } publish_ctx;
@@ -546,9 +547,16 @@ static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice
 
 static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     publish_ctx *p = ctx;
-    if (!mb_router_publish(p->router, (mb_slice){.ptr = (const uint8_t *)subject.ptr, .len = subject.len},
+    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject.ptr, .len = subject.len};
+    if (!mb_proto_subject_valid(mb_subject, false) ||
+        mb_router_subject_has_lvc_prefix(mb_subject) ||
+        mb_router_subject_has_stats_prefix(mb_subject) ||
+        !mb_router_publish(p->router, mb_subject,
                            (mb_slice){.ptr = (const uint8_t *)payload.ptr, .len = payload.len})) {
         return false;
+    }
+    if (p->program != NULL && p->rule_idx < p->program->len) {
+        p->program->rules[p->rule_idx].publishes_emitted += 1;
     }
     if (!p->reentrant) {
         return true;
@@ -573,6 +581,7 @@ static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t
         .router = router,
         .now_ms = now_ms,
         .wall_ms = wall_ms,
+        .rule_idx = rule_idx,
         .depth = depth,
         .reentrant = rule->reentrant,
     };
@@ -586,6 +595,8 @@ static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t
         .payload = payload,
         .publish = publish_cb,
         .publish_ctx = &pub,
+        .publishes_emitted = &rule->publishes_emitted,
+        .publishes_suppressed = &rule->publishes_suppressed,
         .user_symbol = program->user_symbol,
         .user_call = program->user_call,
         .user_ctx = program->user_ctx,
@@ -660,6 +671,7 @@ bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, in
                 .router = router,
                 .now_ms = now_ms,
                 .wall_ms = wall_ms,
+                .rule_idx = rule_idx,
                 .depth = 0,
                 .reentrant = rule->reentrant,
             };
@@ -673,6 +685,8 @@ bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, in
                 .payload = {.ptr = "", .len = 0},
                 .publish = publish_cb,
                 .publish_ctx = &pub,
+                .publishes_emitted = &rule->publishes_emitted,
+                .publishes_suppressed = &rule->publishes_suppressed,
                 .user_symbol = program->user_symbol,
                 .user_call = program->user_call,
                 .user_ctx = program->user_ctx,

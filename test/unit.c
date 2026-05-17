@@ -403,6 +403,27 @@ static void test_router_lvc_filter_gates_cache(void) {
     mb_router_free(&router);
 }
 
+static void test_router_lvc_stats_requires_explicit_filter(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_slice filters[] = {lit(">")};
+    CHECK(mb_router_configure_lvc(&router, filters, 1));
+    CHECK(mb_router_publish(&router, lit("$STATS.global.pubs"), lit("1")));
+    CHECK(mb_router_lvc_count(&router) == 0);
+    mb_router_free(&router);
+
+    mb_router_init(&router);
+    mb_slice stats_filters[] = {lit("$STATS.>")};
+    CHECK(mb_router_configure_lvc(&router, stats_filters, 1));
+    CHECK(mb_router_publish(&router, lit("$STATS.global.pubs"), lit("1")));
+    CHECK(mb_router_lvc_count(&router) == 1);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit("$LVC.$STATS.>"), lit("1")));
+    check_buf_eq(&conn.out, "MSG $LVC.$STATS.global.pubs 1 1\r\n1\r\n");
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+}
+
 static void test_router_lvc_payload_cap(void) {
     mb_router router;
     mb_router_init(&router);
@@ -549,6 +570,7 @@ TEST_MAIN(unit,
           test_router_lvc_rejects_writes,
           test_router_lvc_disabled,
           test_router_lvc_filter_gates_cache,
+          test_router_lvc_stats_requires_explicit_filter,
           test_router_lvc_payload_cap,
           test_router_subscription_caps,
           test_router_unsubscribe,

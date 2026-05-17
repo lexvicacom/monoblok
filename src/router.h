@@ -5,6 +5,7 @@
 #include "proto.h"
 
 #define MB_LVC_PREFIX "$LVC."
+#define MB_STATS_PREFIX "$STATS."
 
 enum {
     // Per-connection queued-write cap; slow consumers are closed before appending past it.
@@ -143,6 +144,7 @@ void mb_router_unsubscribe(mb_router *router, mb_router_conn *conn, mb_slice sid
 void mb_router_remove_all_for(mb_router *router, mb_router_conn *conn);
 bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload);
 bool mb_router_subject_has_lvc_prefix(mb_slice subject);
+bool mb_router_subject_has_stats_prefix(mb_slice subject);
 bool mb_router_subject_matches(mb_slice filter, mb_slice subject);
 bool mb_router_store_lvc(mb_router *router, mb_slice subject, mb_slice payload);
 size_t mb_router_lvc_count(const mb_router *router);

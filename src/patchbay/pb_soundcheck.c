@@ -22,6 +22,12 @@ static bool token_match(pb_slice filter, pb_slice subject) {
 
 static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     soundcheck_out *out = ctx;
+    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject.ptr, .len = subject.len};
+    if (!mb_proto_subject_valid(mb_subject, false) ||
+        mb_router_subject_has_lvc_prefix(mb_subject) ||
+        mb_router_subject_has_stats_prefix(mb_subject)) {
+        return false;
+    }
     if (out->label) {
         printf("out|%.*s|%.*s\n", (int)subject.len, subject.ptr, (int)payload.len, payload.ptr);
     } else {

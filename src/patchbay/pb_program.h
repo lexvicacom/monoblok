@@ -7,6 +7,8 @@
 typedef struct pb_rule {
     pb_slice filter;
     pb_value body;
+    uint64_t publishes_emitted;
+    uint64_t publishes_suppressed;
     bool reentrant;
     pb_eval_state state;
 } pb_rule;

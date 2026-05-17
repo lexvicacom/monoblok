@@ -11,6 +11,8 @@
 enum {
     // Accepted-client cap to bound slow or idle socket footprint.
     MB_MAX_CONNECTIONS = 1024,
+    // Wall-clock cadence for cumulative `$STATS.*` publishes.
+    MB_DEFAULT_STATS_TICK_MS = 60000,
 };
 
 typedef struct mb_conn mb_conn;
@@ -24,6 +26,7 @@ typedef struct mb_server {
     uv_signal_t sigterm;
     uv_timer_t patchbay_timer;
     uv_timer_t snapshot_timer;
+    uv_timer_t stats_timer;
     mb_router router;
     pb_program *program;
     mb_conn *conns;
@@ -35,8 +38,13 @@ typedef struct mb_server {
     unsigned int port;
     const char *snapshot_path;
     uint64_t snapshot_every_ms;
+    uint64_t stats_tick_ms;
+    uint64_t total_pubs;
+    const uint64_t *bridge_published;
+    const uint64_t *bridge_dropped;
     bool patchbay_timer_started;
     bool snapshot_timer_started;
+    bool stats_timer_started;
     bool sigint_started;
     bool sigterm_started;
     bool snapshot_write_pending;
@@ -47,9 +55,11 @@ typedef struct mb_server {
 } mb_server;
 
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
-                    bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms, bool trace);
+                    bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
+                    uint64_t stats_tick_ms, bool trace);
 int mb_server_run(mb_server *server);
 void mb_server_close(mb_server *server);
+bool mb_server_emit_stats(mb_server *server);
 int64_t mb_wall_clock_ms(void);
 void mb_server_reschedule_patchbay_clock(mb_server *server);
 

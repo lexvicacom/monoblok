@@ -76,6 +76,7 @@ bool pb_eval_value_eq(pb_value a, pb_value b);
 pb_eval_state_entry *pb_eval_state_slot(pb_eval_ctx *ctx, const char *op_lit);
 bool pb_eval_state_set_bytes(pb_eval_state_entry *e, pb_slice bytes);
 bool pb_eval_state_set_emit_subject(pb_eval_state_entry *e, pb_slice bytes);
+void pb_eval_note_suppressed(pb_eval_ctx *ctx);
 pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args);
 pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args);
 
@@ -97,5 +98,6 @@ static inline pb_eval_result pb_eval_nil(void) {
 #define state_slot pb_eval_state_slot
 #define state_set_bytes pb_eval_state_set_bytes
 #define state_set_emit_subject pb_eval_state_set_emit_subject
+#define note_suppressed pb_eval_note_suppressed
 
 #endif

@@ -25,6 +25,7 @@ static void usage(const char *argv0) {
            "  --no-lvc             Disable $LVC.* last-value cache streams.\n"
            "  --snapshot FILE      Load/write LVC and patchbay state snapshot.\n"
            "  --snapshot-every S   Periodically write snapshot every S seconds.\n"
+           "  --stats-tick-ms MS   `$STATS.*` publish cadence (default 60000).\n"
            "  --trace              Log parsed client ops.\n"
            "  --io-uring           Enable libuv io_uring paths on Linux.\n"
            "  --no-io-uring        Disable libuv io_uring paths on Linux (default).\n"
@@ -117,6 +118,7 @@ int main(int argc, char **argv) {
     const char *patchbay_path = NULL;
     const char *snapshot_path = NULL;
     uint64_t snapshot_every_ms = 0;
+    uint64_t stats_tick_ms = MB_DEFAULT_STATS_TICK_MS;
     bool soundcheck = false;
     bool soundcheck_label = false;
     bool validate = false;
@@ -152,6 +154,15 @@ int main(int argc, char **argv) {
                 return 2;
             }
             snapshot_every_ms = (uint64_t)seconds * 1000;
+        } else if (strcmp(argv[i], "--stats-tick-ms") == 0 && i + 1 < argc) {
+            errno = 0;
+            char *end = NULL;
+            const unsigned long ms = strtoul(argv[++i], &end, 10);
+            if (errno != 0 || end == argv[i] || *end != '\0' || ms == 0) {
+                usage(argv[0]);
+                return 2;
+            }
+            stats_tick_ms = (uint64_t)ms;
         } else if (strcmp(argv[i], "--trace") == 0) {
             trace = true;
         } else if (strcmp(argv[i], "--soundcheck") == 0) {
@@ -229,12 +240,13 @@ int main(int argc, char **argv) {
     } else {
         fprintf(stderr, "info: snapshot: disabled\n");
     }
+    fprintf(stderr, "info: stats: enabled every=%" PRIu64 "ms\n", stats_tick_ms);
 
     mb_bridge bridge = {0};
 
     mb_server server;
     if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_runtime_enabled, snapshot_path,
-                        snapshot_every_ms, trace)) {
+                        snapshot_every_ms, stats_tick_ms, trace)) {
         pb_program_free(&program);
         return 1;
     }
@@ -246,6 +258,8 @@ int main(int argc, char **argv) {
         }
         server.router.bridge_ctx = &bridge;
         server.router.bridge_fn = mb_bridge_publish;
+        server.bridge_published = &bridge.published;
+        server.bridge_dropped = &bridge.dropped;
         fprintf(stderr, "info: bridge: connected to NATS (%zu server%s, %zu export filter%s)\n", program.bridge.servers_len,
                 program.bridge.servers_len == 1 ? "" : "s", program.bridge.exports_len,
                 program.bridge.exports_len == 1 ? "" : "s");

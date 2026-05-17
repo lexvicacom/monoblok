@@ -121,6 +121,8 @@ struct pb_eval_ctx {
     pb_slice payload;
     pb_publish_fn publish;
     void *publish_ctx;
+    uint64_t *publishes_emitted;
+    uint64_t *publishes_suppressed;
     pb_eval_symbol_fn user_symbol;
     pb_eval_call_fn user_call;
     void *user_ctx;

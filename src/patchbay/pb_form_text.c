@@ -5,6 +5,8 @@
 
 #include "pb_form_chunk.h"
 
+#include "router.h"
+
 static pb_eval_result call_str_concat(pb_eval_ctx *ctx, pb_values args) {
     size_t total = 0;
     for (size_t i = 0; i < args.len; i += 1) {
@@ -168,6 +170,12 @@ static pb_eval_result call_publish(pb_eval_ctx *ctx, pb_values args) {
     pb_slice payload = {0};
     if (!as_string(args.items[0], &subject) || !coerce_payload(ctx, args.items[1], &payload)) {
         return fail(PB_EVAL_TYPE);
+    }
+    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject.ptr, .len = subject.len};
+    if (!mb_proto_subject_valid(mb_subject, false) ||
+        mb_router_subject_has_lvc_prefix(mb_subject) ||
+        mb_router_subject_has_stats_prefix(mb_subject)) {
+        return fail(PB_EVAL_INVALID_SUBJECT);
     }
     if (ctx->publish == NULL || !ctx->publish(ctx->publish_ctx, subject, payload)) {
         return fail(PB_EVAL_PUBLISH_FAILED);

@@ -166,6 +166,7 @@ static pb_eval_result call_bar(pb_eval_ctx *ctx, pb_values args) {
     bar_close close = {0};
     const bool closed = time_window ? bar_time_update(slot, ctx->now_ms, x, &close) : bar_tick_update(slot, x, &close);
     if (!closed) {
+        note_suppressed(ctx);
         return nil();
     }
     return emit_bar_fields(ctx, close);

@@ -122,6 +122,12 @@ bool value_eq(pb_value a, pb_value b) {
     return false;
 }
 
+void pb_eval_note_suppressed(pb_eval_ctx *ctx) {
+    if (ctx != NULL && ctx->publishes_suppressed != NULL) {
+        *ctx->publishes_suppressed += 1;
+    }
+}
+
 static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call);
 
 typedef struct pb_form_entry {
@@ -610,6 +616,7 @@ static pb_eval_result eval_transition(pb_eval_ctx *ctx, pb_values args) {
     if (slot->kind == PB_EVAL_STATE_EMPTY) {
         slot->kind = PB_EVAL_STATE_NUMBER;
         slot->number = cur ? 1.0 : 0.0;
+        note_suppressed(ctx);
         return nil();
     }
 
@@ -625,6 +632,7 @@ static pb_eval_result eval_transition(pb_eval_ctx *ctx, pb_values args) {
     if (prev && !cur) {
         return pb_eval(ctx, args.items[2]);
     }
+    note_suppressed(ctx);
     return nil();
 }
 

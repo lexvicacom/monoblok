@@ -65,7 +65,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
-Top-level forms are `(on SUBJECT-FILTER BODY)`. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility.
+Rules are top-level `(on SUBJECT-FILTER BODY)` forms. Config forms such as `(lvc ...)` and `(bridge ...)` live at top level too. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility.
 
 
 ```edn
@@ -115,20 +115,15 @@ printf 'sensors.temp|31\n' | monoblok --soundcheck examples/sensors.edn
 printf 'sensors.temp|31\n' | monoblok --soundcheck --soundcheck-label examples/sensors.edn
 ```
 
-### `--trace`: per-evaluation debugger
+### `--trace`: protocol trace
 
-Prints every patchbay form the evaluator visits to stderr, with result and elapsed time. 
+Logs parsed client operations to stderr. For rule-level debugging, use `--soundcheck` or a temporary `(print! ...)` inside the patchbay.
 
 ```
 $ monoblok --port 4222 --patchbay patchbay.edn --trace
-trace: sensors.temp 42.5
-  rule 0 (on "sensors.*") matched
-  (when (> payload-float 30) (publish! (subject-append "high") payload))
-    (> payload-float 30)
-      => true [124µs]
-    (publish! (subject-append "high") payload)
-      => published "sensors.temp.high" 42.5 [549µs]
-total [3ms]
+trace: conn 1 CONNECT
+trace: conn 1 SUB sensors.> 1
+trace: conn 2 PUB sensors.temp 4
 ```
 
 ### Coding assistants
@@ -164,6 +159,22 @@ PUB foo.bar 13      ; -> subscriber receives 13
 
 Absent `(lvc ...)`, LVC is off and the publish path does no cache work. `--no-lvc` disables configured LVC filters.
 
+`$STATS.*` can be cached too, but only with an explicit stats filter such as `(lvc ["$STATS.>"])`. A broad `(lvc [">"])` keeps stats out of the LVC unless you opt in.
+
+## `$STATS.*`: live counters
+
+The server publishes cumulative decimal counters on `$STATS.*` every 60 seconds by default. Use `--stats-tick-ms MS` to change the cadence.
+
+| subject | meaning |
+|---|---|
+| `$STATS.global.pubs` | accepted inbound client PUBs since start |
+| `$STATS.rules.<i>.emitted` | successful `publish!`-style emits by rule, 0-based |
+| `$STATS.rules.<i>.suppressed` | gate/window suppressions by rule, 0-based |
+| `$STATS.bridge.published` | publishes forwarded to the remote NATS cluster |
+| `$STATS.bridge.dropped` | bridge publishes that failed or were dropped |
+
+Client publishes to `$STATS.*` are rejected. Subscribe to `$STATS.>` for the live stream, or add `(lvc ["$STATS.>"])` if late joiners should receive the most recent tick immediately.
+
 ## NATS support
 
 monoblok implements the NATS core pieces it needs to behave like a small broker.
@@ -172,10 +183,11 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 |---|---|
 | `PUB` / `SUB` / `UNSUB` / `MSG` | yes |
 | wildcards | yes |
-| request/reply | yes |
+| request/reply / reply-to | no; reply-to is tinyblok-only |
 | queue groups | yes |
 | headers | no |
 | `$LVC.*` last-value replay | yes, monoblok extension |
+| `$STATS.*` live counters | yes, monoblok extension |
 | bridge to real NATS | export-only |
 | TLS/auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
 | JetStream | no |

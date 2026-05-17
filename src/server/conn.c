@@ -148,6 +148,8 @@ static void handle_op(mb_conn *conn, mb_op op) {
         bool published = false;
         if (mb_router_subject_has_lvc_prefix(op.subject)) {
             write_err_or_close(conn, "$LVC is read-only");
+        } else if (mb_router_subject_has_stats_prefix(op.subject)) {
+            write_err_or_close(conn, "$STATS is read-only");
         } else if (!mb_router_publish(&conn->server->router, op.subject, op.payload)) {
             write_err_or_close(conn, "Publish Failed");
         } else {
@@ -156,6 +158,7 @@ static void handle_op(mb_conn *conn, mb_op op) {
         if (!published) {
             break;
         }
+        conn->server->total_pubs += 1;
         uv_update_time(&conn->server->loop);
         if (!pb_program_eval_publish(conn->server->program, &conn->server->router, op.subject, op.payload,
                                      uv_now(&conn->server->loop), mb_wall_clock_ms())) {

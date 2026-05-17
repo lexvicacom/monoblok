@@ -22,6 +22,11 @@ bool mb_router_subject_has_lvc_prefix(mb_slice subject) {
     return mb_slice_has_prefix(subject, prefix, sizeof prefix - 1);
 }
 
+bool mb_router_subject_has_stats_prefix(mb_slice subject) {
+    static const char prefix[] = MB_STATS_PREFIX;
+    return mb_slice_has_prefix(subject, prefix, sizeof prefix - 1);
+}
+
 static mb_slice lvc_inner_subject(mb_slice subject) {
     static const char prefix[] = MB_LVC_PREFIX;
     return (mb_slice){.ptr = subject.ptr + sizeof(prefix) - 1, .len = subject.len - (sizeof(prefix) - 1)};
@@ -490,8 +495,29 @@ static bool lvc_subject_enabled(const mb_router *router, mb_slice subject) {
     return false;
 }
 
+static bool lvc_stats_subject_enabled(const mb_router *router, mb_slice subject) {
+    if (!router->lvc_enabled) {
+        return false;
+    }
+    for (size_t i = 0; i < router->lvc_filter_len; i += 1) {
+        const mb_lvc_filter *filter = &router->lvc_filters[i];
+        const mb_slice filter_slice = {.ptr = filter->filter, .len = filter->filter_len};
+        if (mb_router_subject_has_stats_prefix(filter_slice) && subject_matches(filter_slice, subject)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool lvc_store(mb_router *router, mb_slice subject, mb_slice payload) {
-    if (mb_router_subject_has_lvc_prefix(subject) || !lvc_subject_enabled(router, subject)) {
+    if (mb_router_subject_has_lvc_prefix(subject)) {
+        return true;
+    }
+    if (mb_router_subject_has_stats_prefix(subject)) {
+        if (!lvc_stats_subject_enabled(router, subject)) {
+            return true;
+        }
+    } else if (!lvc_subject_enabled(router, subject)) {
         return true;
     }
     if (!mb_proto_subject_valid(subject, false)) {

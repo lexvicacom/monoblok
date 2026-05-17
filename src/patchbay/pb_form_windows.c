@@ -289,6 +289,7 @@ static pb_eval_result call_throttle(pb_eval_ctx *ctx, pb_values args) {
         const uint64_t cutoff = ctx->now_ms > ms ? ctx->now_ms - ms : 0;
         ring_evict_time(slot, cutoff);
         if (slot->ring_len >= max) {
+            note_suppressed(ctx);
             return nil();
         }
         if (!ring_push_time(slot, 1.0, ctx->now_ms)) {
@@ -298,6 +299,9 @@ static pb_eval_result call_throttle(pb_eval_ctx *ctx, pb_values args) {
     }
     const bool pass = slot->ring_sum < (double)max;
     ring_push_count(slot, pass ? 1.0 : 0.0);
+    if (!pass) {
+        note_suppressed(ctx);
+    }
     return ok(pass ? args.items[pos + 1] : (pb_value){.kind = PB_NIL});
 }
 
