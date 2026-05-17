@@ -357,6 +357,12 @@ emission re-enters rule evaluation and the second rule fires on it.
 The second rule is not reentrant, so its `...temp.stable` emission
 goes to subscribers only and stops there.
 
+Re-entry matches rules by subject, not by file position: the emitted
+message can trigger matching rules before or after the emitting rule.
+Rule evaluation still follows source order for a given subject, and
+re-entry runs synchronously before the outer publish continues to later
+matching rules.
+
 A reentrant rule whose emission matches its own filter would loop
 forever, so re-entry is depth-capped (default 8). The original PUB
 runs at depth 0, and each level of re-entry increments by one;
