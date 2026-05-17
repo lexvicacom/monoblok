@@ -4,7 +4,7 @@ A NATS-core compatible messaging system that conditions messages before subscrib
 
 > Fix raw input streams once, not in every subscriber.
 >
-> Put monoblok in front of your NATS clients, declare the useful subjects you actually wanted, and let subscribers consume clean streams instead of raw noise.
+> Put monoblok in front of your NATS clients, declare the useful subjects you actually want, and let subscribers consume clean streams instead of raw noise.
 
 ## Rationale
 
