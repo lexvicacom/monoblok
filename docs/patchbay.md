@@ -65,6 +65,43 @@ when a rule body needs a literal vector. See
 [`examples/demo.json`](../examples/demo.json) for a fuller conversion of
 [`examples/demo.edn`](../examples/demo.edn).
 
+### YAML sugar files
+
+Files ending in `.yml` or `.yaml` use a deliberately small patchbay
+YAML subset. It is also lowered directly into the same patchbay AST:
+YAML never evaluates and no EDN/JSON text is generated internally.
+Supported shapes are block maps/lists, flow arrays for call forms,
+quoted or unquoted scalars, numbers, booleans, nulls, top-level `on`,
+`lvc`, `export`, `bridge`, and `import`.
+
+```yaml
+on:
+  - sub: car.*.rpm
+    thread:
+      from: payload-float
+      steps:
+        - [quantize, 50]
+        - [squelch]
+        - [publish!, [subject-append, stable]]
+```
+
+That lowers to the same AST as:
+
+```edn
+(on "car.*.rpm"
+  (-> payload-float
+      (quantize 50)
+      (squelch)
+      (publish! (subject-append "stable"))))
+```
+
+Within expression arrays, the first item is a form symbol; bound names
+such as `payload`, `payload-float`, `payload-int`, and `subject` lower
+as symbols; other scalar arguments lower as strings unless they are
+numbers, booleans, nulls, or keywords like `:ms`. See
+[`examples/rental-car.yml`](../examples/rental-car.yml) for the fuller
+shape.
+
 ### EDN is the notation; the patchbay is the evaluator
 
 Patchbay files are valid EDN, which is why `.edn` editor tooling

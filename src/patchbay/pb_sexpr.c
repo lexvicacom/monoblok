@@ -308,6 +308,7 @@ const char *pb_parse_error_name(pb_parse_error err) {
     case PB_PARSE_INVALID_NUMBER: return "invalid number";
     case PB_PARSE_INVALID_LIST_HEAD: return "invalid list head";
     case PB_PARSE_INVALID_JSON: return "invalid json";
+    case PB_PARSE_INVALID_YAML: return "invalid yaml";
     }
     return "unknown parse error";
 }

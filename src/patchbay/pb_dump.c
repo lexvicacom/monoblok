@@ -39,7 +39,7 @@ static void dump_value(const pb_value *v, int depth) {
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        fprintf(stderr, "usage: %s patchbay.{edn,json}\n", argv[0]);
+        fprintf(stderr, "usage: %s patchbay.{edn,json,yml,yaml}\n", argv[0]);
         return 2;
     }
 

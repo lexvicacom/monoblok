@@ -4,6 +4,7 @@ Patchbay code is intentionally shallow and direct. The main pieces are:
 
 - `pb_sexpr.c`: EDN-like parser for hand-written patchbay files.
 - `pb_json.c`: JSON patchbay adapter for tooling compatibility.
+- `pb_yaml.c`: small YAML-sugar parser/lowerer for `.yml`/`.yaml` patchbays.
 - `pb_eval.c`: evaluator core, special forms, and the `FORMS[]` syntax registry.
 - `pb_forms.c`: eager form dispatch plus included implementation fragments.
 - `pb_form_*.c`: form implementation fragments. They are included by `pb_forms.c`

@@ -1,0 +1,25 @@
+# YAML sugar for rental-car.edn. It lowers directly to patchbay AST forms.
+on:
+  - sub: car.*.rpm
+    thread:
+      from: payload-float
+      steps:
+        - [quantize, 50]
+        - [squelch]
+        - [publish!, [subject-append, stable]]
+
+  - sub: car.*.coolant
+    thread:
+      - payload-float
+      - [round, 0]
+      - [deadband, 1.0]
+      - [publish!, [subject-append, stable]]
+
+  - sub: car.*.rpm
+    when:
+      test: [>, [moving-avg, 20, payload-float], 7500.0]
+      then:
+        thread:
+          - payload
+          - [hold-off, 5000]
+          - [publish!, [subject-append, alert]]

@@ -92,6 +92,7 @@ set(PB_CORE
   src/patchbay/pb_forms.c
   src/patchbay/pb_eval.c
   src/patchbay/pb_json.c
+  src/patchbay/pb_yaml.c
   src/patchbay/pb_program.c
   src/patchbay/pb_sexpr.c
   src/patchbay/pb_soundcheck.c
