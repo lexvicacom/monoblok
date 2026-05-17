@@ -206,6 +206,9 @@ add_executable(importer-tests test/importer_unit.c test/fake_nats.c src/importer
 target_include_directories(importer-tests PRIVATE test/fakes src/patchbay)
 target_link_libraries(importer-tests PRIVATE monoblok_core ${MB_UV_TARGET})
 target_compile_options(importer-tests PRIVATE ${MB_WARNINGS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_compile_definitions(importer-tests PRIVATE _GNU_SOURCE)
+endif()
 add_test(NAME importer COMMAND importer-tests)
 
 add_executable(monoblok
