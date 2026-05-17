@@ -181,9 +181,9 @@ static bool slice_is(pb_slice slice, const char *s) {
     return slice.len == len && memcmp(slice.ptr, s, len) == 0;
 }
 
-static void test_bridge_config_loads(void) {
+static void test_export_config_loads(void) {
     pb_program program = {0};
-    load_program(&program, "(bridge :servers [\"nats://a:4222\" \"nats://b:4222\"]\n"
+    load_program(&program, "(export :servers [\"nats://a:4222\" \"nats://b:4222\"]\n"
                            "        :name \"monoblok\"\n"
                            "        :export [\"foo.>\" \"bar\"]\n"
                            "        :tls true\n"
@@ -209,9 +209,21 @@ static void test_bridge_config_loads(void) {
     pb_program_free(&program);
 }
 
-static void test_bridge_requires_servers(void) {
+static void test_deprecated_bridge_config_loads(void) {
     pb_program program = {0};
-    const char *src = "(bridge :export [\"foo.>\"])\n";
+    load_program(&program, "(bridge :servers [\"nats://a:4222\"]\n"
+                           "        :export [\"foo.>\"])\n");
+    CHECK(program.bridge.present);
+    CHECK(program.bridge.servers_len == 1);
+    CHECK(program.bridge.exports_len == 1);
+    CHECK(slice_is(program.bridge.servers[0], "nats://a:4222"));
+    CHECK(slice_is(program.bridge.exports[0], "foo.>"));
+    pb_program_free(&program);
+}
+
+static void test_export_requires_servers(void) {
+    pb_program program = {0};
+    const char *src = "(export :export [\"foo.>\"])\n";
     CHECK(!pb_program_load_source(&program, "<test>", src, strlen(src)));
     pb_program_free(&program);
 }
@@ -253,7 +265,8 @@ TEST_MAIN(program,
           test_rule_dispatch_preserves_source_order,
           test_rule_stats_count_emits_and_suppression,
           test_lvc_filters_load,
-          test_bridge_config_loads,
-          test_bridge_requires_servers,
+          test_export_config_loads,
+          test_deprecated_bridge_config_loads,
+          test_export_requires_servers,
           test_import_config_loads,
           test_import_requires_subject)

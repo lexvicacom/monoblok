@@ -9,7 +9,7 @@
 static void test_json_patchbay_form(void) {
     const char *src =
         "[[\"on\", \"sensors.*\", [\"publish!\", [\"subject-append\", \"seen\"], \"payload\"]],"
-        " [\"bridge\", {\"servers\": [\"nats://127.0.0.1:4223\"], \"export\": [\"sensors.>\"]}]]";
+        " [\"export\", {\"servers\": [\"nats://127.0.0.1:4223\"], \"export\": [\"sensors.>\"]}]]";
 
     pb_arena arena = {0};
     pb_parse_result r = pb_parse_patchbay_source(&arena, "patchbay.json", src, strlen(src));

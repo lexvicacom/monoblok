@@ -193,33 +193,41 @@ static bool load_remote_list(pb_slice **out, size_t *len, size_t *cap, pb_value 
     return true;
 }
 
-static bool load_bridge_string(pb_value value, const char *name, pb_slice *out) {
-    return load_remote_string(value, "bridge", name, out);
+static bool is_export_config_head(pb_slice head) {
+    return pb_slice_eq_lit(head, "bridge") || pb_slice_eq_lit(head, "export");
 }
 
-static bool load_bridge_bool(pb_value value, const char *name, bool *out) {
-    return load_remote_bool(value, "bridge", name, out);
+static const char *export_config_name(pb_slice head) {
+    return pb_slice_eq_lit(head, "export") ? "export" : "bridge";
 }
 
-static bool load_bridge_i64(pb_value value, const char *name, int64_t *out) {
-    return load_remote_i64(value, "bridge", name, out);
+static bool load_bridge_string(pb_value value, const char *form_name, const char *name, pb_slice *out) {
+    return load_remote_string(value, form_name, name, out);
 }
 
-static bool load_bridge_int(pb_value value, const char *name, int *out) {
-    return load_remote_int(value, "bridge", name, out);
+static bool load_bridge_bool(pb_value value, const char *form_name, const char *name, bool *out) {
+    return load_remote_bool(value, form_name, name, out);
 }
 
-static bool load_bridge_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *name) {
-    return load_remote_list(out, len, cap, value, "bridge", name);
+static bool load_bridge_i64(pb_value value, const char *form_name, const char *name, int64_t *out) {
+    return load_remote_i64(value, form_name, name, out);
 }
 
-static bool load_bridge_form(pb_program *program, pb_values items) {
+static bool load_bridge_int(pb_value value, const char *form_name, const char *name, int *out) {
+    return load_remote_int(value, form_name, name, out);
+}
+
+static bool load_bridge_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *form_name, const char *name) {
+    return load_remote_list(out, len, cap, value, form_name, name);
+}
+
+static bool load_bridge_form(pb_program *program, pb_values items, const char *form_name) {
     if (program->bridge.present) {
-        fprintf(stderr, "patchbay: duplicate bridge form\n");
+        fprintf(stderr, "patchbay: duplicate export/bridge form\n");
         return false;
     }
     if (items.len < 3 || (items.len % 2) == 0) {
-        fprintf(stderr, "patchbay: bridge expects keyword/value options\n");
+        fprintf(stderr, "patchbay: %s expects keyword/value options\n", form_name);
         return false;
     }
 
@@ -227,99 +235,99 @@ static bool load_bridge_form(pb_program *program, pb_values items) {
     bridge.present = true;
     for (size_t i = 1; i < items.len; i += 2) {
         if (items.items[i].kind != PB_KEYWORD) {
-            fprintf(stderr, "patchbay: bridge option must be keyword\n");
+            fprintf(stderr, "patchbay: %s option must be keyword\n", form_name);
             goto fail;
         }
         pb_slice key = items.items[i].text;
         pb_value value = items.items[i + 1];
         if (pb_slice_eq_lit(key, "servers")) {
-            if (!load_bridge_list(&bridge.servers, &bridge.servers_len, &bridge.servers_cap, value, "servers")) {
+            if (!load_bridge_list(&bridge.servers, &bridge.servers_len, &bridge.servers_cap, value, form_name, "servers")) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "export")) {
-            if (!load_bridge_list(&bridge.exports, &bridge.exports_len, &bridge.exports_cap, value, "export")) {
+            if (!load_bridge_list(&bridge.exports, &bridge.exports_len, &bridge.exports_cap, value, form_name, "export")) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "name")) {
-            if (!load_bridge_string(value, "name", &bridge.name)) {
+            if (!load_bridge_string(value, form_name, "name", &bridge.name)) {
                 goto fail;
             }
             bridge.has_name = true;
         } else if (pb_slice_eq_lit(key, "creds")) {
-            if (!load_bridge_string(value, "creds", &bridge.creds)) {
+            if (!load_bridge_string(value, form_name, "creds", &bridge.creds)) {
                 goto fail;
             }
             bridge.has_creds = true;
         } else if (pb_slice_eq_lit(key, "user")) {
-            if (!load_bridge_string(value, "user", &bridge.user)) {
+            if (!load_bridge_string(value, form_name, "user", &bridge.user)) {
                 goto fail;
             }
             bridge.has_user = true;
         } else if (pb_slice_eq_lit(key, "password")) {
-            if (!load_bridge_string(value, "password", &bridge.password)) {
+            if (!load_bridge_string(value, form_name, "password", &bridge.password)) {
                 goto fail;
             }
             bridge.has_password = true;
         } else if (pb_slice_eq_lit(key, "token")) {
-            if (!load_bridge_string(value, "token", &bridge.token)) {
+            if (!load_bridge_string(value, form_name, "token", &bridge.token)) {
                 goto fail;
             }
             bridge.has_token = true;
         } else if (pb_slice_eq_lit(key, "tls")) {
-            if (!load_bridge_bool(value, "tls", &bridge.tls)) {
+            if (!load_bridge_bool(value, form_name, "tls", &bridge.tls)) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "tls-ca")) {
-            if (!load_bridge_string(value, "tls-ca", &bridge.tls_ca)) {
+            if (!load_bridge_string(value, form_name, "tls-ca", &bridge.tls_ca)) {
                 goto fail;
             }
             bridge.has_tls_ca = true;
         } else if (pb_slice_eq_lit(key, "tls-cert")) {
-            if (!load_bridge_string(value, "tls-cert", &bridge.tls_cert)) {
+            if (!load_bridge_string(value, form_name, "tls-cert", &bridge.tls_cert)) {
                 goto fail;
             }
             bridge.has_tls_cert = true;
         } else if (pb_slice_eq_lit(key, "tls-key")) {
-            if (!load_bridge_string(value, "tls-key", &bridge.tls_key)) {
+            if (!load_bridge_string(value, form_name, "tls-key", &bridge.tls_key)) {
                 goto fail;
             }
             bridge.has_tls_key = true;
         } else if (pb_slice_eq_lit(key, "tls-skip-verify")) {
-            if (!load_bridge_bool(value, "tls-skip-verify", &bridge.tls_skip_verify)) {
+            if (!load_bridge_bool(value, form_name, "tls-skip-verify", &bridge.tls_skip_verify)) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "origin-header")) {
-            if (!load_bridge_bool(value, "origin-header", &bridge.origin_header)) {
+            if (!load_bridge_bool(value, form_name, "origin-header", &bridge.origin_header)) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "connect-timeout-ms")) {
-            if (!load_bridge_i64(value, "connect-timeout-ms", &bridge.connect_timeout_ms)) {
+            if (!load_bridge_i64(value, form_name, "connect-timeout-ms", &bridge.connect_timeout_ms)) {
                 goto fail;
             }
             bridge.has_connect_timeout_ms = true;
         } else if (pb_slice_eq_lit(key, "ping-interval-ms")) {
-            if (!load_bridge_i64(value, "ping-interval-ms", &bridge.ping_interval_ms)) {
+            if (!load_bridge_i64(value, form_name, "ping-interval-ms", &bridge.ping_interval_ms)) {
                 goto fail;
             }
             bridge.has_ping_interval_ms = true;
         } else if (pb_slice_eq_lit(key, "reconnect-wait-ms")) {
-            if (!load_bridge_i64(value, "reconnect-wait-ms", &bridge.reconnect_wait_ms)) {
+            if (!load_bridge_i64(value, form_name, "reconnect-wait-ms", &bridge.reconnect_wait_ms)) {
                 goto fail;
             }
             bridge.has_reconnect_wait_ms = true;
         } else if (pb_slice_eq_lit(key, "max-reconnect")) {
-            if (!load_bridge_int(value, "max-reconnect", &bridge.max_reconnect)) {
+            if (!load_bridge_int(value, form_name, "max-reconnect", &bridge.max_reconnect)) {
                 goto fail;
             }
             bridge.has_max_reconnect = true;
         } else {
-            fprintf(stderr, "patchbay: unknown bridge option: %.*s\n", (int)key.len, key.ptr);
+            fprintf(stderr, "patchbay: unknown %s option: %.*s\n", form_name, (int)key.len, key.ptr);
             goto fail;
         }
     }
 
     if (bridge.servers_len == 0) {
-        fprintf(stderr, "patchbay: bridge requires :servers\n");
+        fprintf(stderr, "patchbay: %s requires :servers\n", form_name);
         goto fail;
     }
     program->bridge = bridge;
@@ -491,8 +499,8 @@ static bool load_on_form(pb_program *program, pb_value form) {
     if (pb_slice_eq_lit(items.items[0].text, "lvc")) {
         return load_lvc_form(program, items);
     }
-    if (pb_slice_eq_lit(items.items[0].text, "bridge")) {
-        return load_bridge_form(program, items);
+    if (is_export_config_head(items.items[0].text)) {
+        return load_bridge_form(program, items, export_config_name(items.items[0].text));
     }
     if (pb_slice_eq_lit(items.items[0].text, "import")) {
         return load_import_form(program, items);

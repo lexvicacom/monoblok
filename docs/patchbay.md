@@ -51,7 +51,7 @@ become symbols in rule expressions.
   ["on", "market.*", {"reentrant": true},
     ["bar!", 60, "payload-float"]],
 
-  ["bridge", {
+  ["export", {
     "servers": ["nats://127.0.0.1:4223"],
     "export": ["sensors.*.stable"]
   }]
@@ -86,30 +86,31 @@ appears*, not by a sigil:
   error.
 - Inside top-level config forms, sequences are data. In `(lvc ...)`,
   a single vector or list is read as the filter set. Inside
-  `(bridge ...)`, `(import ...)`, and `(mixer ...)`, after a keyword like
-  `:servers`, `:export`, `:subject`, or `:workers`, a list is read as a
+  `(export ...)`, deprecated `(bridge ...)`, and `(import ...)`, after a keyword like
+  `:servers`, `:export`, or `:subject`, a list is read as a
   literal sequence of values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
   two-element list of strings, not a call to `nats://a:4222`. Same
-  parser, different consumer. See [`mixer.md`](./mixer.md) for the
-  mixer config form.
+  parser, different consumer.
 
 For unambiguous data-as-data inside a rule body, write a vector with
 square brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors
 self-evaluate (each element is evaluated, the result is returned as
 a vector), they never dispatch on a head, and they're what
-`contains?` checks for membership against. Config readers (`bridge`,
-`import`, `mixer`) accept either `(...)` or `[...]` for keyword-tagged
+`contains?` checks for membership against. Config readers (`export`,
+deprecated `bridge`, `import`) accept either `(...)` or `[...]` for keyword-tagged
 collections; vectors read more naturally and are the recommended
 form.
 
-## NATS bridge/import config
+## NATS export/import config
 
-`(bridge ...)` exports monoblok publishes to a real NATS cluster:
+`(export ...)` exports monoblok publishes to a real NATS cluster.
+The old `(bridge ...)` form is deprecated but still accepted as a
+compatibility alias:
 
 ```edn
-(bridge
+(export
   :servers ["nats://127.0.0.1:4223"]
-  :name    "monoblok-bridge"
+  :name    "monoblok-export"
   :export  ["sensors.*.stable" "alerts.>"])
 ```
 
@@ -138,7 +139,7 @@ Both forms accept the same connection keywords: `:creds`, `:user` /
 `:tls-skip-verify` (dev only), `:connect-timeout-ms`,
 `:ping-interval-ms`, `:max-reconnect` (-1 unlimited), and
 `:reconnect-wait-ms`. For import, `:origin-header true` ignores
-messages carrying monoblok's `x-monoblok` header, useful when bridge
+messages carrying monoblok's `x-monoblok` header, useful when export
 and import touch the same cluster. `:max-pending` bounds the
 cross-thread import queue; the default is 4096 messages.
 

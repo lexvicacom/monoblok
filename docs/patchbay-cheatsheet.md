@@ -8,7 +8,7 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 |------|---------|
 | `(on FILTER [:reentrant true] BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. `:reentrant true` (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8. |
 | `(lvc [FILTER ...])` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings. Legacy `(lvc FILTER ...)` is accepted. |
-| `(bridge :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. See bridge keywords below. |
+| `(export :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. Deprecated `(bridge ...)` is accepted as an alias. See export keywords below. |
 | `(import :servers ... :subject ...)` | optional, zero or one. Inbound NATS tap into patchbay. See import keywords below. |
 
 ## EDN / JSON side by side
@@ -31,7 +31,7 @@ symbols in rule expressions.
 | `(on "sensors.*" (publish! "out" payload))` | `["on", "sensors.*", ["publish!", "out", "payload"]]` |
 | `(moving-avg :ms 5000 payload-float)` | `["moving-avg", {"ms":5000}, "payload-float"]` |
 | `(on "MARKET.*" :reentrant true (bar! 60 payload-float))` | `["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "payload-float"]]` |
-| `(bridge :servers ["nats://127.0.0.1:4223"] :export ["demo.>"])` | `["bridge", {"servers":["nats://127.0.0.1:4223"], "export":["demo.>"]}]` |
+| `(export :servers ["nats://127.0.0.1:4223"] :export ["demo.>"])` | `["export", {"servers":["nats://127.0.0.1:4223"], "export":["demo.>"]}]` |
 | `(import :servers ["nats://127.0.0.1:4223"] :subject ["raw.>"])` | `["import", {"servers":["nats://127.0.0.1:4223"], "subject":["raw.>"]}]` |
 
 ## Bound symbols
@@ -175,10 +175,11 @@ one output suffix.
 | `(json-get KEY PAYLOAD)` | field/path as number / string / bool, or nil if missing / malformed / null / non-primitive |
 | `(json-demux! KEY... PAYLOAD)` | side-effecting; publishes each present field/path to `<subject>.<suffix>`, returns nil |
 
-## Bridge keywords
+## Export keywords
 
-A single optional `(bridge ...)` form at top level configures the
-outbound NATS forwarder. Counters land on `$STATS.bridge.published` /
+A single optional `(export ...)` form at top level configures the
+outbound NATS forwarder. Deprecated `(bridge ...)` is still accepted as
+a compatibility alias. Counters remain `$STATS.bridge.published` /
 `.dropped` on the normal stats tick.
 
 | keyword | type | meaning |
@@ -209,7 +210,7 @@ import mode is configured.
 Counters land on `$STATS.import.received`, `.processed`, `.dropped`, and
 `.failed` on the normal stats tick.
 
-Connection keywords match bridge: `:servers`, `:name`, `:creds`, `:user` /
+Connection keywords match export: `:servers`, `:name`, `:creds`, `:user` /
 `:password`, `:token`, `:tls`, `:tls-ca`, `:tls-cert` / `:tls-key`,
 `:tls-skip-verify`, `:connect-timeout-ms`, `:ping-interval-ms`,
 `:max-reconnect`, and `:reconnect-wait-ms`.
