@@ -15,7 +15,9 @@ It is not uncommon for systems to contain some _caretaker_ services that subscri
 
 **Declare it once, as rules, at the edge.**
 
-monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small S-expression DSL. A walked example lives in [patchbay.edn](./patchbay.edn). It is easy to get started as <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay lends itself well to help from coding assistants</a>.
+monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small DSL. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md#yaml-sugar-files). 
+
+<a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay also lends itself well to help from coding assistants</a>.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
