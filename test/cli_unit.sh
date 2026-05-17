@@ -14,6 +14,7 @@ valid="$tmp/valid.edn"
 valid_config="$tmp/valid-config.edn"
 bad_lvc="$tmp/bad-lvc.edn"
 bad_bridge="$tmp/bad-bridge.edn"
+bad_import="$tmp/bad-import.edn"
 bad_on="$tmp/bad-on.edn"
 bad_eval="$tmp/bad-eval.edn"
 bad_parse="$tmp/bad-parse.edn"
@@ -42,6 +43,11 @@ cat > "$valid_config" <<'EOF'
         :tls-ca "ca.pem"
         :tls-cert "cert.pem"
         :tls-key "key.pem")
+(import :servers ["nats://127.0.0.1:4223"]
+        :subject ["raw.>"]
+        :max-pending 64
+        :name "monoblok-import-test"
+        :origin-header true)
 (on "sensors.*" :reentrant true (publish! (subject-append "seen") payload))
 EOF
 
@@ -51,6 +57,10 @@ EOF
 
 cat > "$bad_bridge" <<'EOF'
 (bridge :export ["telemetry.>"])
+EOF
+
+cat > "$bad_import" <<'EOF'
+(import :servers ["nats://127.0.0.1:4222"])
 EOF
 
 cat > "$bad_on" <<'EOF'
@@ -92,6 +102,12 @@ if "$bin" --validate "$bad_bridge" > "$tmp/bad-bridge.out" 2> "$tmp/bad-bridge.e
     exit 1
 fi
 grep 'bridge requires :servers' "$tmp/bad-bridge.err" >/dev/null
+
+if "$bin" --validate "$bad_import" > "$tmp/bad-import.out" 2> "$tmp/bad-import.err"; then
+    echo "invalid import unexpectedly validated" >&2
+    exit 1
+fi
+grep 'import requires :subject' "$tmp/bad-import.err" >/dev/null
 
 if "$bin" --validate "$bad_on" > "$tmp/bad-on.out" 2> "$tmp/bad-on.err"; then
     echo "invalid on options unexpectedly validated" >&2

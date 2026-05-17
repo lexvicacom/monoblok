@@ -216,6 +216,35 @@ static void test_bridge_requires_servers(void) {
     pb_program_free(&program);
 }
 
+static void test_import_config_loads(void) {
+    pb_program program = {0};
+    load_program(&program, "(import :servers [\"nats://a:4222\"]\n"
+                           "        :subject [\"raw.>\" \"replay.*\"]\n"
+                           "        :name \"monoblok-import\"\n"
+                           "        :origin-header true\n"
+                           "        :max-pending 128)\n"
+                           "(on \"raw.*\" (publish! \"clean\" payload))\n");
+    CHECK(program.importer.present);
+    CHECK(program.importer.servers_len == 1);
+    CHECK(program.importer.subjects_len == 2);
+    CHECK(slice_is(program.importer.servers[0], "nats://a:4222"));
+    CHECK(slice_is(program.importer.subjects[0], "raw.>"));
+    CHECK(slice_is(program.importer.subjects[1], "replay.*"));
+    CHECK(program.importer.has_name);
+    CHECK(slice_is(program.importer.name, "monoblok-import"));
+    CHECK(program.importer.origin_header);
+    CHECK(program.importer.has_max_pending);
+    CHECK(program.importer.max_pending == 128);
+    pb_program_free(&program);
+}
+
+static void test_import_requires_subject(void) {
+    pb_program program = {0};
+    const char *src = "(import :servers [\"nats://a:4222\"])\n";
+    CHECK(!pb_program_load_source(&program, "<test>", src, strlen(src)));
+    pb_program_free(&program);
+}
+
 TEST_MAIN(program,
           test_reentry_is_opt_in,
           test_reentry_runs_downstream_rules,
@@ -225,4 +254,6 @@ TEST_MAIN(program,
           test_rule_stats_count_emits_and_suppression,
           test_lvc_filters_load,
           test_bridge_config_loads,
-          test_bridge_requires_servers)
+          test_bridge_requires_servers,
+          test_import_config_loads,
+          test_import_requires_subject)

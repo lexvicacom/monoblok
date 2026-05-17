@@ -42,6 +42,10 @@ typedef struct mb_server {
     uint64_t total_pubs;
     const uint64_t *bridge_published;
     const uint64_t *bridge_dropped;
+    const uint64_t *import_received;
+    const uint64_t *import_processed;
+    const uint64_t *import_dropped;
+    const uint64_t *import_failed;
     bool patchbay_timer_started;
     bool snapshot_timer_started;
     bool stats_timer_started;
@@ -51,12 +55,13 @@ typedef struct mb_server {
     bool snapshot_write_again;
     bool closing;
     bool lvc_enabled;
+    bool client_pubs_enabled;
     bool trace;
 } mb_server;
 
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
-                    uint64_t stats_tick_ms, bool trace);
+                    uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace);
 int mb_server_run(mb_server *server);
 void mb_server_close(mb_server *server);
 bool mb_server_emit_stats(mb_server *server);

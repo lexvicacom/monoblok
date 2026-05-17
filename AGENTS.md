@@ -5,12 +5,13 @@ Guidance for coding agents working in this C17/libuv Monoblok tree.
 ## Shape
 
 Monoblok is a compact C17 NATS-like daemon with a patchbay routing DSL,
-optional LVC, snapshots, JSON helpers, and an export-only NATS bridge through
-vendored `nats.c`.
+optional LVC, snapshots, JSON helpers, and NATS bridge/import integration
+through vendored `nats.c`.
 
 Keep the layout shallow:
 
-- `src/`: core pieces (`buf`, `proto`, `router`, `snapshot`, `bridge`, `main`).
+- `src/`: core pieces (`buf`, `proto`, `router`, `snapshot`, `bridge`,
+  `importer`, `main`).
 - `src/server/`: libuv listener, connection lifetime, read/write callbacks.
 - `src/patchbay/`: arena, parser, JSON adapter, evaluator, validation,
   soundcheck, and patchbay helpers.
@@ -52,6 +53,7 @@ ctest --test-dir build --output-on-failure
 cmake --build build --target smoke
 cmake --build build --target soundcheck
 scripts/bridge-smoke.sh
+scripts/import-smoke.sh
 ```
 
 Sanitizer pass:
@@ -87,8 +89,10 @@ cmake --build build --target pb-dump
 - Long-lived patchbay state is owned by `pb_eval_state`; be explicit about
   string/ring ownership and free every heap field in `state_entry_free`.
 - Avoid surprise publish-time allocation. Allocate on connection open, SUB,
-  UNSUB, patchbay/config load, bridge startup, or first state-slot creation;
-  reuse read/write buffers and per-publish scratch arenas.
+  UNSUB, patchbay/config load, bridge/import startup, or first state-slot
+  creation; reuse read/write buffers and per-publish scratch arenas. Import
+  copies remote messages into a bounded cross-thread ring and reuses slot
+  buffers after growth.
 - On Linux, libuv uses epoll for the event loop. The daemon disables libuv's
   optional io_uring paths by default for seccomp-friendly containers; use
   `--io-uring` or `UV_USE_IO_URING=1` to opt in before loop creation.
@@ -131,7 +135,7 @@ is `(rule_idx, filter)`. If the patchbay changed and the recorded filter no
 longer matches, that rule state is skipped with a warning. LVC entries load
 regardless.
 
-## Bridge Mode
+## Bridge And Import Mode
 
 The outbound bridge is optional and export-only. It is configured by a
 top-level `(bridge ...)` form in the patchbay file. Leaving the form out makes
@@ -142,6 +146,14 @@ delivery. The bridge does its own subject-filter matching and publishes matching
 subjects to the remote NATS cluster through `nats.c`, which owns reconnects and
 outbound buffering.
 
+Import mode is optional inbound tap mode. It is configured by a top-level
+`(import ...)` form, subscribes to remote NATS subjects through `nats.c`, copies
+messages into a bounded ring, and wakes the libuv loop for patchbay evaluation.
+Imported raw messages are private patchbay ingress and must not be routed to
+direct monoblok subscribers unless a rule republishes them explicitly. When
+`(import ...)` is configured, local socket clients may still subscribe but
+client `PUB` commands are rejected.
+
 ## NATS Protocol Scope
 
 Core only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`, `PING`, `PONG`,
@@ -149,7 +161,8 @@ Core only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`, `PING`, `PONG`,
 
 There is no auth on the server side, headers, JetStream, mixer, or `$SYS.*`
 service request-reply. The bridge remains export-only and does not route remote
-replies back. `CONNECT` bodies are accepted and ignored. `+OK` is never sent.
+replies back. Import mode consumes remote NATS messages as patchbay input only.
+`CONNECT` bodies are accepted and ignored. `+OK` is never sent.
 
 ## C Style
 
@@ -183,12 +196,13 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-For behavior touching I/O, routing, snapshots, or bridge, add the relevant
+For behavior touching I/O, routing, snapshots, bridge, or import, add the relevant
 smoke test:
 
 ```sh
 cmake --build build --target smoke
 scripts/bridge-smoke.sh
+scripts/import-smoke.sh
 ```
 
 Use a `Release` CMake build before reporting performance.

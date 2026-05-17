@@ -151,7 +151,9 @@ static void handle_op(mb_conn *conn, mb_op op) {
         break;
     case MB_OP_PUB: {
         bool published = false;
-        if (mb_router_subject_has_lvc_prefix(op.subject)) {
+        if (!conn->server->client_pubs_enabled) {
+            write_err_or_close(conn, "Client Publish Disabled");
+        } else if (mb_router_subject_has_lvc_prefix(op.subject)) {
             write_err_or_close(conn, "$LVC is read-only");
         } else if (mb_router_subject_has_stats_prefix(op.subject)) {
             write_err_or_close(conn, "$STATS is read-only");

@@ -184,8 +184,9 @@ nats -s 127.0.0.1:4223 sub "demo.sensors.*.spike"
   read-only visitor sees nothing on `demo.>` until someone
   publishes.
 - **No auth.** Treat it as a whiteboard, not storage.
-- **No JetStream or headers.** Core NATS only
+- **No JetStream or local headers.** Core NATS only
   (`PUB`, `SUB`, `UNSUB`, `PING`/`PONG`, `INFO`, `-ERR`), with local
-  reply-to support. The bridge is export-only and does not relay replies back.
+  reply-to support. The bridge is export-only and does not relay replies back;
+  import mode consumes remote NATS subjects as patchbay input.
 
 For the full primitive reference see [patchbay.md](./patchbay.md).

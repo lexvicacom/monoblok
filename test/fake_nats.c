@@ -1,5 +1,6 @@
 #include "nats.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,14 +14,23 @@ struct natsConnection {
     int unused;
 };
 
+// Opaque fake subscription handle allocated and destroyed through the NATS API.
+struct natsSubscription {
+    char subject[256];
+};
+
 // Fake outbound message carrying enough state for publish-path assertions.
 struct natsMsg {
     char subject[256];
     char payload[256];
     int payload_len;
+    bool origin_header;
 };
 
 static fake_nats_state g_fake_nats;
+static _Atomic int g_has_next_msg;
+static char g_next_subject[256];
+static char g_next_payload[256];
 
 static void copy_cstr(char *dst, size_t cap, const char *src) {
     if (cap == 0) {
@@ -76,11 +86,23 @@ void fake_nats_reset(void) {
         .msg_header_set_status = NATS_OK,
         .publish_msg_status = NATS_OK,
         .publish_status = NATS_OK,
+        .subscribe_sync_status = NATS_OK,
+        .next_msg_status = NATS_TIMEOUT,
+        .header_get_status = NATS_NOT_FOUND,
     };
+    atomic_store_explicit(&g_has_next_msg, 0, memory_order_release);
+    g_next_subject[0] = '\0';
+    g_next_payload[0] = '\0';
 }
 
 fake_nats_state *fake_nats_get(void) {
     return &g_fake_nats;
+}
+
+void fake_nats_deliver(const char *subject, const char *payload) {
+    copy_cstr(g_next_subject, sizeof g_next_subject, subject);
+    copy_cstr(g_next_payload, sizeof g_next_payload, payload);
+    atomic_store_explicit(&g_has_next_msg, 1, memory_order_release);
 }
 
 const char *natsStatus_GetText(natsStatus status) {
@@ -90,6 +112,7 @@ const char *natsStatus_GetText(natsStatus status) {
     case NATS_NO_MEMORY: return "NO_MEMORY";
     case NATS_TIMEOUT: return "TIMEOUT";
     case NATS_NOT_CONNECTED: return "NOT_CONNECTED";
+    case NATS_NOT_FOUND: return "NOT_FOUND";
     }
     return "UNKNOWN";
 }
@@ -249,6 +272,7 @@ natsStatus natsMsg_Create(natsMsg **msg, const char *subj, const char *reply, co
     copy_cstr((*msg)->subject, sizeof (*msg)->subject, subj);
     copy_data((*msg)->payload, sizeof (*msg)->payload, data, dataLen);
     (*msg)->payload_len = dataLen;
+    (*msg)->origin_header = false;
     return NATS_OK;
 }
 
@@ -283,4 +307,73 @@ natsStatus natsConnection_Publish(natsConnection *conn, const char *subj, const 
     g_fake_nats.last_publish_payload_len = dataLen;
     copy_data(g_fake_nats.last_publish_payload, sizeof g_fake_nats.last_publish_payload, data, dataLen);
     return g_fake_nats.publish_status;
+}
+
+natsStatus natsConnection_SubscribeSync(natsSubscription **sub, natsConnection *nc, const char *subject) {
+    (void)nc;
+    g_fake_nats.subscribe_sync_calls += 1;
+    if (g_fake_nats.subscribe_sync_status != NATS_OK) {
+        *sub = NULL;
+        return g_fake_nats.subscribe_sync_status;
+    }
+    *sub = malloc(sizeof **sub);
+    if (*sub == NULL) {
+        return NATS_NO_MEMORY;
+    }
+    copy_cstr((*sub)->subject, sizeof (*sub)->subject, subject);
+    return NATS_OK;
+}
+
+natsStatus natsSubscription_NextMsg(natsMsg **nextMsg, natsSubscription *sub, int64_t timeout) {
+    (void)sub;
+    (void)timeout;
+    g_fake_nats.next_msg_calls += 1;
+    *nextMsg = NULL;
+    if (!atomic_exchange_explicit(&g_has_next_msg, 0, memory_order_acquire)) {
+        return g_fake_nats.next_msg_status;
+    }
+    natsMsg *msg = malloc(sizeof *msg);
+    if (msg == NULL) {
+        return NATS_NO_MEMORY;
+    }
+    copy_cstr(msg->subject, sizeof msg->subject, g_next_subject);
+    copy_cstr(msg->payload, sizeof msg->payload, g_next_payload);
+    msg->payload_len = (int)strlen(msg->payload);
+    msg->origin_header = g_fake_nats.next_msg_has_origin_header;
+    *nextMsg = msg;
+    return NATS_OK;
+}
+
+void natsSubscription_Destroy(natsSubscription *sub) {
+    g_fake_nats.subscription_destroy_calls += 1;
+    free(sub);
+}
+
+const char *natsMsg_GetSubject(const natsMsg *msg) {
+    g_fake_nats.msg_subject_calls += 1;
+    return msg == NULL ? NULL : msg->subject;
+}
+
+const char *natsMsg_GetData(const natsMsg *msg) {
+    g_fake_nats.msg_data_calls += 1;
+    return msg == NULL ? NULL : msg->payload;
+}
+
+int natsMsg_GetDataLength(const natsMsg *msg) {
+    g_fake_nats.msg_data_len_calls += 1;
+    return msg == NULL ? 0 : msg->payload_len;
+}
+
+natsStatus natsMsgHeader_Get(natsMsg *msg, const char *key, const char **value) {
+    g_fake_nats.msg_header_get_calls += 1;
+    if (g_fake_nats.header_get_status != NATS_OK) {
+        *value = NULL;
+        return g_fake_nats.header_get_status;
+    }
+    if (msg == NULL || !msg->origin_header || strcmp(key, "x-monoblok") != 0) {
+        *value = NULL;
+        return NATS_NOT_FOUND;
+    }
+    *value = "test-origin";
+    return NATS_OK;
 }
