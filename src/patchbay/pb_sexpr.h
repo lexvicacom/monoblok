@@ -57,6 +57,7 @@ typedef enum pb_parse_error {
     PB_PARSE_INVALID_NUMBER,
     PB_PARSE_INVALID_LIST_HEAD,
     PB_PARSE_INVALID_JSON,
+    PB_PARSE_INVALID_YAML,
 } pb_parse_error;
 
 // Parse result with top-level forms owned by the supplied arena.

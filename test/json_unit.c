@@ -79,7 +79,77 @@ static void test_json_invalid_inputs(void) {
     pb_arena_free(&arena);
 }
 
+static void test_yaml_patchbay_sugar(void) {
+    const char *src =
+        "lvc:\n"
+        "  - car.>\n"
+        "export:\n"
+        "  servers: [\"nats://127.0.0.1:4223\"]\n"
+        "  export: [\"car.>\"]\n"
+        "on:\n"
+        "  - sub: car.*.rpm\n"
+        "    thread:\n"
+        "      from: payload-float\n"
+        "      steps:\n"
+        "        - [quantize, 50]\n"
+        "        - [squelch]\n"
+        "        - [publish!, [subject-append, stable]]\n"
+        "  - sub: car.*.rpm\n"
+        "    when:\n"
+        "      test: [>, [moving-avg, 20, payload-float], 7500.0]\n"
+        "      then:\n"
+        "        thread:\n"
+        "          - payload\n"
+        "          - [hold-off, 5000]\n"
+        "          - [publish!, [subject-append, alert]]\n";
+
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "rental-car.yml", src, strlen(src));
+    CHECK(r.err == PB_PARSE_OK);
+    CHECK(r.forms.len == 4);
+
+    CHECK(r.forms.items[0].kind == PB_LIST);
+    check_text(r.forms.items[0].seq.items[0].text, "lvc");
+    CHECK(r.forms.items[0].seq.items[1].kind == PB_VECTOR);
+    check_text(r.forms.items[0].seq.items[1].seq.items[0].text, "car.>");
+
+    CHECK(r.forms.items[1].kind == PB_LIST);
+    check_text(r.forms.items[1].seq.items[0].text, "export");
+    CHECK(r.forms.items[1].seq.items[1].kind == PB_KEYWORD);
+    check_text(r.forms.items[1].seq.items[1].text, "servers");
+    CHECK(r.forms.items[1].seq.items[2].kind == PB_VECTOR);
+
+    CHECK(r.forms.items[2].kind == PB_LIST);
+    pb_values first = r.forms.items[2].seq;
+    check_text(first.items[0].text, "on");
+    check_text(first.items[1].text, "car.*.rpm");
+    CHECK(first.items[2].kind == PB_LIST);
+    check_text(first.items[2].seq.items[0].text, "->");
+    CHECK(first.items[2].seq.items[1].kind == PB_SYMBOL);
+    check_text(first.items[2].seq.items[1].text, "payload-float");
+    check_text(first.items[2].seq.items[2].seq.items[0].text, "quantize");
+    CHECK(first.items[2].seq.items[2].seq.items[1].kind == PB_NUMBER);
+    check_text(first.items[2].seq.items[4].seq.items[1].seq.items[1].text, "stable");
+
+    CHECK(r.forms.items[3].kind == PB_LIST);
+    pb_values second = r.forms.items[3].seq;
+    check_text(second.items[2].seq.items[0].text, "when");
+    check_text(second.items[2].seq.items[1].seq.items[0].text, ">");
+    check_text(second.items[2].seq.items[2].seq.items[0].text, "->");
+    pb_arena_free(&arena);
+}
+
+static void test_yaml_invalid_inputs(void) {
+    const char *src = "on:\n  - sub: car.*.rpm\n    thread:\n      from: payload-float\n";
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "bad.yml", src, strlen(src));
+    CHECK(r.err == PB_PARSE_INVALID_YAML);
+    pb_arena_free(&arena);
+}
+
 TEST_MAIN(json,
           test_json_patchbay_form,
           test_json_single_form_and_special_objects,
-          test_json_invalid_inputs)
+          test_json_invalid_inputs,
+          test_yaml_patchbay_sugar,
+          test_yaml_invalid_inputs)

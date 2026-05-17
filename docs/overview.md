@@ -66,7 +66,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
-Rules are top-level `(on SUBJECT-FILTER BODY)` forms. Config forms such as `(lvc ...)` and `(export ...)` live at top level too. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility.
+Rules are top-level `(on SUBJECT-FILTER BODY)` forms. Config forms such as `(lvc ...)` and `(export ...)` live at top level too. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility, and `.yml` / `.yaml` files can use the small patchbay YAML sugar layer.
 
 
 ```edn
@@ -100,6 +100,7 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 | [`clocked.edn`](../examples/clocked.edn)             | silence detection, debounce, sampling, and clocked aggregates |
 | [`json-frames.edn`](../examples/json-frames.edn)   | `json-demux!` a JSON-emitting device into scalar sub-subjects   |
 | [`rental-car.edn`](../examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
+| [`rental-car.yml`](../examples/rental-car.yml)     | the same rules using YAML sugar                                 |
 | [`bridge.edn`](../examples/bridge.edn)             | export selected subjects to a real NATS server                  |
 | [`demo.edn`](../examples/demo.edn)                 | tour of every primitive on `demo.sensors.*`                     |
 | [`lvc.edn`](../examples/lvc.edn)                   | `$LVC.>` cache replay: a late joiner gets the last value        |
@@ -107,7 +108,7 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 
 ### Validate and debug rules
 
-Run a patchbay directly with `monoblok examples/<file>.edn` or `.json`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
+Run a patchbay directly with `monoblok examples/<file>.edn`, `.json`, or `.yml`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
 For quick patchbay debugging, `--soundcheck` runs the same evaluator without opening a NATS socket. It reads newline-delimited `SUBJECT|payload` rows on stdin, passes inputs through stdout, and prints any `publish!` emissions.
 

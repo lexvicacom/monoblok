@@ -1,4 +1,5 @@
 #include "pb_json.h"
+#include "pb_yaml.h"
 
 #if PB_ENABLE_JSON
 
@@ -235,6 +236,12 @@ static bool looks_json(const char *path, const char *src, size_t len) {
     return false;
 }
 
+static bool looks_yaml(const char *path) {
+    const size_t path_len = strlen(path);
+    return (path_len >= 4 && memcmp(path + path_len - 4, ".yml", 4) == 0) ||
+           (path_len >= 5 && memcmp(path + path_len - 5, ".yaml", 5) == 0);
+}
+
 static pb_parse_result parse_json_patchbay(pb_arena *arena, const char *src, size_t len) {
     char *json_buf = malloc(len == 0 ? 1 : len);
     if (json_buf == NULL) {
@@ -297,6 +304,9 @@ static pb_parse_result parse_json_patchbay(pb_arena *arena, const char *src, siz
 }
 
 pb_parse_result pb_parse_patchbay_source(pb_arena *arena, const char *path, const char *src, size_t len) {
+    if (looks_yaml(path)) {
+        return pb_parse_yaml_patchbay(arena, src, len);
+    }
     if (looks_json(path, src, len)) {
         return parse_json_patchbay(arena, src, len);
     }

@@ -11,11 +11,13 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 | `(export :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. Deprecated `(bridge ...)` is accepted as an alias. See export keywords below. |
 | `(import :servers ... :subject ...)` | optional, zero or one. Inbound NATS tap into patchbay. See import keywords below. |
 
-## EDN / JSON side by side
+## EDN / JSON / YAML
 
 EDN is canonical for hand-written patchbays. Files ending in `.json`
 are accepted as a compatibility layer for tooling, generated configs,
-web UIs, and JSON-first users. If you're editing rules directly,
+web UIs, and JSON-first users. Files ending in `.yml` / `.yaml` use a
+small YAML sugar layer that lowers directly into the same form AST.
+If you're editing rules directly,
 consider embracing the S-expression form: it is terser, supports
 comments, and editor support is good (`Calva` plus Parinfer-style
 editing in VS Code; `clojure-mode`/CIDER or `clojure-ts-mode` plus
