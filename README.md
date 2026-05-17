@@ -1,10 +1,10 @@
 # monoblok
 
-A NATS-core compatible messaging system that conditions messages before subscribers see them.
+Signal conditioning, transformation, and routing in a NATS-native message processor.
 
 > Fix raw input streams once, not in every subscriber.
 >
-> Put monoblok in front of your NATS clients, declare the useful subjects you actually want, and let subscribers consume clean streams instead of raw noise.
+> Put monoblok in front of your NATS clients, declare the useful subjects you actually want, and have  subscribers consume clean streams, instead of raw noise.
 
 ## Rationale
 
