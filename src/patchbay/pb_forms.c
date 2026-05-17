@@ -53,6 +53,7 @@ pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args)
     case PB_FORM_SUBJECT_APPEND: return call_subject_append(ctx, args);
     case PB_FORM_SUBJECT_TOKEN: return call_subject_token(ctx, args);
     case PB_FORM_SUBJECT_WITH: return call_subject_with(ctx, args);
+    case PB_FORM_PRINT: return call_print(ctx, args);
     case PB_FORM_PUBLISH: return call_publish(ctx, args);
 
 #if PB_ENABLE_JSON
@@ -105,6 +106,7 @@ pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args)
     case PB_FORM_OR:
     case PB_FORM_THREAD:
     case PB_FORM_TRANSITION:
+    case PB_FORM_ON_SILENCE:
     case PB_FORM_DROPOUT:
         break;
     }

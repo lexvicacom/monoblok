@@ -145,6 +145,7 @@ static const pb_form_entry FORMS[] = {
     {.name = "or", .form = PB_FORM_OR, .special = true},
     {.name = "->", .form = PB_FORM_THREAD, .special = true},
     {.name = "transition", .form = PB_FORM_TRANSITION, .special = true},
+    {.name = "on-silence", .form = PB_FORM_ON_SILENCE, .special = true},
     {.name = "dropout", .form = PB_FORM_DROPOUT, .special = true},
 
     // Numeric, boolean, comparison, arithmetic, and wall-clock forms.
@@ -175,13 +176,17 @@ static const pb_form_entry FORMS[] = {
     {.name = "subject-append", .form = PB_FORM_SUBJECT_APPEND},
     {.name = "subject-token", .form = PB_FORM_SUBJECT_TOKEN},
     {.name = "subject-with", .form = PB_FORM_SUBJECT_WITH},
+    {.name = "print!", .form = PB_FORM_PRINT},
     {.name = "publish!", .form = PB_FORM_PUBLISH},
     {.name = "publish", .form = PB_FORM_PUBLISH},
+    {.name = "publish-to!", .form = PB_FORM_PUBLISH},
+    {.name = "publish-to", .form = PB_FORM_PUBLISH},
 
 #if PB_ENABLE_JSON
     // JSON forms.
     {.name = "json-get", .form = PB_FORM_JSON_GET},
     {.name = "json-demux!", .form = PB_FORM_JSON_DEMUX},
+    {.name = "json-demux", .form = PB_FORM_JSON_DEMUX},
 #endif
 
     // Per-rule state forms.
@@ -664,6 +669,7 @@ static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
         case PB_FORM_OR: return eval_or(ctx, raw_args);
         case PB_FORM_THREAD: return eval_thread(ctx, raw_args);
         case PB_FORM_TRANSITION: return eval_transition(ctx, raw_args);
+        case PB_FORM_ON_SILENCE: return pb_eval_call_on_silence(ctx, raw_args);
         case PB_FORM_DROPOUT: return pb_eval_call_dropout(ctx, raw_args);
         default: return fail(PB_EVAL_UNKNOWN_SYMBOL);
         }

@@ -1,4 +1,4 @@
-// Forms: debounce!, sample!, aggregate!. Special form: dropout.
+// Forms: debounce!, sample!, aggregate!. Special forms: on-silence, dropout.
 // Clocked publish forms and tick handling for delayed/time-bucketed effects.
 // Included by pb_forms.c; keep helpers static and chunk-local.
 
@@ -114,6 +114,47 @@ static pb_eval_result call_aggregate(pb_eval_ctx *ctx, pb_values args) {
     return nil();
 }
 
+static pb_eval_result eval_clock_body(pb_eval_ctx *ctx, pb_values body) {
+    pb_value last = {.kind = PB_NIL};
+    for (size_t i = 0; i < body.len; i += 1) {
+        pb_eval_result r = pb_eval(ctx, body.items[i]);
+        if (r.err != PB_EVAL_OK) {
+            return r;
+        }
+        last = r.value;
+    }
+    return ok(last);
+}
+
+pb_eval_result pb_eval_call_on_silence(pb_eval_ctx *ctx, pb_values raw_args) {
+    if (raw_args.len < 3 || raw_args.items[0].kind != PB_KEYWORD || !text_eq(raw_args.items[0].text, "ms")) {
+        return fail(PB_EVAL_ARITY);
+    }
+    pb_eval_result ms_v = pb_eval(ctx, raw_args.items[1]);
+    double ms = 0;
+    if (ms_v.err != PB_EVAL_OK || !as_number(ms_v.value, &ms) || ms < 1 || floor(ms) != ms) {
+        return fail(PB_EVAL_TYPE);
+    }
+    pb_eval_state_entry *slot = state_slot(ctx, "on-silence");
+    if (slot == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+    if (slot->kind == PB_EVAL_STATE_EMPTY) {
+        slot->clock_kind = PB_EVAL_CLOCK_ON_SILENCE;
+        slot->clock_body = (pb_values){.items = raw_args.items + 2, .len = raw_args.len - 2};
+    } else if (slot->kind != PB_EVAL_STATE_CLOCK || slot->clock_kind != PB_EVAL_CLOCK_ON_SILENCE) {
+        return fail(PB_EVAL_TYPE);
+    }
+    slot->clock_interval_ms = (uint64_t)ms;
+    slot->clock_armed = true;
+    slot->clock_deadline_ms = ctx->now_ms + (uint64_t)ms;
+    if (!state_set_bytes(slot, ctx->payload)) {
+        return fail(PB_EVAL_OOM);
+    }
+    slot->kind = PB_EVAL_STATE_CLOCK;
+    return nil();
+}
+
 pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args) {
     if (raw_args.len != 6 || raw_args.items[0].kind != PB_KEYWORD || !text_eq(raw_args.items[0].text, "ms") ||
         raw_args.items[2].kind != PB_KEYWORD || !text_eq(raw_args.items[2].text, "lost") ||
@@ -161,6 +202,14 @@ static pb_eval_result tick_clock_state_entry(pb_eval_ctx *ctx, pb_eval_state_ent
         return nil();
     }
     switch (entry->clock_kind) {
+    case PB_EVAL_CLOCK_ON_SILENCE: {
+        entry->clock_armed = false;
+        pb_slice old_payload = ctx->payload;
+        ctx->payload = (pb_slice){.ptr = entry->bytes, .len = entry->bytes_len};
+        const pb_eval_result r = eval_clock_body(ctx, entry->clock_body);
+        ctx->payload = old_payload;
+        return r;
+    }
     case PB_EVAL_CLOCK_DROPOUT:
         entry->dropout_lost = true;
         entry->clock_armed = false;

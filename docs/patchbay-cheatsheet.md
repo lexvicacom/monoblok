@@ -84,7 +84,7 @@ window.
 |------|---------|
 | `(subject-append SUFFIX)` | `"<subject>.<suffix>"` |
 | `(subject-with TOK ...)` / `(subject-with [TOK ...])` | tokens joined with `.`, publish-validated. Numbers/bools coerce; empty tokens error. |
-| `(now :date)` / `(now :hour)` / `(now :minute)` | wall-clock UTC: `"YYYY-MM-DD"`, `"YYYY-MM-DDTHH"`, `"YYYY-MM-DDTHHMM"`. Subject-token-safe. Cached. `:minute` is high cardinality. |
+| `(now :date)` / `(now :hour)` / `(now :minute)` | wall-clock UTC: `"YYYY-MM-DD"`, `"YYYY-MM-DDTHH"`, `"YYYY-MM-DDTHHMM"`. Subject-token-safe. Formatted into the eval arena per call. `:minute` is high cardinality. |
 | `(subject-token N)` / `(subject-token N S)` | Nth dot-token (0-indexed); nil if out of range |
 | `(str-concat A B C ...)` | concatenated string |
 | `(contains? COLL ITEM)` | bool. substring on strings, membership on vectors: `(contains? [1 2 3] payload-int)` |
@@ -133,7 +133,7 @@ Windowed ops take a **window** as their first argument(s):
 | form | meaning |
 |------|---------|
 | `N` (bare integer) | last N samples; fixed-cap ring |
-| `:ms N` | last N ms of wall-clock time (ingress timestamp). The server arms one timer per active time-windowed slot and evicts at that slot's exact next deadline. |
+| `:ms N` | last N ms of wall-clock time (ingress timestamp). Active slots expose deadlines; the server keeps one rescheduled timer pointed at the earliest one. |
 
 Slots are keyed `(rule, op, kind, subject)`, so the same op with both
 window kinds keeps distinct state. Snapshot restore re-arms time-window

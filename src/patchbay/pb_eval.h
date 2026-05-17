@@ -36,6 +36,7 @@ typedef enum pb_eval_state_kind {
 
 typedef enum pb_eval_clock_kind {
     PB_EVAL_CLOCK_NONE,
+    PB_EVAL_CLOCK_ON_SILENCE,
     PB_EVAL_CLOCK_DROPOUT,
     PB_EVAL_CLOCK_DEBOUNCE,
     PB_EVAL_CLOCK_SAMPLE,
@@ -89,6 +90,7 @@ typedef struct pb_eval_state_entry {
     bool dropout_lost;
     pb_value lost_form;
     pb_value found_form;
+    pb_values clock_body;
     char *emit_subject;
     size_t emit_subject_len;
     size_t emit_subject_cap;
