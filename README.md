@@ -21,7 +21,7 @@ monoblok speaks NATS. Point your NATS clients at it and the conditioning happens
 - Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
 
 ### Tiny and fast
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and benchmarks are part of the build; the [saved results](./bench-results) show low millions of msgs/sec on a 2-core ARM VPS, so monoblok is unlikely to be the bottleneck for many likely conditioning workloads. Treat the numbers as directional rather than scientific.
+monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and load checks are part of the build; dedicated benchmark helpers live in [scripts/](./scripts). The [saved benchmark runs](./bench-results) include low millions of msgs/sec on a 2-core ARM VPS for simple publish and fan-out workloads. Treat those numbers as directional samples, not capacity promises.
 
 ### Read more
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation for microcontrollers relaying cleaned sensor data into NATS.
@@ -92,6 +92,18 @@ cmake --build build --target load-soak
 `load-smoke` starts a temporary daemon and verifies exact TCP fan-out plus
 derived `moving-avg`, `moving-sum`, and `count!` streams. `load-soak` runs the
 same check with a heavier subscriber/message profile.
+
+Benchmark helpers are separate from the test targets because they depend on the
+NATS CLI, and the comparison script uses `nats-server` when available:
+
+```sh
+scripts/bench.sh
+scripts/bench-with-nats-server.sh
+```
+
+Saved sample output lives in [bench-results/](./bench-results). On Linux these
+scripts default to monoblok's opt-in libuv io_uring path to match the saved
+runs; pass `--epoll` to benchmark the production-default epoll path.
 
 ## Still reading?
 
