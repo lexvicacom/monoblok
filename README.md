@@ -15,7 +15,9 @@ It is not uncommon for systems to contain some _caretaker_ services that subscri
 
 **Declare it once, as rules, at the edge.**
 
-monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small S-expression DSL. A walked example lives in [patchbay.edn](./patchbay.edn). It is easy to get started as <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay lends itself well to help from coding assistants</a>.
+monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small DSL. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md#yaml-sugar-files). 
+
+<a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay also lends itself well to help from coding assistants</a>.
 
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
@@ -25,7 +27,7 @@ monoblok speaks NATS. Point your NATS clients at it and the conditioning happens
 - Tap into existing NATS: monoblok subscribes to selected subjects on a real NATS cluster, treats them as private patchbay input, then emits only the cleaned or derived subjects your rules choose.
 
 ### Tiny and fast
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and load checks are part of the build; dedicated benchmark helpers live in [scripts/](./scripts). The [saved benchmark runs](./bench-results) span **1-18 million msgs/sec** across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples/trends and not capacity promises in the real world. See [running tests](#running-tests) for tests that exercise the router and parser without network.
+monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and load checks are part of the build; dedicated benchmark helpers live in [scripts/](./scripts). The [saved benchmark runs](./bench-results) span up to **2-18 million msgs/sec** across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples/trends and not capacity promises in the real world. See [running tests](#running-tests) for tests that exercise the router and parser without network.
 
 ### Read more
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation for microcontrollers relaying cleaned sensor data into NATS.
