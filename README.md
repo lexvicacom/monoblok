@@ -13,7 +13,7 @@ Signal conditioning, transformation, and routing in a NATS-native message proces
 
 It is not uncommon for systems to contain some _caretaker_ services that subscribe to ingress NATS subjects to clean up and republish a raw stream before the real business starts. This might include rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts and so on. High velocity or miniscule changes don't always have value downstream. monoblok lets you declare that tidying work once, leveraging efficient implementations of common tasks as rules at the broker, instead of writing _rounding logic_ N times in N services.
 
-**Declare it once, as rules, in the broker.**
+**Declare it once, as rules, at the edge.**
 
 monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small S-expression DSL. A walked example lives in [patchbay.edn](./patchbay.edn). It is easy to get started as <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay lends itself well to help from coding assistants</a>.
 
