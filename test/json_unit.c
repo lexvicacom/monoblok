@@ -139,6 +139,33 @@ static void test_yaml_patchbay_sugar(void) {
     pb_arena_free(&arena);
 }
 
+static void test_yaml_config_env_sugar(void) {
+    const char *src =
+        "export:\n"
+        "  servers:\n"
+        "    env: MB_TEST_NATS_SERVERS\n"
+        "  export:\n"
+        "    - env: MB_TEST_EXPORT_FILTER\n";
+
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "env.yml", src, strlen(src));
+    CHECK(r.err == PB_PARSE_OK);
+    CHECK(r.forms.len == 1);
+    pb_values form = r.forms.items[0].seq;
+    check_text(form.items[0].text, "export");
+    check_text(form.items[1].text, "servers");
+    CHECK(form.items[2].kind == PB_LIST);
+    check_text(form.items[2].seq.items[0].text, "env");
+    CHECK(form.items[2].seq.items[1].kind == PB_STRING);
+    check_text(form.items[2].seq.items[1].text, "MB_TEST_NATS_SERVERS");
+    check_text(form.items[3].text, "export");
+    CHECK(form.items[4].kind == PB_VECTOR);
+    CHECK(form.items[4].seq.items[0].kind == PB_LIST);
+    check_text(form.items[4].seq.items[0].seq.items[0].text, "env");
+    check_text(form.items[4].seq.items[0].seq.items[1].text, "MB_TEST_EXPORT_FILTER");
+    pb_arena_free(&arena);
+}
+
 static void test_yaml_invalid_inputs(void) {
     const char *src = "on:\n  - sub: car.*.rpm\n    thread:\n      from: payload-float\n";
     pb_arena arena = {0};
@@ -152,4 +179,5 @@ TEST_MAIN(json,
           test_json_single_form_and_special_objects,
           test_json_invalid_inputs,
           test_yaml_patchbay_sugar,
+          test_yaml_config_env_sugar,
           test_yaml_invalid_inputs)

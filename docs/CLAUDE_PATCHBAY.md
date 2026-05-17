@@ -134,7 +134,9 @@ every list dispatches on its head symbol (`hold-off`, `publish`, `+`,
 etc.) - unknown heads error. Inside the `(lvc ...)`, `(export ...)`,
 deprecated `(bridge ...)`, and `(import ...)` forms, after a keyword like
 `:servers`, `:export`, or `:subject`, a list is a literal sequence of elements (e.g. servers to
-try when connecting). Same parser, different consumer.
+try when connecting). The exception is `(env "NAME")` in top-level config
+string positions; that is a load-time environment lookup, not an evaluator
+form. Same parser, different consumer.
 
 For unambiguous data inside a body, write a vector with square
 brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors self-evaluate
@@ -297,6 +299,10 @@ also accept the legacy `(...)` list syntax, but `[...]` is the
 recommended form. LVC follows the same recommendation:
 `(lvc ["sensors.>" "alerts.>"])`, with legacy `(lvc "sensors.>")`
 still accepted.
+
+String-valued top-level config positions can use `(env "NAME")`, for example
+`:servers (env "NATS_SERVERS")` or `:token (env "NATS_TOKEN")`. Env values are
+read once at patchbay load time, must be non-empty, and are not comma-split.
 
 ## Import form (optional, zero or one at top level)
 

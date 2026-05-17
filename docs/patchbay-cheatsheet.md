@@ -7,7 +7,7 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 | form | meaning |
 |------|---------|
 | `(on FILTER [:reentrant true] BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. `:reentrant true` (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8. |
-| `(lvc [FILTER ...])` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings. Legacy `(lvc FILTER ...)` is accepted. |
+| `(lvc [FILTER ...])` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings or `(env "NAME")`. Legacy `(lvc FILTER ...)` is accepted. |
 | `(export :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. Deprecated `(bridge ...)` is accepted as an alias. See export keywords below. |
 | `(import :servers ... :subject ...)` | optional, zero or one. Inbound NATS tap into patchbay. See import keywords below. |
 
@@ -26,6 +26,8 @@ arrays are calls, the first array item is always the operator symbol,
 object arguments become keyword options, and
 `"subject"` / `"payload"` / `"payload-float"` / `"payload-int"` become
 symbols in rule expressions.
+In top-level config string positions, YAML `env: NAME` lowers to
+EDN `(env "NAME")`.
 
 | EDN | JSON |
 |-----|------|
@@ -186,6 +188,10 @@ A single optional `(export ...)` form at top level configures the
 outbound NATS forwarder. Deprecated `(bridge ...)` is still accepted as
 a compatibility alias. Counters remain `$STATS.bridge.published` /
 `.dropped` on the normal stats tick.
+
+String-valued config fields can use `(env "NAME")`; YAML uses
+`env: NAME`. Env values are read once at patchbay load time, must be
+non-empty, and are not comma-split.
 
 | keyword | type | meaning |
 |---------|------|---------|

@@ -10,6 +10,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct publish_ctx {
     pb_program *program;
@@ -56,16 +57,52 @@ static bool lvc_vec_append(pb_program *program, pb_slice filter) {
     return true;
 }
 
-static bool load_lvc_filter_value(pb_program *program, pb_value value) {
+static bool value_is_env_form(pb_value value) {
+    return value.kind == PB_LIST &&
+           value.seq.len == 2 &&
+           value.seq.items[0].kind == PB_SYMBOL &&
+           pb_slice_eq_lit(value.seq.items[0].text, "env");
+}
+
+static bool load_config_string(pb_program *program, pb_value value, const char *form, const char *name, pb_slice *out) {
     if (value.kind != PB_STRING) {
-        fprintf(stderr, "patchbay: lvc filters must be strings\n");
-        return false;
+        if (!value_is_env_form(value) || value.seq.items[1].kind != PB_STRING || value.seq.items[1].text.len == 0) {
+            fprintf(stderr, "patchbay: %s :%s expects string or (env \"NAME\")\n", form, name);
+            return false;
+        }
+        pb_slice env_name = value.seq.items[1].text;
+        char *name_buf = malloc(env_name.len + 1);
+        if (name_buf == NULL) {
+            return false;
+        }
+        memcpy(name_buf, env_name.ptr, env_name.len);
+        name_buf[env_name.len] = '\0';
+        const char *env_value = getenv(name_buf);
+        free(name_buf);
+        if (env_value == NULL) {
+            env_value = "";
+        }
+        const size_t env_len = strlen(env_value);
+        char *owned = pb_arena_memdup(&program->parse_arena, env_value, env_len);
+        if (owned == NULL) {
+            return false;
+        }
+        value = (pb_value){.kind = PB_STRING, .text = {.ptr = owned, .len = env_len}};
     }
     if (value.text.len == 0) {
-        fprintf(stderr, "patchbay: lvc filter must not be empty\n");
+        fprintf(stderr, "patchbay: %s :%s must not be empty\n", form, name);
         return false;
     }
-    return lvc_vec_append(program, value.text);
+    *out = value.text;
+    return true;
+}
+
+static bool load_lvc_filter_value(pb_program *program, pb_value value) {
+    pb_slice filter = {0};
+    if (!load_config_string(program, value, "lvc", "filter", &filter)) {
+        return false;
+    }
+    return lvc_vec_append(program, filter);
 }
 
 static bool load_lvc_form(pb_program *program, pb_values items) {
@@ -100,19 +137,6 @@ static bool slice_vec_append(pb_slice **items, size_t *len, size_t *cap, pb_slic
     }
     (*items)[*len] = value;
     *len += 1;
-    return true;
-}
-
-static bool load_remote_string(pb_value value, const char *form, const char *name, pb_slice *out) {
-    if (value.kind != PB_STRING) {
-        fprintf(stderr, "patchbay: %s :%s expects string\n", form, name);
-        return false;
-    }
-    if (value.text.len == 0) {
-        fprintf(stderr, "patchbay: %s :%s must not be empty\n", form, name);
-        return false;
-    }
-    *out = value.text;
     return true;
 }
 
@@ -165,16 +189,16 @@ static bool load_remote_size(pb_value value, const char *form, const char *name,
     return true;
 }
 
-static bool load_remote_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *form, const char *name) {
-    if (value.kind == PB_STRING) {
-        if (value.text.len == 0) {
-            fprintf(stderr, "patchbay: %s :%s values must not be empty\n", form, name);
+static bool load_remote_list(pb_program *program, pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *form, const char *name) {
+    if (value.kind == PB_STRING || value_is_env_form(value)) {
+        pb_slice single = {0};
+        if (!load_config_string(program, value, form, name, &single)) {
             return false;
         }
-        return slice_vec_append(out, len, cap, value.text);
+        return slice_vec_append(out, len, cap, single);
     }
     if (value.kind != PB_VECTOR && value.kind != PB_LIST) {
-        fprintf(stderr, "patchbay: %s :%s expects string or vector of strings\n", form, name);
+        fprintf(stderr, "patchbay: %s :%s expects string, (env \"NAME\"), or vector/list of strings\n", form, name);
         return false;
     }
     if (value.seq.len == 0) {
@@ -182,11 +206,11 @@ static bool load_remote_list(pb_slice **out, size_t *len, size_t *cap, pb_value 
         return false;
     }
     for (size_t i = 0; i < value.seq.len; i += 1) {
-        if (value.seq.items[i].kind != PB_STRING || value.seq.items[i].text.len == 0) {
-            fprintf(stderr, "patchbay: %s :%s values must be non-empty strings\n", form, name);
+        pb_slice item = {0};
+        if (!load_config_string(program, value.seq.items[i], form, name, &item)) {
             return false;
         }
-        if (!slice_vec_append(out, len, cap, value.seq.items[i].text)) {
+        if (!slice_vec_append(out, len, cap, item)) {
             return false;
         }
     }
@@ -201,10 +225,6 @@ static const char *export_config_name(pb_slice head) {
     return pb_slice_eq_lit(head, "export") ? "export" : "bridge";
 }
 
-static bool load_bridge_string(pb_value value, const char *form_name, const char *name, pb_slice *out) {
-    return load_remote_string(value, form_name, name, out);
-}
-
 static bool load_bridge_bool(pb_value value, const char *form_name, const char *name, bool *out) {
     return load_remote_bool(value, form_name, name, out);
 }
@@ -215,10 +235,6 @@ static bool load_bridge_i64(pb_value value, const char *form_name, const char *n
 
 static bool load_bridge_int(pb_value value, const char *form_name, const char *name, int *out) {
     return load_remote_int(value, form_name, name, out);
-}
-
-static bool load_bridge_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *form_name, const char *name) {
-    return load_remote_list(out, len, cap, value, form_name, name);
 }
 
 static bool load_bridge_form(pb_program *program, pb_values items, const char *form_name) {
@@ -241,35 +257,35 @@ static bool load_bridge_form(pb_program *program, pb_values items, const char *f
         pb_slice key = items.items[i].text;
         pb_value value = items.items[i + 1];
         if (pb_slice_eq_lit(key, "servers")) {
-            if (!load_bridge_list(&bridge.servers, &bridge.servers_len, &bridge.servers_cap, value, form_name, "servers")) {
+            if (!load_remote_list(program, &bridge.servers, &bridge.servers_len, &bridge.servers_cap, value, form_name, "servers")) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "export")) {
-            if (!load_bridge_list(&bridge.exports, &bridge.exports_len, &bridge.exports_cap, value, form_name, "export")) {
+            if (!load_remote_list(program, &bridge.exports, &bridge.exports_len, &bridge.exports_cap, value, form_name, "export")) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "name")) {
-            if (!load_bridge_string(value, form_name, "name", &bridge.name)) {
+            if (!load_config_string(program, value, form_name, "name", &bridge.name)) {
                 goto fail;
             }
             bridge.has_name = true;
         } else if (pb_slice_eq_lit(key, "creds")) {
-            if (!load_bridge_string(value, form_name, "creds", &bridge.creds)) {
+            if (!load_config_string(program, value, form_name, "creds", &bridge.creds)) {
                 goto fail;
             }
             bridge.has_creds = true;
         } else if (pb_slice_eq_lit(key, "user")) {
-            if (!load_bridge_string(value, form_name, "user", &bridge.user)) {
+            if (!load_config_string(program, value, form_name, "user", &bridge.user)) {
                 goto fail;
             }
             bridge.has_user = true;
         } else if (pb_slice_eq_lit(key, "password")) {
-            if (!load_bridge_string(value, form_name, "password", &bridge.password)) {
+            if (!load_config_string(program, value, form_name, "password", &bridge.password)) {
                 goto fail;
             }
             bridge.has_password = true;
         } else if (pb_slice_eq_lit(key, "token")) {
-            if (!load_bridge_string(value, form_name, "token", &bridge.token)) {
+            if (!load_config_string(program, value, form_name, "token", &bridge.token)) {
                 goto fail;
             }
             bridge.has_token = true;
@@ -278,17 +294,17 @@ static bool load_bridge_form(pb_program *program, pb_values items, const char *f
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "tls-ca")) {
-            if (!load_bridge_string(value, form_name, "tls-ca", &bridge.tls_ca)) {
+            if (!load_config_string(program, value, form_name, "tls-ca", &bridge.tls_ca)) {
                 goto fail;
             }
             bridge.has_tls_ca = true;
         } else if (pb_slice_eq_lit(key, "tls-cert")) {
-            if (!load_bridge_string(value, form_name, "tls-cert", &bridge.tls_cert)) {
+            if (!load_config_string(program, value, form_name, "tls-cert", &bridge.tls_cert)) {
                 goto fail;
             }
             bridge.has_tls_cert = true;
         } else if (pb_slice_eq_lit(key, "tls-key")) {
-            if (!load_bridge_string(value, form_name, "tls-key", &bridge.tls_key)) {
+            if (!load_config_string(program, value, form_name, "tls-key", &bridge.tls_key)) {
                 goto fail;
             }
             bridge.has_tls_key = true;
@@ -339,10 +355,6 @@ fail:
     return false;
 }
 
-static bool load_import_string(pb_value value, const char *name, pb_slice *out) {
-    return load_remote_string(value, "import", name, out);
-}
-
 static bool load_import_bool(pb_value value, const char *name, bool *out) {
     return load_remote_bool(value, "import", name, out);
 }
@@ -357,10 +369,6 @@ static bool load_import_int(pb_value value, const char *name, int *out) {
 
 static bool load_import_size(pb_value value, const char *name, size_t *out) {
     return load_remote_size(value, "import", name, out);
-}
-
-static bool load_import_list(pb_slice **out, size_t *len, size_t *cap, pb_value value, const char *name) {
-    return load_remote_list(out, len, cap, value, "import", name);
 }
 
 static bool load_import_form(pb_program *program, pb_values items) {
@@ -383,35 +391,35 @@ static bool load_import_form(pb_program *program, pb_values items) {
         pb_slice key = items.items[i].text;
         pb_value value = items.items[i + 1];
         if (pb_slice_eq_lit(key, "servers")) {
-            if (!load_import_list(&importer.servers, &importer.servers_len, &importer.servers_cap, value, "servers")) {
+            if (!load_remote_list(program, &importer.servers, &importer.servers_len, &importer.servers_cap, value, "import", "servers")) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "subject") || pb_slice_eq_lit(key, "subjects")) {
-            if (!load_import_list(&importer.subjects, &importer.subjects_len, &importer.subjects_cap, value, "subject")) {
+            if (!load_remote_list(program, &importer.subjects, &importer.subjects_len, &importer.subjects_cap, value, "import", "subject")) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "name")) {
-            if (!load_import_string(value, "name", &importer.name)) {
+            if (!load_config_string(program, value, "import", "name", &importer.name)) {
                 goto fail;
             }
             importer.has_name = true;
         } else if (pb_slice_eq_lit(key, "creds")) {
-            if (!load_import_string(value, "creds", &importer.creds)) {
+            if (!load_config_string(program, value, "import", "creds", &importer.creds)) {
                 goto fail;
             }
             importer.has_creds = true;
         } else if (pb_slice_eq_lit(key, "user")) {
-            if (!load_import_string(value, "user", &importer.user)) {
+            if (!load_config_string(program, value, "import", "user", &importer.user)) {
                 goto fail;
             }
             importer.has_user = true;
         } else if (pb_slice_eq_lit(key, "password")) {
-            if (!load_import_string(value, "password", &importer.password)) {
+            if (!load_config_string(program, value, "import", "password", &importer.password)) {
                 goto fail;
             }
             importer.has_password = true;
         } else if (pb_slice_eq_lit(key, "token")) {
-            if (!load_import_string(value, "token", &importer.token)) {
+            if (!load_config_string(program, value, "import", "token", &importer.token)) {
                 goto fail;
             }
             importer.has_token = true;
@@ -420,17 +428,17 @@ static bool load_import_form(pb_program *program, pb_values items) {
                 goto fail;
             }
         } else if (pb_slice_eq_lit(key, "tls-ca")) {
-            if (!load_import_string(value, "tls-ca", &importer.tls_ca)) {
+            if (!load_config_string(program, value, "import", "tls-ca", &importer.tls_ca)) {
                 goto fail;
             }
             importer.has_tls_ca = true;
         } else if (pb_slice_eq_lit(key, "tls-cert")) {
-            if (!load_import_string(value, "tls-cert", &importer.tls_cert)) {
+            if (!load_config_string(program, value, "import", "tls-cert", &importer.tls_cert)) {
                 goto fail;
             }
             importer.has_tls_cert = true;
         } else if (pb_slice_eq_lit(key, "tls-key")) {
-            if (!load_import_string(value, "tls-key", &importer.tls_key)) {
+            if (!load_config_string(program, value, "import", "tls-key", &importer.tls_key)) {
                 goto fail;
             }
             importer.has_tls_key = true;

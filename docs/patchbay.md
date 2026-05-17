@@ -72,7 +72,8 @@ YAML subset. It is also lowered directly into the same patchbay AST:
 YAML never evaluates and no EDN/JSON text is generated internally.
 Supported shapes are block maps/lists, flow arrays for call forms,
 quoted or unquoted scalars, numbers, booleans, nulls, top-level `on`,
-`lvc`, `export`, `bridge`, and `import`.
+`lvc`, `export`, `bridge`, and `import`. In top-level config string
+positions, `env: NAME` lowers to `(env "NAME")`.
 
 ```yaml
 on:
@@ -127,7 +128,9 @@ appears*, not by a sigil:
   `:servers`, `:export`, or `:subject`, a list is read as a
   literal sequence of values. `(:servers ("nats://a:4222" "nats://b:4222") ...)` is a
   two-element list of strings, not a call to `nats://a:4222`. Same
-  parser, different consumer.
+  parser, different consumer. The one special list in config string
+  positions is `(env "NAME")`, which reads an environment variable at
+  patchbay load time.
 
 For unambiguous data-as-data inside a rule body, write a vector with
 square brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors
@@ -179,6 +182,29 @@ Both forms accept the same connection keywords: `:creds`, `:user` /
 messages carrying monoblok's `x-monoblok` header, useful when export
 and import touch the same cluster. `:max-pending` bounds the
 cross-thread import queue; the default is 4096 messages.
+
+Top-level config string values may be written as `(env "NAME")`.
+This is load-time only, not a rule-body form, and it reads exactly one
+environment variable as one string. Missing or empty variables fail the
+same non-empty validation as `""`; values are not split on commas:
+
+```edn
+(export
+  :servers (env "NATS_SERVERS")
+  :token   (env "NATS_TOKEN")
+  :export  ["sensors.>"])
+```
+
+In YAML config, write the same value as `env: NAME`:
+
+```yaml
+export:
+  servers:
+    env: NATS_SERVERS
+  token:
+    env: NATS_TOKEN
+  export: [sensors.>]
+```
 
 ## Values
 

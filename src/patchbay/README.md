@@ -26,6 +26,10 @@ Patchbay code is intentionally shallow and direct. The main pieces are:
 Special forms that need raw unevaluated arguments belong in `pb_eval.c`, not
 `pb_forms.c`. Normal forms receive already-evaluated arguments.
 
+`(env "NAME")` is deliberately not an evaluator form. It is a load-time string
+source consumed by top-level config readers in `pb_program.c`; YAML `env: NAME`
+lowers to the same AST shape.
+
 ## Result Helpers
 
 Use `ok(value)` for successful values, `nil()` for successful nil results, and

@@ -6,6 +6,8 @@
 #include "router.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static bool discard_publish(void *ctx, pb_slice subject, pb_slice payload) {
     (void)ctx;
@@ -22,6 +24,74 @@ static bool is_export_config_head(pb_slice head) {
 
 static const char *export_config_name(pb_slice head) {
     return pb_slice_eq_lit(head, "export") ? "export" : "bridge";
+}
+
+static bool value_is_env_form(pb_value value) {
+    return value.kind == PB_LIST &&
+           value.seq.len == 2 &&
+           value.seq.items[0].kind == PB_SYMBOL &&
+           pb_slice_eq_lit(value.seq.items[0].text, "env");
+}
+
+static bool env_value_nonempty(pb_slice name, bool *out) {
+    char *name_buf = malloc(name.len + 1);
+    if (name_buf == NULL) {
+        return false;
+    }
+    memcpy(name_buf, name.ptr, name.len);
+    name_buf[name.len] = '\0';
+    const char *value = getenv(name_buf);
+    free(name_buf);
+    *out = value != NULL && value[0] != '\0';
+    return true;
+}
+
+static bool validate_config_string(pb_value value, const char *form_name, pb_slice key) {
+    if (value.kind == PB_STRING) {
+        if (value.text.len != 0) {
+            return true;
+        }
+        fprintf(stderr, "validate: %s :%.*s must not be empty\n", form_name, (int)key.len, key.ptr);
+        return false;
+    }
+    if (value_is_env_form(value)) {
+        if (value.seq.items[1].kind != PB_STRING || value.seq.items[1].text.len == 0) {
+            fprintf(stderr, "validate: %s :%.*s expects non-empty string or (env \"NAME\")\n", form_name, (int)key.len, key.ptr);
+            return false;
+        }
+        bool nonempty = false;
+        if (!env_value_nonempty(value.seq.items[1].text, &nonempty)) {
+            return false;
+        }
+        if (!nonempty) {
+            fprintf(stderr, "validate: %s :%.*s must not be empty\n", form_name, (int)key.len, key.ptr);
+            return false;
+        }
+        return true;
+    }
+    fprintf(stderr, "validate: %s :%.*s expects non-empty string or (env \"NAME\")\n", form_name, (int)key.len, key.ptr);
+    return false;
+}
+
+static bool validate_config_string_list(pb_value value, const char *form_name, pb_slice key) {
+    if (value.kind == PB_STRING || value_is_env_form(value)) {
+        return validate_config_string(value, form_name, key);
+    }
+    if (value.kind != PB_VECTOR && value.kind != PB_LIST) {
+        fprintf(stderr, "validate: %s :%.*s expects string, (env \"NAME\"), or vector/list of strings\n", form_name,
+                (int)key.len, key.ptr);
+        return false;
+    }
+    if (value.seq.len == 0) {
+        fprintf(stderr, "validate: %s :%.*s must not be empty\n", form_name, (int)key.len, key.ptr);
+        return false;
+    }
+    for (size_t i = 0; i < value.seq.len; i += 1) {
+        if (!validate_config_string(value.seq.items[i], form_name, key)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool validate_on_form(pb_value form, size_t *rule_count) {
@@ -42,17 +112,17 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                 fprintf(stderr, "validate: lvc vector must not be empty\n");
                 return false;
             }
+            pb_slice key = {.ptr = "filter", .len = sizeof "filter" - 1};
             for (size_t i = 0; i < filters.len; i += 1) {
-                if (filters.items[i].kind != PB_STRING || filters.items[i].text.len == 0) {
-                    fprintf(stderr, "validate: lvc filters must be non-empty strings\n");
+                if (!validate_config_string(filters.items[i], "lvc", key)) {
                     return false;
                 }
             }
             return true;
         }
+        pb_slice key = {.ptr = "filter", .len = sizeof "filter" - 1};
         for (size_t i = 1; i < items.len; i += 1) {
-            if (items.items[i].kind != PB_STRING || items.items[i].text.len == 0) {
-                fprintf(stderr, "validate: lvc filters must be non-empty strings\n");
+            if (!validate_config_string(items.items[i], "lvc", key)) {
                 return false;
             }
         }
@@ -76,28 +146,8 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                 if (pb_slice_eq_lit(key, "servers")) {
                     has_servers = true;
                 }
-                if (value.kind == PB_STRING) {
-                    if (value.text.len == 0) {
-                        fprintf(stderr, "validate: %s :%.*s must not be empty\n", form_name, (int)key.len, key.ptr);
-                        return false;
-                    }
-                    continue;
-                }
-                if (value.kind != PB_VECTOR && value.kind != PB_LIST) {
-                    fprintf(stderr, "validate: %s :%.*s expects string or vector of strings\n", form_name,
-                            (int)key.len, key.ptr);
+                if (!validate_config_string_list(value, form_name, key)) {
                     return false;
-                }
-                if (value.seq.len == 0) {
-                    fprintf(stderr, "validate: %s :%.*s must not be empty\n", form_name, (int)key.len, key.ptr);
-                    return false;
-                }
-                for (size_t j = 0; j < value.seq.len; j += 1) {
-                    if (value.seq.items[j].kind != PB_STRING || value.seq.items[j].text.len == 0) {
-                        fprintf(stderr, "validate: %s :%.*s values must be non-empty strings\n", form_name,
-                                (int)key.len, key.ptr);
-                        return false;
-                    }
                 }
             } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
                        pb_slice_eq_lit(key, "origin-header")) {
@@ -114,9 +164,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
             } else if (pb_slice_eq_lit(key, "name") || pb_slice_eq_lit(key, "creds") || pb_slice_eq_lit(key, "user") ||
                        pb_slice_eq_lit(key, "password") || pb_slice_eq_lit(key, "token") || pb_slice_eq_lit(key, "tls-ca") ||
                        pb_slice_eq_lit(key, "tls-cert") || pb_slice_eq_lit(key, "tls-key")) {
-                if (value.kind != PB_STRING || value.text.len == 0) {
-                    fprintf(stderr, "validate: %s :%.*s expects non-empty string\n", form_name, (int)key.len,
-                            key.ptr);
+                if (!validate_config_string(value, form_name, key)) {
                     return false;
                 }
             } else {
@@ -150,28 +198,8 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                 } else {
                     has_subjects = true;
                 }
-                if (value.kind == PB_STRING) {
-                    if (value.text.len == 0) {
-                        fprintf(stderr, "validate: import :%.*s must not be empty\n", (int)key.len, key.ptr);
-                        return false;
-                    }
-                    continue;
-                }
-                if (value.kind != PB_VECTOR && value.kind != PB_LIST) {
-                    fprintf(stderr, "validate: import :%.*s expects string or vector of strings\n", (int)key.len,
-                            key.ptr);
+                if (!validate_config_string_list(value, "import", key)) {
                     return false;
-                }
-                if (value.seq.len == 0) {
-                    fprintf(stderr, "validate: import :%.*s must not be empty\n", (int)key.len, key.ptr);
-                    return false;
-                }
-                for (size_t j = 0; j < value.seq.len; j += 1) {
-                    if (value.seq.items[j].kind != PB_STRING || value.seq.items[j].text.len == 0) {
-                        fprintf(stderr, "validate: import :%.*s values must be non-empty strings\n", (int)key.len,
-                                key.ptr);
-                        return false;
-                    }
                 }
             } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
                        pb_slice_eq_lit(key, "origin-header")) {
@@ -189,8 +217,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
             } else if (pb_slice_eq_lit(key, "name") || pb_slice_eq_lit(key, "creds") || pb_slice_eq_lit(key, "user") ||
                        pb_slice_eq_lit(key, "password") || pb_slice_eq_lit(key, "token") || pb_slice_eq_lit(key, "tls-ca") ||
                        pb_slice_eq_lit(key, "tls-cert") || pb_slice_eq_lit(key, "tls-key")) {
-                if (value.kind != PB_STRING || value.text.len == 0) {
-                    fprintf(stderr, "validate: import :%.*s expects non-empty string\n", (int)key.len, key.ptr);
+                if (!validate_config_string(value, "import", key)) {
                     return false;
                 }
             } else {

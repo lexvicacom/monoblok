@@ -209,6 +209,100 @@ static void test_export_config_loads(void) {
     pb_program_free(&program);
 }
 
+static void test_config_env_values_load(void) {
+    CHECK(setenv("MB_TEST_PB_LVC", "hot.>", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_SERVER", "nats://env:4222", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_NAME", "env-name", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_EXPORT", "telemetry.>", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_TOKEN", "env-token", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_SUBJECT", "raw.>", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_CREDS", "/tmp/env.creds", 1) == 0);
+
+    pb_program program = {0};
+    const char *src =
+        "(lvc (env \"MB_TEST_PB_LVC\"))\n"
+        "(export :servers (env \"MB_TEST_PB_SERVER\")\n"
+        "        :name (env \"MB_TEST_PB_NAME\")\n"
+        "        :export [(env \"MB_TEST_PB_EXPORT\")]\n"
+        "        :token (env \"MB_TEST_PB_TOKEN\"))\n"
+        "(import :servers [(env \"MB_TEST_PB_SERVER\")]\n"
+        "        :subject (env \"MB_TEST_PB_SUBJECT\")\n"
+        "        :creds (env \"MB_TEST_PB_CREDS\"))\n";
+    CHECK(pb_program_load_source(&program, "<test>", src, strlen(src)));
+    CHECK(program.lvc.len == 1);
+    CHECK(slice_is(program.lvc.filters[0], "hot.>"));
+    CHECK(program.bridge.present);
+    CHECK(program.bridge.servers_len == 1);
+    CHECK(program.bridge.exports_len == 1);
+    CHECK(slice_is(program.bridge.servers[0], "nats://env:4222"));
+    CHECK(slice_is(program.bridge.exports[0], "telemetry.>"));
+    CHECK(program.bridge.has_name);
+    CHECK(slice_is(program.bridge.name, "env-name"));
+    CHECK(program.bridge.has_token);
+    CHECK(slice_is(program.bridge.token, "env-token"));
+    CHECK(program.importer.present);
+    CHECK(program.importer.servers_len == 1);
+    CHECK(program.importer.subjects_len == 1);
+    CHECK(slice_is(program.importer.servers[0], "nats://env:4222"));
+    CHECK(slice_is(program.importer.subjects[0], "raw.>"));
+    CHECK(program.importer.has_creds);
+    CHECK(slice_is(program.importer.creds, "/tmp/env.creds"));
+    pb_program_free(&program);
+
+    unsetenv("MB_TEST_PB_LVC");
+    unsetenv("MB_TEST_PB_SERVER");
+    unsetenv("MB_TEST_PB_NAME");
+    unsetenv("MB_TEST_PB_EXPORT");
+    unsetenv("MB_TEST_PB_TOKEN");
+    unsetenv("MB_TEST_PB_SUBJECT");
+    unsetenv("MB_TEST_PB_CREDS");
+}
+
+static void test_missing_config_env_fails(void) {
+    unsetenv("MB_TEST_PB_MISSING");
+    pb_program program = {0};
+    const char *src = "(export :servers (env \"MB_TEST_PB_MISSING\"))\n";
+    CHECK(!pb_program_load_source(&program, "<test>", src, strlen(src)));
+    pb_program_free(&program);
+}
+
+static void test_yaml_config_env_values_load(void) {
+    CHECK(setenv("MB_TEST_PB_YAML_SERVER", "nats://yaml:4222", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_YAML_EXPORT", "yaml.>", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_YAML_NAME", "yaml-name", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_YAML_SUBJECT", "raw.yaml.>", 1) == 0);
+
+    pb_program program = {0};
+    const char *src =
+        "export:\n"
+        "  servers:\n"
+        "    env: MB_TEST_PB_YAML_SERVER\n"
+        "  export:\n"
+        "    - env: MB_TEST_PB_YAML_EXPORT\n"
+        "  name:\n"
+        "    env: MB_TEST_PB_YAML_NAME\n"
+        "import:\n"
+        "  servers:\n"
+        "    - env: MB_TEST_PB_YAML_SERVER\n"
+        "  subject:\n"
+        "    env: MB_TEST_PB_YAML_SUBJECT\n";
+    CHECK(pb_program_load_source(&program, "env.yml", src, strlen(src)));
+    CHECK(program.bridge.present);
+    CHECK(slice_is(program.bridge.servers[0], "nats://yaml:4222"));
+    CHECK(slice_is(program.bridge.exports[0], "yaml.>"));
+    CHECK(program.bridge.has_name);
+    CHECK(slice_is(program.bridge.name, "yaml-name"));
+    CHECK(program.importer.present);
+    CHECK(slice_is(program.importer.servers[0], "nats://yaml:4222"));
+    CHECK(slice_is(program.importer.subjects[0], "raw.yaml.>"));
+    pb_program_free(&program);
+
+    unsetenv("MB_TEST_PB_YAML_SERVER");
+    unsetenv("MB_TEST_PB_YAML_EXPORT");
+    unsetenv("MB_TEST_PB_YAML_NAME");
+    unsetenv("MB_TEST_PB_YAML_SUBJECT");
+}
+
 static void test_deprecated_bridge_config_loads(void) {
     pb_program program = {0};
     load_program(&program, "(bridge :servers [\"nats://a:4222\"]\n"
@@ -266,6 +360,9 @@ TEST_MAIN(program,
           test_rule_stats_count_emits_and_suppression,
           test_lvc_filters_load,
           test_export_config_loads,
+          test_config_env_values_load,
+          test_missing_config_env_fails,
+          test_yaml_config_env_values_load,
           test_deprecated_bridge_config_loads,
           test_export_requires_servers,
           test_import_config_loads,

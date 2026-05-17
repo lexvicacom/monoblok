@@ -779,7 +779,34 @@ static bool lower_expr(pb_arena *arena, y_node *n, pb_value *out) {
     return lower_body(arena, n, out);
 }
 
+static bool lower_env_config_value(pb_arena *arena, y_node *n, pb_value *out) {
+    if (n->kind != Y_MAP || n->pair_len != 1) {
+        return false;
+    }
+    y_pair *p = map_find(n, "env");
+    if (p == NULL || p->value->kind != Y_SCALAR || p->value->scalar_kind != Y_TEXT || p->value->text.len == 0) {
+        return false;
+    }
+
+    pb_build_vec form = {0};
+    pb_value head = {0};
+    pb_value name = {0};
+    if (!arena_text_lit(arena, PB_SYMBOL, "env", &head) ||
+        !arena_text(arena, PB_STRING, p->value->text, &name) ||
+        !pb_vec_push(&form, head) ||
+        !pb_vec_push(&form, name)) {
+        free(form.items);
+        return false;
+    }
+    const bool ok = freeze_pb_vec(arena, &form, PB_LIST, out);
+    free(form.items);
+    return ok;
+}
+
 static bool lower_config_value(pb_arena *arena, y_node *n, pb_value *out) {
+    if (n->kind == Y_MAP) {
+        return lower_env_config_value(arena, n, out);
+    }
     if (n->kind == Y_LIST) {
         pb_build_vec v = {0};
         for (size_t i = 0; i < n->len; i += 1) {
