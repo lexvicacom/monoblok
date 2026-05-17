@@ -3,7 +3,10 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: []
+    branches:
+      - main
+    tags-ignore:
+      - '**'
     paths-ignore:
       - '**/*.md'
   pull_request:
