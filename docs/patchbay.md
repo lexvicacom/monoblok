@@ -145,8 +145,9 @@ cross-thread import queue; the default is 4096 messages.
 
 ## Values
 
-`nil`, booleans (`true` / `false`), numbers (parsed as `f64`),
-strings (`"..."`), symbols, lists `(...)`, and vectors `[...]`.
+Patchbay values have a small set of runtime kinds: `nil`, booleans
+(`true` / `false`), numbers (stored as C `double` values), strings
+(`"..."`), symbols, lists `(...)`, and vectors `[...]`.
 Truthiness: `nil` and `false` are falsy, everything else (including
 `0`, `""`, and an empty vector) is truthy.
 
@@ -154,12 +155,12 @@ Truthiness: `nil` and `false` are falsy, everything else (including
 
 Bare symbols inside a body that resolve against the current message:
 
-| symbol          | type     | value                              |
-|-----------------|----------|------------------------------------|
-| `subject`       | string   | the incoming subject               |
-| `payload`       | string   | the raw payload bytes              |
-| `payload-float` | number   | `payload` parsed as a float (errors if not numeric) |
-| `payload-int`   | number   | `payload` parsed as a signed integer (errors on non-integer input) |
+| symbol          | value kind | value                              |
+|-----------------|------------|------------------------------------|
+| `subject`       | string     | the incoming subject               |
+| `payload`       | string     | the raw payload bytes              |
+| `payload-float` | number     | `payload` parsed as a floating-point number (errors if not numeric) |
+| `payload-int`   | number     | `payload` parsed as an integer and returned as a number (errors on non-integer input) |
 
 ## Special forms
 
@@ -179,12 +180,13 @@ Evaluate their arguments lazily / with short-circuiting.
 ## Comparisons and logic
 
 All comparisons are chained: `(< a b c)` means `a < b && b < c`.
-Numeric comparisons coerce string args via `parseFloat`; `=` is
-tag-strict (a `number` never equals a `string`).
+Numeric comparisons coerce string args by parsing them as numbers; `=`
+only matches values of the same kind (a `number` never equals a
+`string`).
 
 | form              | notes                                                    |
 |-------------------|----------------------------------------------------------|
-| `(= a b ...)`     | all equal; same-tag, deep-equal for strings/symbols      |
+| `(= a b ...)`     | all equal; same kind, deep-equal for strings/symbols     |
 | `(> a b ...)`     | chained numeric                                          |
 | `(< a b ...)`     | chained numeric                                          |
 | `(>= a b ...)`    | chained numeric                                          |
@@ -241,6 +243,16 @@ carry a trailing `!`. Scan a rule and the bangs are the lines that put
 bytes on the wire; everything else is pure or value-returning.
 Un-banged spellings (`publish`, `publish-to`, `publish-to!`,
 `json-demux`, `count`, `bar`) still work as aliases for now.
+
+A rule body may run more than one effect. Wrap them in `do` when the
+same inbound message should trigger several side effects:
+
+```edn
+(on "MARKET.*"
+  (do
+    (publish! (subject-append "raw") payload)
+    (bar! 60 payload-float)))
+```
 
 `(publish! SUBJECT VALUE)` validates `SUBJECT` as a publishable
 subject (no wildcards, no `$LVC.*`), coerces `VALUE` to its canonical
@@ -529,7 +541,7 @@ share state with `moving-*` even on the same subject.
 | `(variance WINDOW X)`         | number  | population variance of X over WINDOW          |
 
 `rate` requires the `:ms N` form: "rate over the last N samples" has
-no time unit, so passing a bare tick count is a type error. `X` is
+no time unit, so passing a bare tick count is an argument error. `X` is
 evaluated but its value ignored: the op counts pushes, not magnitudes.
 Useful for "events/sec on this subject," "alerts/sec," etc.
 
