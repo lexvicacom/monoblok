@@ -164,12 +164,12 @@ nats pubdemo.sensors.temp 23.5
 nats sub '$LVC.demo.sensors.temp'   # -> prints "23.5" on subscribe
 ```
 
-### Bridge
+### Export
 ```
-(bridge
-   :servers  ("nats://127.0.0.1:4223")
+(export
+   :servers  ["nats://127.0.0.1:4223"]
    :name     "monoblok-prod-1"
-   :export   ("demo.sensors.*.spike" "demo.alerts.>"))
+   :export   ["demo.sensors.*.spike" "demo.alerts.>"])
 ```
 
 You can connect to `demo.monoblok.host:4223` which is a real NATS to observe the above being relayed.

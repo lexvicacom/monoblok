@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end bridge test: start a real nats-server, monoblok pointed at it
-# with a bridge config, publish locally, assert messages land on the remote.
+# End-to-end export test: start a real nats-server, monoblok pointed at it
+# with an export config, publish locally, assert messages land on the remote.
 #
 # Requires: nats-server + the nats CLI on PATH.
 
@@ -33,9 +33,9 @@ if [ ! -x "$BIN" ]; then
 fi
 
 cat > "$PATCHBAY" <<EOF
-(bridge
+(export
   :servers ["nats://127.0.0.1:${REMOTE_PORT}"]
-  :name    "monoblok-bridge-smoke"
+  :name    "monoblok-export-smoke"
   :origin-header true
   :export  ["telemetry.>"])
 
@@ -80,7 +80,7 @@ for _ in $(seq 1 30); do
     sleep 0.1
 done
 
-echo "starting monoblok on :$MONO_PORT with bridge -> :$REMOTE_PORT..."
+echo "starting monoblok on :$MONO_PORT with export -> :$REMOTE_PORT..."
 "$BIN" --port "$MONO_PORT" --patchbay "$PATCHBAY" > /tmp/bridge-smoke-mono.log 2>&1 &
 MONO_PID=$!
 
@@ -95,9 +95,9 @@ if ! kill -0 "$MONO_PID" 2>/dev/null; then
     echo "FAIL: monoblok did not start"; cat /tmp/bridge-smoke-mono.log; exit 1
 fi
 if ! grep -q 'bridge: connected' /tmp/bridge-smoke-mono.log; then
-    echo "FAIL: bridge did not connect within 5s"; cat /tmp/bridge-smoke-mono.log; exit 1
+    echo "FAIL: export client did not connect within 5s"; cat /tmp/bridge-smoke-mono.log; exit 1
 fi
-echo "ok: bridge connected"
+echo "ok: export client connected"
 
 (
     printf 'CONNECT {"headers":true}\r\n'
@@ -145,10 +145,10 @@ echo "ok: unrelated.x filtered by export filters"
 wait "$HDR_PID" 2>/dev/null || true
 HEADER_COUNT=$(tr -d '\r' < /tmp/bridge-smoke-headers.log | grep -ci '^x-monoblok: ' || true)
 if [ "$HEADER_COUNT" -lt "4" ]; then
-    echo "FAIL: expected x-monoblok header on bridged messages, got $HEADER_COUNT"
+    echo "FAIL: expected x-monoblok header on exported messages, got $HEADER_COUNT"
     cat /tmp/bridge-smoke-headers.log; exit 1
 fi
-echo "ok: bridged messages include x-monoblok origin header"
+echo "ok: exported messages include x-monoblok origin header"
 
 # Spot-check the published counter moved.
 (
@@ -160,7 +160,7 @@ echo "ok: bridged messages include x-monoblok origin header"
 if ! kill -0 "$MONO_PID" 2>/dev/null; then
     echo "FAIL: monoblok died"; exit 1
 fi
-echo "ok: daemon still healthy after bridge publishes"
+echo "ok: daemon still healthy after exported publishes"
 
 echo
-echo "bridge smoke test passed."
+echo "export smoke test passed."

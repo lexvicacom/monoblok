@@ -33,7 +33,7 @@ typedef struct pb_rule_bucket {
     pb_rule_ref_list rules;
 } pb_rule_bucket;
 
-// Top-level `(bridge ...)` export-only remote NATS config.
+// Top-level `(export ...)` remote NATS config; deprecated `(bridge ...)` aliases it.
 typedef struct pb_bridge_config {
     pb_slice *servers;
     size_t servers_len;

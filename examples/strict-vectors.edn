@@ -8,6 +8,6 @@
   (when (contains? ["temp" "hum" "batt"] (subject-token 1))
     (publish! (subject-append "seen") payload)))
 
-(bridge
+(export
   :servers ["nats://127.0.0.1:4223"]
   :export  ["sensors.>" "alerts.>"])

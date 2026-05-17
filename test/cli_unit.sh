@@ -13,7 +13,7 @@ trap cleanup EXIT INT TERM
 valid="$tmp/valid.edn"
 valid_config="$tmp/valid-config.edn"
 bad_lvc="$tmp/bad-lvc.edn"
-bad_bridge="$tmp/bad-bridge.edn"
+bad_export="$tmp/bad-export.edn"
 bad_import="$tmp/bad-import.edn"
 bad_on="$tmp/bad-on.edn"
 bad_eval="$tmp/bad-eval.edn"
@@ -26,7 +26,7 @@ EOF
 
 cat > "$valid_config" <<'EOF'
 (lvc [">" "devices.*"])
-(bridge :servers ["nats://127.0.0.1:4222"]
+(export :servers ["nats://127.0.0.1:4222"]
         :export "telemetry.>"
         :tls true
         :tls-skip-verify false
@@ -55,8 +55,8 @@ cat > "$bad_lvc" <<'EOF'
 (lvc [])
 EOF
 
-cat > "$bad_bridge" <<'EOF'
-(bridge :export ["telemetry.>"])
+cat > "$bad_export" <<'EOF'
+(export :export ["telemetry.>"])
 EOF
 
 cat > "$bad_import" <<'EOF'
@@ -97,11 +97,11 @@ if "$bin" --validate "$bad_lvc" > "$tmp/bad-lvc.out" 2> "$tmp/bad-lvc.err"; then
 fi
 grep 'lvc vector must not be empty' "$tmp/bad-lvc.err" >/dev/null
 
-if "$bin" --validate "$bad_bridge" > "$tmp/bad-bridge.out" 2> "$tmp/bad-bridge.err"; then
-    echo "invalid bridge unexpectedly validated" >&2
+if "$bin" --validate "$bad_export" > "$tmp/bad-export.out" 2> "$tmp/bad-export.err"; then
+    echo "invalid export unexpectedly validated" >&2
     exit 1
 fi
-grep 'bridge requires :servers' "$tmp/bad-bridge.err" >/dev/null
+grep 'export requires :servers' "$tmp/bad-export.err" >/dev/null
 
 if "$bin" --validate "$bad_import" > "$tmp/bad-import.out" 2> "$tmp/bad-import.err"; then
     echo "invalid import unexpectedly validated" >&2

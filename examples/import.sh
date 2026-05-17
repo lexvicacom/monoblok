@@ -35,7 +35,20 @@ nats --no-context -s "$REMOTE_URL" sub -d 'raw.>' 2>&1 | awk -v OFS="\t" '
     /^[0-9]+:[0-9]+:[0-9]+ / { next }
     { print $0; fflush() }
 ' >"$TMP/remote-raw.txt" &
-EXTRA_PIDS+=("$!")
+
+nats --no-context -s "$REMOTE_URL" sub -d 'clean.>' 2>&1 | awk -v OFS="\t" '
+    /^\[#[0-9]+\] @ / {
+        line = $0
+        sub(/^\[#[0-9]+\] @ /, "", line)
+        sub(/ Received on "/, "\t", line)
+        sub(/"$/, "", line)
+        if ((getline payload) > 0) { print line, payload; fflush() }
+        next
+    }
+    /^[[:space:]]*$/ { next }
+    /^[0-9]+:[0-9]+:[0-9]+ / { next }
+    { print $0; fflush() }
+' >"$TMP/remote-clean.txt" &
 
 subscribe 'raw.>' local-raw.txt
 subscribe 'clean.>' local-clean.txt
@@ -58,8 +71,10 @@ settle 0.6
 note \
     "Seven raw.temp samples were published to the standalone nats-server on port $REMOTE_PORT." \
     "monoblok imports raw.>, rounds to 1dp, squelches duplicates, and publishes clean.temp locally." \
+    "The clean.> output is exported back to the standalone nats-server." \
     "The local raw.> subscription stays empty because imported raw messages are private patchbay ingress."
 show "remote publishes"              _pubs.log
 show "remote raw.> source stream"    remote-raw.txt
+show "remote clean.> exported stream" remote-clean.txt
 show "local raw.> (private ingress)" local-raw.txt
 show "local clean.> output"          local-clean.txt

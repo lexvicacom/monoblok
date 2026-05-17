@@ -66,7 +66,7 @@ Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
 
 patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and [tinyblok](https://github.com/lexvicacom/tinyblok) on MCUs.
 
-Rules are top-level `(on SUBJECT-FILTER BODY)` forms. Config forms such as `(lvc ...)` and `(bridge ...)` live at top level too. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility.
+Rules are top-level `(on SUBJECT-FILTER BODY)` forms. Config forms such as `(lvc ...)` and `(export ...)` live at top level too. Wildcards are NATS-style: `*` matches one token, `>` matches the tail. EDN is canonical for hand-written patchbays; `.json` files are accepted for tooling compatibility.
 
 
 ```edn
@@ -94,13 +94,13 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 |---------------------------------------------------|-----------------------------------------------------------------|
 | [`sensors.edn`](../examples/sensors.edn)           | round + squelch on a noisy sensor                               |
 | [`office-temp.edn`](../examples/office-temp.edn)   | moving-average alert + all-clear via `transition` and `count!`  |
-| [`ticker.edn`](../examples/ticker.edn)             | market data: round, squelch, big-jump alerts, bridge            |
+| [`ticker.edn`](../examples/ticker.edn)             | market data: round, squelch, big-jump alerts, export            |
 | [`bars.edn`](../examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
 | [`latency-stats.edn`](../examples/latency-stats.edn) | live p50/p95/p99/stddev over a sliding window                 |
 | [`clocked.edn`](../examples/clocked.edn)             | silence detection, debounce, sampling, and clocked aggregates |
 | [`json-frames.edn`](../examples/json-frames.edn)   | `json-demux!` a JSON-emitting device into scalar sub-subjects   |
 | [`rental-car.edn`](../examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
-| [`bridge.edn`](../examples/bridge.edn)             | forward selected subjects to a real NATS server                 |
+| [`bridge.edn`](../examples/bridge.edn)             | export selected subjects to a real NATS server                  |
 | [`demo.edn`](../examples/demo.edn)                 | tour of every primitive on `demo.sensors.*`                     |
 | [`lvc.edn`](../examples/lvc.edn)                   | `$LVC.>` cache replay: a late joiner gets the last value        |
 
@@ -209,10 +209,11 @@ monoblok can forward a subset of local publishes to a real NATS cluster, or
 subscribe to remote subjects and run those messages through patchbay. TLS and
 `.creds` files are supported via vendored [nats.c](https://github.com/nats-io/nats.c).
 
-Zero or one `(bridge ...)` form in the patchbay file configures it:
+Zero or one `(export ...)` form in the patchbay file configures it. The old
+`(bridge ...)` spelling is deprecated but still accepted:
 
 ```edn
-(bridge
+(export
   :servers  ["tls://connect.ngs.global:4222"]
   :creds    "/etc/monoblok/ngs.creds"
   :tls      true

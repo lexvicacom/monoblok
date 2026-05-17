@@ -16,6 +16,14 @@ static bool discard_publish(void *ctx, pb_slice subject, pb_slice payload) {
            !mb_router_subject_has_stats_prefix(mb_subject);
 }
 
+static bool is_export_config_head(pb_slice head) {
+    return pb_slice_eq_lit(head, "bridge") || pb_slice_eq_lit(head, "export");
+}
+
+static const char *export_config_name(pb_slice head) {
+    return pb_slice_eq_lit(head, "export") ? "export" : "bridge";
+}
+
 static bool validate_on_form(pb_value form, size_t *rule_count) {
     if (form.kind != PB_LIST || form.seq.len == 0 || form.seq.items[0].kind != PB_SYMBOL) {
         fprintf(stderr, "validate: top-level form must be a list headed by a symbol\n");
@@ -50,15 +58,16 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
         }
         return true;
     }
-    if (pb_slice_eq_lit(items.items[0].text, "bridge")) {
+    if (is_export_config_head(items.items[0].text)) {
+        const char *form_name = export_config_name(items.items[0].text);
         if (items.len < 3 || (items.len % 2) == 0) {
-            fprintf(stderr, "validate: bridge expects keyword/value options\n");
+            fprintf(stderr, "validate: %s expects keyword/value options\n", form_name);
             return false;
         }
         bool has_servers = false;
         for (size_t i = 1; i < items.len; i += 2) {
             if (items.items[i].kind != PB_KEYWORD) {
-                fprintf(stderr, "validate: bridge option must be keyword\n");
+                fprintf(stderr, "validate: %s option must be keyword\n", form_name);
                 return false;
             }
             pb_slice key = items.items[i].text;
@@ -69,53 +78,54 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                 }
                 if (value.kind == PB_STRING) {
                     if (value.text.len == 0) {
-                        fprintf(stderr, "validate: bridge :%.*s must not be empty\n", (int)key.len, key.ptr);
+                        fprintf(stderr, "validate: %s :%.*s must not be empty\n", form_name, (int)key.len, key.ptr);
                         return false;
                     }
                     continue;
                 }
                 if (value.kind != PB_VECTOR && value.kind != PB_LIST) {
-                    fprintf(stderr, "validate: bridge :%.*s expects string or vector of strings\n", (int)key.len,
-                            key.ptr);
+                    fprintf(stderr, "validate: %s :%.*s expects string or vector of strings\n", form_name,
+                            (int)key.len, key.ptr);
                     return false;
                 }
                 if (value.seq.len == 0) {
-                    fprintf(stderr, "validate: bridge :%.*s must not be empty\n", (int)key.len, key.ptr);
+                    fprintf(stderr, "validate: %s :%.*s must not be empty\n", form_name, (int)key.len, key.ptr);
                     return false;
                 }
                 for (size_t j = 0; j < value.seq.len; j += 1) {
                     if (value.seq.items[j].kind != PB_STRING || value.seq.items[j].text.len == 0) {
-                        fprintf(stderr, "validate: bridge :%.*s values must be non-empty strings\n", (int)key.len,
-                                key.ptr);
+                        fprintf(stderr, "validate: %s :%.*s values must be non-empty strings\n", form_name,
+                                (int)key.len, key.ptr);
                         return false;
                     }
                 }
             } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
                        pb_slice_eq_lit(key, "origin-header")) {
                 if (value.kind != PB_BOOL) {
-                    fprintf(stderr, "validate: bridge :%.*s expects boolean\n", (int)key.len, key.ptr);
+                    fprintf(stderr, "validate: %s :%.*s expects boolean\n", form_name, (int)key.len, key.ptr);
                     return false;
                 }
             } else if (pb_slice_eq_lit(key, "connect-timeout-ms") || pb_slice_eq_lit(key, "ping-interval-ms") ||
                        pb_slice_eq_lit(key, "reconnect-wait-ms") || pb_slice_eq_lit(key, "max-reconnect")) {
                 if (value.kind != PB_NUMBER) {
-                    fprintf(stderr, "validate: bridge :%.*s expects number\n", (int)key.len, key.ptr);
+                    fprintf(stderr, "validate: %s :%.*s expects number\n", form_name, (int)key.len, key.ptr);
                     return false;
                 }
             } else if (pb_slice_eq_lit(key, "name") || pb_slice_eq_lit(key, "creds") || pb_slice_eq_lit(key, "user") ||
                        pb_slice_eq_lit(key, "password") || pb_slice_eq_lit(key, "token") || pb_slice_eq_lit(key, "tls-ca") ||
                        pb_slice_eq_lit(key, "tls-cert") || pb_slice_eq_lit(key, "tls-key")) {
                 if (value.kind != PB_STRING || value.text.len == 0) {
-                    fprintf(stderr, "validate: bridge :%.*s expects non-empty string\n", (int)key.len, key.ptr);
+                    fprintf(stderr, "validate: %s :%.*s expects non-empty string\n", form_name, (int)key.len,
+                            key.ptr);
                     return false;
                 }
             } else {
-                fprintf(stderr, "validate: unknown bridge option: %.*s\n", (int)key.len, key.ptr);
+                fprintf(stderr, "validate: unknown %s option: %.*s\n", form_name, (int)key.len, key.ptr);
                 return false;
             }
         }
         if (!has_servers) {
-            fprintf(stderr, "validate: bridge requires :servers\n");
+            fprintf(stderr, "validate: %s requires :servers\n", form_name);
             return false;
         }
         return true;

@@ -55,7 +55,8 @@ off.
 
 In full monoblok there are also top-level config forms: `(lvc ["filter"
 ...])` opts matching subjects into `$LVC.*` last-value streams, and optional
-`(bridge ...)` forwards local publishes to a remote NATS cluster. Optional
+`(export ...)` forwards local publishes to a remote NATS cluster. Deprecated
+`(bridge ...)` is accepted as a compatibility alias. Optional
 `(import ...)` subscribes to a remote NATS cluster and feeds matching messages
 into patchbay as private ingress. Imported raw subjects are not visible to
 direct monoblok subscribers unless a rule republishes them explicitly.
@@ -80,12 +81,12 @@ comparison, string, subject, state, window, clock, edge, bar, and `publish!`
 forms. This subset works for both runtimes unless a local build disables a form.
 
 Alert the user before using or recommending full monoblok-only features for a
-Tinyblok file. This includes top-level `(lvc ...)` and `(bridge ...)`, daemon
+Tinyblok file. This includes top-level `(lvc ...)` and `(export ...)`, daemon
 or `(import ...)`, daemon flags such as `--snapshot`, runtime patch/config
 loading, dynamic graph edits, server-side subscriptions beyond Tinyblok's fixed
 request subjects, inbound/outbound bridges, LVC/snapshot policy, and
 fleet-management behavior. Tinyblok's vendored core can parse `lvc` and
-`bridge`, but they are not wired into firmware policy.
+`export`/deprecated `bridge`, but they are not wired into firmware policy.
 
 JSON/event-document processing is also outside Patchbay Lite by default.
 Tinyblok can compile `json-get` and `json-demux!` behind
@@ -129,18 +130,17 @@ bare, `nil` / `true` / `false` are literals. Truthiness: only `nil` and
 Unlike Clojure, there is no quote form. Whether a `(...)` is a call
 depends on context, not on a leading `'`. Inside an `(on ...)` body,
 every list dispatches on its head symbol (`hold-off`, `publish`, `+`,
-etc.) - unknown heads error. Inside the `(lvc ...)`, `(bridge ...)`, and `(mixer
-...)` forms, after a keyword like `:servers`, `:export`, or
-`:workers`, a list is a literal sequence of elements (e.g. servers to
-try when connecting). Same parser, different consumer. The mixer is
-documented in [`docs/mixer.md`](./mixer.md).
+etc.) - unknown heads error. Inside the `(lvc ...)`, `(export ...)`,
+deprecated `(bridge ...)`, and `(import ...)` forms, after a keyword like
+`:servers`, `:export`, or `:subject`, a list is a literal sequence of elements (e.g. servers to
+try when connecting). Same parser, different consumer.
 
 For unambiguous data inside a body, write a vector with square
 brackets: `[1 2 3]`, `["red" "green" "blue"]`. Vectors self-evaluate
 (elements eval'd in place, returned as a vector) and never dispatch on
 a head, so they're how you spell a literal collection (it's what
-`contains?` checks for membership against). Config readers (`bridge`,
-`mixer`) accept either `(...)` or `[...]` for keyword-tagged
+`contains?` checks for membership against). Config readers (`export`,
+deprecated `bridge`, `import`) accept either `(...)` or `[...]` for keyword-tagged
 collections; vectors are the recommended form.
 
 ## Bound symbols (the current message)
@@ -273,10 +273,10 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 - Changing `N` in `(moving-avg N ...)` between invocations on the same rule. The first call's `N` wins for the lifetime of the slot.
 - Assuming `first sight` fires an edge. `rising-edge` / `falling-edge` / `transition` all stay quiet until they have seen at least one prior value.
 
-## Bridge form (optional, zero or one at top level)
+## Export form (optional, zero or one at top level)
 
 ```edn
-(bridge
+(export
   :servers ["tls://a.example:4222" "tls://b.example:4222"]
   :creds   "/etc/monoblok/ngs.creds"
   :tls     true
@@ -285,6 +285,7 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
   :export  ["telemetry.>" "alerts.>"])
 ```
 
+Deprecated `(bridge ...)` is still accepted as a compatibility alias.
 Other keywords: `:user` / `:password`, `:token`, `:tls-ca`, `:tls-cert`
 / `:tls-key`, `:tls-skip-verify` (dev only), `:connect-timeout-ms`,
 `:ping-interval-ms`, `:max-reconnect` (-1 unlimited), `:reconnect-wait-ms`.
@@ -308,7 +309,7 @@ still accepted.
   :max-pending 4096)
 ```
 
-Connection keywords match `(bridge ...)`. `:subject` is a string or vector of
+Connection keywords match `(export ...)`. `:subject` is a string or vector of
 remote subject filters to subscribe to. With `(import ...)` configured, local
 socket clients may still subscribe but client `PUB` commands are rejected.
 Imported messages run through `(on ...)` rules but are not routed to local
@@ -561,7 +562,7 @@ if __name__ == "__main__":
 
 Before returning a patchbay file, verify:
 
-1. For monoblok, every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(bridge ...)` / `(import ...)`. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)`, `(bridge ...)`, or `(import ...)` there without alerting the user that they are beyond Lite.
+1. For monoblok, every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(export ...)` / `(import ...)`. Deprecated `(bridge ...)` is accepted as an export alias. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)`, `(export ...)`, deprecated `(bridge ...)`, or `(import ...)` there without alerting the user that they are beyond Lite.
 2. Every `publish!` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
 3. Every numeric op is fed a numeric value (`payload-float` / `payload-int` / arithmetic result), not raw `payload`.
 4. `N` in `moving-*` is a literal integer and consistent per call site.

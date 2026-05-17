@@ -138,8 +138,9 @@ regardless.
 ## Bridge And Import Mode
 
 The outbound bridge is optional and export-only. It is configured by a
-top-level `(bridge ...)` form in the patchbay file. Leaving the form out makes
-runtime cost zero.
+top-level `(export ...)` form in the patchbay file. Deprecated `(bridge ...)`
+is still accepted as a compatibility alias. Leaving the form out makes runtime
+cost zero.
 
 Bridge fan-out uses `Router.bridge_fn`, called once per publish after local
 delivery. The bridge does its own subject-filter matching and publishes matching
@@ -159,7 +160,7 @@ client `PUB` commands are rejected.
 Core only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`, `PING`, `PONG`,
 `INFO`, `+OK`, `-ERR`.
 
-There is no auth on the server side, headers, JetStream, mixer, or `$SYS.*`
+There is no auth on the server side, headers, JetStream, or `$SYS.*`
 service request-reply. The bridge remains export-only and does not route remote
 replies back. Import mode consumes remote NATS messages as patchbay input only.
 `CONNECT` bodies are accepted and ignored. `+OK` is never sent.
