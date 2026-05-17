@@ -27,7 +27,7 @@ monoblok speaks NATS. Point your NATS clients at it and the conditioning happens
 - Tap into existing NATS: monoblok subscribes to selected subjects on a real NATS cluster, treats them as private patchbay input, then emits only the cleaned or derived subjects your rules choose.
 
 ### Tiny and fast
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and load checks are part of the build; dedicated benchmark helpers live in [scripts/](./scripts). The [saved benchmark runs](./bench-results) span **1-18 million msgs/sec** across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples/trends and not capacity promises in the real world. See [running tests](#running-tests) for tests that exercise the router and parser without network.
+monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and load checks are part of the build; dedicated benchmark helpers live in [scripts/](./scripts). The [saved benchmark runs](./bench-results) span up to **2-18 million msgs/sec** across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples/trends and not capacity promises in the real world. See [running tests](#running-tests) for tests that exercise the router and parser without network.
 
 ### Read more
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation for microcontrollers relaying cleaned sensor data into NATS.
