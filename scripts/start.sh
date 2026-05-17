@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-VERSION=v0.2.6
+VERSION=v0.2.8
 OS=$(uname -s)
 ARCH=$(uname -m)
 case "$OS-$ARCH" in
