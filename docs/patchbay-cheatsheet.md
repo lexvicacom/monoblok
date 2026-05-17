@@ -40,8 +40,8 @@ symbols in rule expressions.
 |--------|-------|
 | `subject` | incoming subject (string) |
 | `payload` | incoming payload (string of bytes) |
-| `payload-float` | payload parsed as f64 (errors if not numeric) |
-| `payload-int` | payload parsed as i64 (errors if not integer) |
+| `payload-float` | payload parsed as a floating-point number (errors if not numeric) |
+| `payload-int` | integer payload parsed and returned as a number (errors if not integer) |
 
 ## Special forms
 
@@ -57,6 +57,9 @@ symbols in rule expressions.
 ## Side effects
 
 Trailing `!` marks forms that emit (terminal effect, return nil). Scan a rule and the bangs are the lines that put bytes on the wire; everything else is pure. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) still work as aliases for now. `publish!` and `publish-to!` are now identical (the args-flipped distinction is gone): both take `SUBJECT VALUE`, both coerce numbers, both no-op on nil VALUE.
+
+Use `(do ...)` when one rule body should run multiple effects, for
+example `(do (publish! (subject-append "raw") payload) (bar! 60 payload-float))`.
 
 Rule of thumb: `!` emits or has an effect, `:ms N` is a wall-clock
 window that may use the host clock, and bare `N` is a tick/sample
@@ -91,7 +94,7 @@ window.
 
 | form | meaning |
 |------|---------|
-| `(= A B C ...)` | all equal (tag-strict) |
+| `(= A B C ...)` | all equal (same value kind) |
 | `(< ...)` / `(<= ...)` / `(> ...)` / `(>= ...)` | pairwise numeric |
 | `(+ X...)` / `(- X...)` / `(* X...)` / `(/ X...)` | arithmetic |
 | `(not X)` | boolean negation |
@@ -162,7 +165,7 @@ Two flavours, picked by what you actually want:
 
 ## JSON
 
-Backed by `std.json.Scanner`, so escapes / `\uXXXX` work. Both JSON ops
+Backed by vendored yyjson, so escapes / `\uXXXX` work. Both JSON ops
 support top-level keys and dotted object paths up to four tokens deep,
 such as `"a.b.c.d"`; arrays and deeper paths are not supported. For
 `json-demux!`, the dotted path is the default output suffix:
