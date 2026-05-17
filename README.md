@@ -2,9 +2,12 @@
 
 Signal conditioning, transformation, and routing in a NATS-native message processor.
 
-> Fix raw input streams once, not in every subscriber.
->
-> Put monoblok in front of your NATS clients, declare the useful subjects you actually want, and have  subscribers consume clean streams, instead of raw noise.
+
+  > **monoblok speaks NATS.** Put it in front of your existing publishers, declare
+  > the processing rules you need, and let subscribers consume clean, actionable
+  > subjects instead of making sense of raw noise.
+  >
+  > Fix noisy input streams once, not in every subscriber.
 
 ## Rationale
 
