@@ -108,13 +108,13 @@ Saved sample output lives in [bench-results/](./bench-results). On Linux these
 scripts default to monoblok's opt-in libuv io_uring path to match the saved
 runs; pass `--epoll` to benchmark the production-default epoll path.
 
-## Still reading?
+## Support
 
-See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+I've been doing this for a while - while the same-old problems monoblok solves may not be readily apparent - _it's simple - it is just rounding numbers and doing basic stats_ ... those with battle scars are hopefully nodding along. [My company](https://lexvica.com) can provide services around monoblok. I'd be happy to learn about your environment, requirements and work with you on a proof of concept, case study or complete solution. [Drop me a line](mailto:alex@lexvica.com).
 
 ## AI
 
-It's 2026, Claude and Codex help me a lot. All code is reviewed and iterated upon before being merged.
+It's 2026, Claude and Codex help a lot. All code is reviewed and iterated upon before being merged.
 
 >Personal note: I had a stroke in Dec 2025 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!
 
