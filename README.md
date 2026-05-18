@@ -18,7 +18,7 @@ It is not uncommon for systems to contain some _caretaker_ services that subscri
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
 
-Rules live in [patchbay](./docs/patchbay.md), a small DSL which can be expressed as YAML, EDN or JSON. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md#yaml-sugar-files). 
+Rules live in [patchbay](./docs/patchbay.md), a small DSL which can be expressed as YAML, EDN or JSON. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/examples/demo.yml). 
 
 <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay also lends itself well to help from coding assistants</a> when fed [AGENTS_PATCHBAY.md](https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md) (to be honest the agent instructions are human-parseable if you prefer a succinct primer. There is a fuller [patchbay guide](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md) and  [cheatsheet](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay-cheatsheet.md).
 
