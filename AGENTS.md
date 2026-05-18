@@ -10,22 +10,34 @@ through vendored `nats.c`.
 
 Keep the layout shallow:
 
-- `src/`: core pieces (`buf`, `proto`, `router`, `snapshot`, `bridge`,
-  `importer`, `main`).
+- `src/`: core daemon pieces (`array`, `buf`, `fs`, `proto`, `router`,
+  `slice`, `snapshot`, `bridge`, `importer`, `nats_common`, `main`).
 - `src/server/`: libuv listener, connection lifetime, read/write callbacks.
-- `src/patchbay/`: arena, parser, JSON adapter, evaluator, validation,
-  soundcheck, and patchbay helpers.
+- `src/patchbay/`: arenas, S-expression/JSON/YAML adapters, program loading,
+  evaluator dispatch, form fragments, validation, soundcheck, and dump tooling.
+- `test/`: unit tests, NATS fakes, CLI checks, smoke/soundcheck scripts, and
+  load/soak checks.
+- `examples/`: runnable patchbay examples and demo configs.
+- `advanced-examples/`: larger integration examples and producer/pump scripts.
+- `docs/`: user-facing overview, patchbay docs, and documentation images.
+- `design/`: design notes and proposals that are not necessarily product docs.
+- `scripts/`: benchmark, smoke, packaging, install, service, and release helpers.
+- `seccomp/`: container seccomp profile.
+- `.github/workflows/`: CI and release automation.
+- `.vscode/`: shared workspace editor settings.
+- `bench-results/`: checked-in benchmark result notes.
 - `vendor/libuv/`: vendored libuv source.
 - `vendor/nats.c/`: vendored NATS C client.
 - `vendor/yyjson/`: pruned yyjson source, license, and readme.
-- `test/`: unit tests plus script-driven smoke/soundcheck checks.
-- `examples/`: runnable patchbay examples.
-- `docs/`: user-facing overview, patchbay docs, and documentation images.
+- Root files: CMake entrypoint, Dockerfile, readmes/agent notes, format/git
+  config, and the default `patchbay.edn`.
+- `build*/` and `dist/`: local/generated build and package output, not source
+  layout.
 
 Prefer local, explicit C over frameworks or abstraction layers. The point of
 this branch is proving plain C can stay readable while staying fast.
 
-## Project Taste
+## Project taste
 
 Monoblok is close in spirit to the Redis Manifesto: a small daemon exposing a
 clear data/protocol model, with memory-first predictable behavior and complexity
@@ -44,7 +56,33 @@ kept visible instead of hidden behind opaque layers.
 - Code should be pleasant to read because ownership, lifetimes, and performance
   consequences are obvious. Favor direct, local C over clever generality.
 
-## Build And Test
+## Safety and correctness
+
+Monoblok tends not to live directly on the public internet, but correctness
+still matters. Bad input, accidental misuse, and future deployment changes can
+find the same bugs as a hostile client.
+
+- Be mindful of buffer overruns, integer overflow, unterminated data, borrowed
+  slice lifetimes, and unchecked lengths whether the trigger looks nefarious or
+  ordinary.
+- Favor explicit logic over clever logic. Do not overcomplicate control flow,
+  lifetime rules, or error handling for a marginal reduction in lines.
+- Write simple, boring, descriptive C that a human can reason about under
+  pressure. Prefer names that describe the domain object or state transition.
+- Do not over-abstract. Keep helpers local until there is a real repeated
+  domain concept.
+- Do abstract common domain-specific operations behind project helpers with
+  `mb_` names, such as file-open/read helpers. Memory helpers should make
+  ownership obvious with `mb_<thing>_alloc` and `mb_<thing>_free` names.
+- Keep load-bearing project structs briefly commented with their role,
+  ownership, or lifetime. Do not comment for the sake of commentary; add
+  comments when code is fiddly, protocol behavior is non-obvious, or an
+  invariant would otherwise be easy to miss.
+- Be open about repetitive work. Load tests, soak tests, and smoke tests should
+  be automated where possible; editing repetitive comments by hand is often not
+  productive.
+
+## Build and test
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -72,7 +110,7 @@ cmake --build build --target bench-patchbay
 cmake --build build --target pb-dump
 ```
 
-## Core Invariants
+## Core invariants
 
 - The server runs on one libuv loop thread. Do not add hot-path mutexes or
   atomics unless the threading model changes.
@@ -97,7 +135,7 @@ cmake --build build --target pb-dump
   optional io_uring paths by default for seccomp-friendly containers; use
   `--io-uring` or `UV_USE_IO_URING=1` to opt in before loop creation.
 
-## Patchbay Model
+## Patchbay model
 
 - Lists are call forms. A list must be non-empty and headed by a symbol.
 - Vectors are data.
@@ -118,7 +156,7 @@ cmake --build build --target pb-dump
   `nats pub`, pass negative bodies after `--`, for example
   `nats pub sensors.temp -- -5`.
 
-## LVC And Snapshots
+## LVC and snapshots
 
 `$LVC.<subject>` is a live last-value stream. Subscribing registers a normal sub
 against the stripped inner subject with an `is_lvc` flag, and immediately emits
@@ -135,7 +173,7 @@ is `(rule_idx, filter)`. If the patchbay changed and the recorded filter no
 longer matches, that rule state is skipped with a warning. LVC entries load
 regardless.
 
-## Bridge And Import Mode
+## Bridge and import mode
 
 The outbound bridge is optional and export-only. It is configured by a
 top-level `(export ...)` form in the patchbay file. Deprecated `(bridge ...)`
@@ -155,7 +193,7 @@ direct monoblok subscribers unless a rule republishes them explicitly. When
 `(import ...)` is configured, local socket clients may still subscribe but
 client `PUB` commands are rejected.
 
-## NATS Protocol Scope
+## NATS protocol scope
 
 Core only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`, `PING`, `PONG`,
 `INFO`, `+OK`, `-ERR`.
@@ -165,7 +203,7 @@ service request-reply. The bridge remains export-only and does not route remote
 replies back. Import mode consumes remote NATS messages as patchbay input only.
 `CONNECT` bodies are accepted and ignored. `+OK` is never sent.
 
-## C Style
+## C style
 
 - Project-owned code targets C17. The root CMake config sets
   `CMAKE_C_STANDARD 17`, requires that standard, and disables compiler
