@@ -113,7 +113,7 @@ runs; pass `--epoll` to benchmark the production-default epoll path.
 
 ## Support
 
-I've been doing this for a while - while the same-old problems monoblok solves may not be readily apparent - _it's simple - it is just rounding numbers and doing basic stats_ ... those with battle scars are hopefully nodding along. [My company](https://lexvica.com) can provide services around monoblok. I'd be happy to learn about your environment, requirements and work with you on a proof of concept, case study or complete solution. [Drop me a line](mailto:alex@lexvica.com).
+I've been doing this for a while - while the same-old problems monoblok solves may not be readily apparent - _"it's simple - it is just rounding numbers and doing basic stats"_ ... those with battle scars are hopefully nodding along. [My company](https://lexvica.com) can provide services around monoblok. I'd be happy to learn about your environment, requirements and work with you on a proof of concept, case study or complete solution. [Drop me a line](mailto:alex@lexvica.com).
 
 ## AI
 
