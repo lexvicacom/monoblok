@@ -20,7 +20,7 @@ It is not uncommon for systems to contain some _caretaker_ services that subscri
 
 Rules live in [patchbay](./docs/patchbay.md), a small DSL which can be expressed as YAML, EDN or JSON. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md#yaml-sugar-files). 
 
-<a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay also lends itself well to help from coding assistants</a>.
+<a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay also lends itself well to help from coding assistants</a> when fed [AGENTS_PATCHBAY.md](https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md).
 
 
 #### Common ways of running monoblok:
