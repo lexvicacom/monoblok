@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working in this C17/libuv Monoblok tree.
+Guidance for coding agents working in this C/libuv monoblok tree.
 
 ## Shape
 
@@ -205,12 +205,11 @@ replies back. Import mode consumes remote NATS messages as patchbay input only.
 
 ## C style
 
-- Project-owned code targets C17. The root CMake config sets
+- Project-owned code currently targets C17. The root CMake config sets
   `CMAKE_C_STANDARD 17`, requires that standard, and disables compiler
-  extensions; do not introduce C23-only constructs just because a local
-  compiler accepts them.
-- The target and binary are named `monoblok`; avoid reintroducing `monoblok-c`
-  in scripts, docs, or build targets.
+  extensions. Do not introduce C23 constructs, compiler-specific extensions,
+  non-portable tricks, or exotic language features without asking first and
+  making a serious case for the tradeoff.
 - The root `.clang-format` intentionally uses `ColumnLimit: 0` to avoid
   save-on-format churn in generated-looking compact C. Do not run broad
   mechanical formatting unless explicitly requested.
@@ -221,10 +220,38 @@ replies back. Import mode consumes remote NATS messages as patchbay input only.
 - Keep comments concise and focused on ownership, lifetime, invariants, or
   non-obvious protocol behavior.
 - Do not let vendored code inherit project warning flags.
-- Keep dependencies small and easy to audit.
+- Only suggest third-party libraries when they fit the project shape: small,
+  self-contained, easy to audit, compatible with the build, and justified by
+  removing more complexity than they add. Prefer vendoring small C libraries
+  over `FetchContent` or package-manager magic, so builds remain predictable
+  and dependency code stays reviewable.
 - `pb_eval.c` contains evaluator dispatch and binding semantics. Keep large
   builtin bodies in `pb_builtins.c` or split them further before the evaluator
   gets hard to scan.
+
+## Platform Assumptions
+
+Linux is the primary deployment target. Development primarily happens on macOS.
+
+Aim to write vanilla, portable C and boring shell scripts where practical. Be
+aware of the small but annoying portability traps between Linux and Darwin,
+especially:
+
+- BSD vs GNU `grep`, `sed`, `awk`, `readlink`, `date`, and other shell utility
+  variants.
+- Darwin C runtime and libc behavior differences.
+- Filesystem, socket, signal, and process-edge cases that may behave differently
+  across platforms.
+- Compiler and linker flag differences between Apple Clang and Linux toolchains.
+
+Do not fix a macOS inconvenience by making Linux worse, and do not introduce
+Linux-only assumptions into generic code unless the deployment path explicitly
+justifies it.
+
+Windows support may matter one day, but it is not a current target. Do not add
+Windows abstraction layers, compatibility scaffolding, or build complexity unless
+explicitly asked.
+
 
 ## Verification
 
