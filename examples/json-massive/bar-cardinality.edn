@@ -1,0 +1,18 @@
+; High-cardinality `bar!` memory probe for Massive-style trade streams.
+;
+; This is deliberately separate from massive.edn. The normal Massive example
+; demuxes AM / XA / CA aggregate frames that already contain bars. This file is
+; for the case where raw trades arrive as JSON and monoblok builds local bars.
+;
+; Subjects use T.<MARKET>.<SYM> so the measurement script can scale both
+; market count and symbol count:
+;
+;   T.M00.S00001|{"ev":"T","sym":"S00001","p":100.25,"s":10}
+;
+; The bar tick window is intentionally huge. The point of the probe is not
+; closed-bar output; it is the long-lived in-progress bar slot allocated for
+; every distinct trade subject.
+
+(on "T.*.*"
+  (when (json-get "p" payload)
+    (bar! 100000000 (json-get "p" payload))))

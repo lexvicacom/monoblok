@@ -856,6 +856,20 @@ A subscriber to `MARKET.AAPL.bar.>` then sees a clean burst of four
 messages per closed bar, in `open / high / low / close` order, with no
 intermediate per-tick noise.
 
+`bar!` is fixed-size per stream, but the stream cardinality is yours to
+budget. Each distinct subject seen by the bar rule gets a long-lived
+state slot keyed by `(rule, subject, window-kind)`; closing a bar resets
+the in-progress values but does not remove that slot. A raw trade feed
+shaped like `T.<MARKET>.<SYM>` or a demuxed price stream shaped like
+`T.<MARKET>.<SYM>.p` across thousands of symbols and tens of markets can
+therefore retain tens or hundreds of thousands of bar slots. Narrow the
+filter when you can, avoid unnecessary subject-token expansion, and
+measure the shape you plan to run. The
+[`json-massive` cardinality probe](../examples/json-massive/bar-cardinality.edn)
+and
+[`measure-bar-cardinality.sh`](../examples/json-massive/measure-bar-cardinality.sh)
+give a repeatable RSS check for this case.
+
 If another rule in the same patchbay should consume those derived bar
 subjects, mark the bar-building rule `:reentrant true`. The emitted
 subjects have two extra tokens (`MARKET.AAPL.bar.close`), so they do

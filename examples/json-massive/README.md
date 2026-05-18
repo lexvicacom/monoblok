@@ -70,6 +70,36 @@ open / high / low / close from raw trades. If you only have a trade
 stream and need to build bars locally, see `examples/bars.edn` (uses
 `bar!`).
 
+## Measuring local bar cardinality
+
+`bar!` is cheap per subject, but it is stateful. A local bar builder keeps
+one in-progress bar slot for every distinct market/symbol subject the rule
+has seen. Thousands of symbols across tens of markets can therefore turn into
+tens or hundreds of thousands of long-lived slots.
+
+[`bar-cardinality.edn`](./bar-cardinality.edn) reuses the Massive-style JSON
+trade frame shape on `T.<MARKET>.<SYM>`, reads the `p` price field with
+`json-get`, then builds local bars. The harness below drives that patchbay
+through `--soundcheck` and reports max RSS via `/usr/bin/time` when available,
+falling back to a `ps` sampler:
+
+```bash
+# defaults: MARKETS=20 SYMBOLS=5000 TICKS=1 BAR_WINDOW=100000000
+examples/json-massive/measure-bar-cardinality.sh
+
+# scale the subject universe and keep bars open longer
+MARKETS=50 SYMBOLS=10000 TICKS=1 BAR_WINDOW=1000000000 examples/json-massive/measure-bar-cardinality.sh
+
+# use a release binary from somewhere else
+BIN=/path/to/monoblok examples/json-massive/measure-bar-cardinality.sh
+```
+
+The important dimension is `MARKETS * SYMBOLS`: increasing `TICKS` mostly
+reuses existing slots, while increasing the subject universe creates more
+retained patchbay state. `BAR_WINDOW` is set high so the probe holds bars
+open; changing it mostly controls whether the probe closes and emits bars, not
+the per-subject memory footprint.
+
 ## mock_producer environment variables
 
 | Variable     | Default     | Description                                |
