@@ -156,6 +156,28 @@ cmake --build build --target pb-dump
   `nats pub`, pass negative bodies after `--`, for example
   `nats pub sensors.temp -- -5`.
 
+## When porting .edn patchbays to .yml
+
+- Read `docs/patchbay-yaml-schema.md` first; it is the canonical YAML shape
+  reference. Use `docs/patchbay.md#yaml-sugar-files` for the narrative
+  overview and `docs/patchbay-cheatsheet.md#edn--json--yaml` for the short
+  EDN/JSON/YAML comparison.
+- Treat YAML as a small sugar layer that lowers to the same patchbay AST, not
+  as general YAML. The root is a map with `lvc`, `on`, `export`, deprecated
+  `bridge`, and/or `import`; each `on` item is a rule map with `sub` and one
+  body shape such as `thread`, `when`, `do`, `form`, or `body`.
+- Use flow arrays for call forms, with the operator as the first element. Use
+  `thread` for `->`, `when` for `(when ...)`, and `form`/`body` for direct
+  expressions such as `transition`, `count!`, or `bar!`.
+- Be precise with scalars. In expression positions only `subject`, `payload`,
+  `payload-float`, and `payload-int` become bound symbols; other string-like
+  scalars become strings unless they are numbers, booleans, nulls, or keywords
+  such as `:ms`. Quote subjects, URLs, and payload strings when it improves
+  clarity or avoids YAML punctuation traps.
+- In top-level config string positions, `env: NAME` lowers to `(env "NAME")`.
+  Do not use it inside rule bodies. Validate the port with `monoblok
+  --validate` and, when behavior matters, compare with `--soundcheck`.
+
 ## LVC and snapshots
 
 `$LVC.<subject>` is a live last-value stream. Subscribing registers a normal sub

@@ -20,7 +20,7 @@ runs in that tree. For other tools, paste or reference this file in
 the equivalent project instruction area: Cursor rules, Aider
 conventions, ChatGPT project instructions, or another agent-specific
 memory file. For one-off use, reference `docs/AGENTS_PATCHBAY.md` in
-the prompt and ask the model to follow it while editing `.edn`
+the prompt and ask the model to follow it while editing `.edn` or `.yml`
 patchbay files.
 
 Agent guidance
@@ -31,10 +31,12 @@ Lite**, a small s-expression DSL that runs on top of a NATS-compatible
 message router. Monoblok rule files live on disk (conventionally
 `patchbay.edn`) and are loaded at daemon startup. Tinyblok embeds
 `patchbay.edn` into firmware and parses it at boot. When asked for a
-patchbay file, your output is always valid patchbay EDN, no prose outside
-EDN comments (`;` to end of line). When asked for companion files such as
-a host-side pump driver, keep those files separate and make the driver
-publish subjects that the patchbay actually matches.
+patchbay file, output valid patchbay EDN by default, with no prose outside
+EDN comments (`;` to end of line). If the user explicitly asks for `.yml`,
+`.yaml`, `.json`, or a port to one of those formats, output that format
+instead. When asked for companion files such as a host-side pump driver, keep
+those files separate and make the driver publish subjects that the patchbay
+actually matches.
 
 ## Mental model
 
@@ -144,6 +146,56 @@ a head, so they're how you spell a literal collection (it's what
 `contains?` checks for membership against). Config readers (`export`,
 deprecated `bridge`, `import`) accept either `(...)` or `[...]` for keyword-tagged
 collections; vectors are the recommended form.
+
+## YAML sugar and .edn-to-.yml ports
+
+YAML patchbay files are a monoblok source-file convenience. For Tinyblok or
+Patchbay Lite, keep using EDN unless that repo explicitly has a YAML loader.
+
+When working inside the monoblok repo, read `docs/patchbay-yaml-schema.md`
+first; it is the canonical YAML shape reference. Use
+`docs/patchbay.md#yaml-sugar-files` for the narrative overview and
+`docs/patchbay-cheatsheet.md#edn--json--yaml` for the short EDN/JSON/YAML
+comparison. The compact schema is:
+
+- YAML is lowered directly to the patchbay AST. It is not general YAML:
+  supported syntax is spaces for indentation, block maps/lists, flow arrays,
+  quoted or unquoted scalars, numbers, booleans, `null` / `nil` / `~`, and `#`
+  comments outside quoted text and flow arrays. Do not use flow maps, anchors,
+  aliases, tags, or multiline strings.
+- The root document is a map. Supported top-level keys are `on`, `lvc`,
+  `export`, deprecated `bridge`, and `import`.
+- `lvc` accepts one string-like value, one `env: NAME` value, or a list of
+  those values.
+- `export` is a config map with fields such as `servers`, `name`, `creds`,
+  `user`, `password`, `token`, `tls`, `tls-ca`, `tls-cert`, `tls-key`,
+  `tls-skip-verify`, `origin-header`, `connect-timeout-ms`,
+  `ping-interval-ms`, `max-reconnect`, `reconnect-wait-ms`, and `export`.
+  `bridge` has the same shape but is deprecated.
+- `import` is a config map with the connection fields above plus `subject` /
+  `subjects`, `origin-header`, and `max-pending`.
+- In top-level config string positions, `env: NAME` lowers to `(env "NAME")`.
+  Do not use it inside rule bodies.
+- `on` is a list of rule maps. Each rule requires `sub`, may include
+  `reentrant: true`, and must include exactly one body shape: `thread`, `when`,
+  `do`, `form`, or `body`.
+- `thread` lowers to `->`. It can be a list (`[payload-float, [round, 1],
+  [publish!, clean.temp]]`) or a map with `from` and `steps`.
+- `when` lowers to `(when TEST BODY)` and has `test` plus `then`.
+- `do` is a list of bodies and lowers to `(do BODY...)`.
+- `form` and `body` are direct expressions for cases such as `transition`,
+  `count!`, or `bar!`.
+- Flow arrays in expression positions are call forms, with the operator as the
+  first element: `[publish!, [subject-append, stable]]`.
+- In expression positions only `subject`, `payload`, `payload-float`, and
+  `payload-int` become bound symbols; other string-like scalars become strings
+  unless they are numbers, booleans, nulls, or keywords such as `:ms`. Quote
+  subjects, URLs, and payload strings when it improves clarity or avoids YAML
+  punctuation traps.
+
+Validate YAML ports with `monoblok --validate file.yml`. When behavior matters,
+compare the original and ported files with `--soundcheck` using the same input
+rows.
 
 ## Bound symbols (the current message)
 
@@ -432,9 +484,7 @@ printf 'sensors.temp|31\n' | monoblok --soundcheck --soundcheck-label patchbay.e
 
 Use `--soundcheck` when you need cheap confidence that a real input
 subject matches the intended rules and produces the expected derived
-subjects/payloads. Time-based ops use the normal libxev clock path; if
-you do not want to wait for pending timers after stdin closes, add
-`--soundcheck-linger-ms 0`.
+subjects/payloads.
 
 For Tinyblok/Patchbay Lite, prefer the firmware repo's `make soundcheck` or
 `make test` because they build the host validator against the vendored
