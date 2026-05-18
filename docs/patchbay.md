@@ -83,7 +83,7 @@ on:
       steps:
         - [quantize, 50]
         - [squelch]
-        - [publish!, [subject-append, stable]]
+        - [publish!, [subject-append, "stable"]]
 ```
 
 That lowers to the same AST as:
