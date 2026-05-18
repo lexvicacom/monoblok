@@ -3,7 +3,7 @@
 Signal conditioning, transformation, and routing in a NATS-native message processor.
 
 
-  > **monoblok speaks NATS.** Point existing publishers at it or have it consume subjects; declare
+  > **monoblok speaks NATS.** Point existing publishers at it or have it consume existing subjects; declare
   > the processing rules you need, and let subscribers consume clean, actionable
   > subjects.
   >
