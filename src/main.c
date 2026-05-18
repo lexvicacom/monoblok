@@ -33,6 +33,8 @@ static void usage(const char *argv0) {
            "  --validate           Parse and subset-lint the patchbay, then exit.\n"
            "  --soundcheck         Read SUBJECT|payload rows from stdin and print emits.\n"
            "  --soundcheck-label   Prefix soundcheck rows with in| or out|.\n"
+           "  --soundcheck-linger-ms MS\n"
+           "                       Keep clock/window state alive after soundcheck EOF (default 10000; 0 disables).\n"
            "  --help, -h           Show this help.\n"
            "  --version, -V        Show version.\n",
            argv0);
@@ -133,6 +135,7 @@ int main(int argc, char **argv) {
     const char *snapshot_path = NULL;
     uint64_t snapshot_every_ms = 0;
     uint64_t stats_tick_ms = MB_DEFAULT_STATS_TICK_MS;
+    uint64_t soundcheck_linger_ms = PB_SOUNDCHECK_DEFAULT_LINGER_MS;
     bool soundcheck = false;
     bool soundcheck_label = false;
     bool validate = false;
@@ -183,6 +186,16 @@ int main(int argc, char **argv) {
             soundcheck = true;
         } else if (strcmp(argv[i], "--soundcheck-label") == 0) {
             soundcheck_label = true;
+        } else if (strcmp(argv[i], "--soundcheck-linger-ms") == 0 && i + 1 < argc) {
+            errno = 0;
+            char *end = NULL;
+            const char *value = argv[++i];
+            const unsigned long long ms = strtoull(value, &end, 10);
+            if (errno != 0 || value[0] == '-' || end == value || *end != '\0') {
+                usage(argv[0]);
+                return 2;
+            }
+            soundcheck_linger_ms = (uint64_t)ms;
         } else if (strcmp(argv[i], "--patchbay") == 0 && i + 1 < argc) {
             patchbay_path = argv[++i];
         } else if (strcmp(argv[i], "--validate") == 0) {
@@ -216,7 +229,9 @@ int main(int argc, char **argv) {
             usage(argv[0]);
             return 2;
         }
-        return pb_soundcheck_run(soundcheck_path, (pb_soundcheck_options){.label = soundcheck_label});
+        return pb_soundcheck_run(soundcheck_path, (pb_soundcheck_options){
+                                                  .linger_ms = soundcheck_linger_ms,
+                                                  .label = soundcheck_label});
     }
 
     const char *io_uring_status = configure_libuv_io_uring(io_uring);

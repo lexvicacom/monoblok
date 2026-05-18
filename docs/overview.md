@@ -110,7 +110,7 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 
 Run a patchbay directly with `monoblok examples/<file>.edn`, `.json`, or `.yml`; form-lint without starting the server with `monoblok --validate examples/<file>.edn`.
 
-For quick patchbay debugging, `--soundcheck` runs the same evaluator without opening a NATS socket. It reads newline-delimited `SUBJECT|payload` rows on stdin, passes inputs through stdout, and prints any `publish!` emissions.
+For quick patchbay debugging, `--soundcheck` runs the same evaluator without opening a NATS socket. It reads newline-delimited `SUBJECT|payload` rows on stdin, passes inputs through stdout, and prints any `publish!` emissions. Clock/window state lingers briefly after EOF so delayed forms can close; use `--soundcheck-linger-ms 0` to disable that wait.
 
 ```sh
 printf 'sensors.temp|31\n' | monoblok --soundcheck examples/sensors.edn
