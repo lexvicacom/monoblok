@@ -15,11 +15,13 @@ It is not uncommon for systems to contain some _caretaker_ services that subscri
 
 **Declare it once, as rules, at the edge.**
 
-monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in [patchbay](./docs/patchbay.md), a small DSL. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md#yaml-sugar-files). 
+![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
+
+
+Rules live in [patchbay](./docs/patchbay.md), a small DSL which can be expressed as YAML, EDN or JSON. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md#yaml-sugar-files). 
 
 <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay also lends itself well to help from coding assistants</a>.
 
-![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
 #### Common ways of running monoblok:
 - **Tap into existing NATS:** monoblok subscribes to selected subjects on your NATS environment, treats them as private patchbay input, then emits back only the cleaned or derived subjects your rules choose.
