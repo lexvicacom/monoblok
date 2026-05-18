@@ -3,11 +3,11 @@
 Signal conditioning, transformation, and routing in a NATS-native message processor.
 
 
-  > **monoblok speaks NATS.** Point your existing publishers at it, declare
+  > **monoblok speaks NATS.** Point existing publishers at it or have it consume existing subjects; declare
   > the processing rules you need, and let subscribers consume clean, actionable
-  > subjects, instead of each having to make sense of raw noise.
+  > subjects.
   >
-  > Fix noisy input streams once, not in every subscriber.
+  > Fix noisy raw input streams once, not in every subscriber.
 
 ## Rationale
 
@@ -22,9 +22,9 @@ monoblok speaks NATS. Point your NATS clients at it and the conditioning happens
 ![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
 
 #### Common ways of running monoblok:
-- Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
-- Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
-- Tap into existing NATS: monoblok subscribes to selected subjects on a real NATS cluster, treats them as private patchbay input, then emits only the cleaned or derived subjects your rules choose.
+- **Tap into existing NATS:** monoblok subscribes to selected subjects on your NATS environment, treats them as private patchbay input, then emits back only the cleaned or derived subjects your rules choose.
+- **Signal conditioning front door:** publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a  NATS cluster.
+- **Standalone broker:** NATS clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 
 ### Tiny and fast
 monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and load checks are part of the build; dedicated benchmark helpers live in [scripts/](./scripts). The [saved benchmark runs](./bench-results) span up to **2-18 million msgs/sec** across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples/trends and not capacity promises in the real world. See [running tests](#running-tests) for tests that exercise the router and parser without network.
@@ -113,7 +113,7 @@ runs; pass `--epoll` to benchmark the production-default epoll path.
 
 ## Support
 
-I've been doing this for a while - while the same-old problems monoblok solves may not be readily apparent - _it's simple - it is just rounding numbers and doing basic stats_ ... those with battle scars are hopefully nodding along. [My company](https://lexvica.com) can provide services around monoblok. I'd be happy to learn about your environment, requirements and work with you on a proof of concept, case study or complete solution. [Drop me a line](mailto:alex@lexvica.com).
+I've been doing this for a while - while the same-old problems monoblok solves may not be readily apparent - _"it's simple - it is just rounding numbers and doing basic stats"_ ... those with battle scars are hopefully nodding along. [My company](https://lexvica.com) can provide services around monoblok. I'd be happy to learn about your environment, requirements and work with you on a proof of concept, case study or complete solution. [Drop me a line](mailto:alex@lexvica.com).
 
 ## AI
 
