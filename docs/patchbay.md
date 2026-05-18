@@ -6,7 +6,7 @@ every operator. For the 30-second pitch and worked examples, start
 there; for "what does `(deadband ...)` actually do," this is the page.
 For one-line summaries of every form, see the
 [cheatsheet](./patchbay-cheatsheet.md). Runnable patchbay files for
-common scenarios live in [`examples/`](./examples/).
+common scenarios live in [`examples/`](../examples/).
 
 ## S-expression syntax in 30 seconds
 

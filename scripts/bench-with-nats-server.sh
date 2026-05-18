@@ -173,7 +173,7 @@ $HAS_NATS_SERVER && echo "$(nats-server --version 2>&1 | head -1)"
 echo "monoblok libuv mode: $MB_IO_LABEL"
 echo
 
-"$MB_BIN" "${MB_IO_ARGS[@]}" --port "$PORT" > /tmp/monoblok-bench.log 2>&1 &
+"$MB_BIN" ${MB_IO_ARGS[@]+"${MB_IO_ARGS[@]}"} --port "$PORT" > /tmp/monoblok-bench.log 2>&1 &
 MB_PID=$!
 sleep 0.3
 kill -0 "$MB_PID" 2>/dev/null || {
