@@ -249,9 +249,20 @@ static void test_write_info(void) {
     CHECK(memcmp(buf.ptr, "INFO ", 5) == 0);
     CHECK(buf_contains(&buf, "\"server_id\":\"MC0123\""));
     CHECK(buf_contains(&buf, "\"client_id\":7"));
+    CHECK(!buf_contains(&buf, "\"tls_required\""));
     CHECK(!buf_contains(&buf, "\"go\""));
     CHECK(buf.ptr[buf.len - 2] == '\r');
     CHECK(buf.ptr[buf.len - 1] == '\n');
+    mb_buf_clear(&buf);
+    CHECK(mb_write_info(&buf, &(mb_info){
+                                  .server_id = "MC0123",
+                                  .host = "127.0.0.1",
+                                  .client_ip = "127.0.0.1",
+                                  .port = 4222,
+                                  .client_id = 7,
+                                  .tls_required = true,
+                              }));
+    CHECK(buf_contains(&buf, "\"tls_required\":true"));
     mb_buf_free(&buf);
 }
 

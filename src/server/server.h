@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <uv.h>
 
+typedef struct ssl_ctx_st SSL_CTX;
+
 enum {
     // Accepted-client cap to bound slow or idle socket footprint.
     MB_MAX_CONNECTIONS = 1024,
@@ -36,6 +38,7 @@ typedef struct mb_server {
     uint64_t next_client_id;
     const char *host;
     unsigned int port;
+    SSL_CTX *tls_ctx;
     const char *snapshot_path;
     uint64_t snapshot_every_ms;
     uint64_t stats_tick_ms;
@@ -57,11 +60,13 @@ typedef struct mb_server {
     bool lvc_enabled;
     bool client_pubs_enabled;
     bool trace;
+    bool tls_enabled;
 } mb_server;
 
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
-                    uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace);
+                    uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,
+                    const char *tls_cert_path, const char *tls_key_path);
 int mb_server_run(mb_server *server);
 void mb_server_close(mb_server *server);
 bool mb_server_emit_stats(mb_server *server);

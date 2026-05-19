@@ -58,6 +58,7 @@ typedef struct mb_info {
     const char *client_ip;
     unsigned int port;
     uint64_t client_id;
+    bool tls_required;
 } mb_info;
 
 mb_parse_result mb_parse_client_op(const uint8_t *buf, size_t len);

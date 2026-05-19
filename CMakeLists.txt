@@ -23,6 +23,8 @@ set(MONOBLOK_VERSION "${MONOBLOK_DETECTED_VERSION}" CACHE STRING "monoblok versi
 
 project(monoblok VERSION "${MONOBLOK_VERSION}" LANGUAGES C)
 
+find_package(OpenSSL 1.1.1 REQUIRED)
+
 set(MB_BUILD_PLATFORM "${CMAKE_SYSTEM_NAME}")
 set(MB_BUILD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
 set(MB_BUILD_COMPILER "${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
@@ -221,7 +223,7 @@ add_executable(monoblok
   src/main.c
   src/server/server.c
 )
-target_link_libraries(monoblok PRIVATE patchbay_sexpr ${MB_UV_TARGET} ${MB_NATS_TARGET})
+target_link_libraries(monoblok PRIVATE patchbay_sexpr ${MB_UV_TARGET} ${MB_NATS_TARGET} OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(monoblok PRIVATE ${MB_WARNINGS})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_compile_definitions(monoblok PRIVATE _GNU_SOURCE)
