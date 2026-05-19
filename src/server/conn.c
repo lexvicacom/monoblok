@@ -6,6 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
+static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
+static void write_cb(uv_write_t *req, int status);
+
 // libuv read allocator: reuse the per-connection buffer and cap read chunks.
 static void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
     mb_conn *conn = handle->data;
@@ -35,9 +41,14 @@ static void close_cb(uv_handle_t *handle) {
     if (conn->counted && conn->server->conn_count > 0) {
         conn->server->conn_count -= 1;
     }
+    if (conn->tls != NULL) {
+        SSL_free(conn->tls);
+    }
     mb_buf_free(&conn->rx);
     mb_buf_free(&conn->router_conn.out);
     mb_buf_free(&conn->in_flight);
+    mb_buf_free(&conn->tls_plain);
+    mb_buf_free(&conn->tls_out);
     free(conn);
 }
 
@@ -59,11 +70,20 @@ static void close_conn_from_router(void *ctx) {
     mb_conn_begin_close(ctx);
 }
 
-static size_t pending_bytes(const mb_conn *conn) {
-    if (conn->router_conn.out.len > SIZE_MAX - conn->in_flight.len) {
+static size_t add_pending(size_t a, size_t b) {
+    if (a > SIZE_MAX - b) {
         return SIZE_MAX;
     }
-    return conn->router_conn.out.len + conn->in_flight.len;
+    return a + b;
+}
+
+static size_t pending_bytes(const mb_conn *conn) {
+    size_t pending = add_pending(conn->router_conn.out.len, conn->in_flight.len);
+    pending = add_pending(pending, conn->tls_out.len);
+    if (conn->tls_plain.len > conn->tls_plain_off) {
+        pending = add_pending(pending, conn->tls_plain.len - conn->tls_plain_off);
+    }
+    return pending;
 }
 
 static bool close_if_slow_consumer(mb_conn *conn) {
@@ -235,6 +255,215 @@ static void process_rx(mb_conn *conn) {
     }
 }
 
+static bool start_reading(mb_conn *conn) {
+    const int rc = uv_read_start((uv_stream_t *)&conn->tcp, alloc_cb, read_cb);
+    if (rc != 0) {
+        mb_conn_begin_close(conn);
+        return false;
+    }
+    return true;
+}
+
+static void tls_log_conn_error(mb_conn *conn, const char *what, int ssl_error) {
+    char errbuf[256];
+    const unsigned long code = ERR_get_error();
+    if (code != 0) {
+        ERR_error_string_n(code, errbuf, sizeof errbuf);
+        fprintf(stderr, "warn: conn %" PRIu64 " tls %s failed: %s (ssl err=%d)\n",
+                conn->client_id, what, errbuf, ssl_error);
+    } else {
+        fprintf(stderr, "warn: conn %" PRIu64 " tls %s failed (ssl err=%d)\n",
+                conn->client_id, what, ssl_error);
+    }
+}
+
+static bool tls_drain_wbio(mb_conn *conn) {
+    BIO *wbio = SSL_get_wbio(conn->tls);
+    uint8_t tmp[4096];
+    for (;;) {
+        const int n = BIO_read(wbio, tmp, (int)sizeof tmp);
+        if (n > 0) {
+            if (!mb_buf_append(&conn->tls_out, tmp, (size_t)n)) {
+                mb_conn_begin_close(conn);
+                return false;
+            }
+            continue;
+        }
+        if (n == 0 || BIO_should_retry(wbio)) {
+            return true;
+        }
+        tls_log_conn_error(conn, "drain write bio", 0);
+        mb_conn_begin_close(conn);
+        return false;
+    }
+}
+
+static bool tls_drain_plain(mb_conn *conn) {
+    uint8_t plain[MB_READ_CHUNK];
+    for (;;) {
+        const int n = SSL_read(conn->tls, plain, (int)sizeof plain);
+        const int ssl_error = n > 0 ? SSL_ERROR_NONE : SSL_get_error(conn->tls, n);
+        if (!tls_drain_wbio(conn)) {
+            return false;
+        }
+        if (n > 0) {
+            if (!mb_buf_append(&conn->rx, plain, (size_t)n)) {
+                mb_conn_begin_close(conn);
+                return false;
+            }
+            process_rx(conn);
+            if (conn->closing) {
+                return false;
+            }
+            continue;
+        }
+        if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+            return true;
+        }
+        if (ssl_error == SSL_ERROR_ZERO_RETURN) {
+            mb_conn_begin_close(conn);
+            return false;
+        }
+        tls_log_conn_error(conn, "read", ssl_error);
+        mb_conn_begin_close(conn);
+        return false;
+    }
+}
+
+static bool tls_drive_handshake(mb_conn *conn) {
+    if (conn->tls_state != MB_CONN_TLS_HANDSHAKE) {
+        return true;
+    }
+    const int rc = SSL_do_handshake(conn->tls);
+    const int ssl_error = rc == 1 ? SSL_ERROR_NONE : SSL_get_error(conn->tls, rc);
+    if (!tls_drain_wbio(conn)) {
+        return false;
+    }
+    if (rc == 1) {
+        conn->tls_state = MB_CONN_TLS_READY;
+        if (conn->server->trace) {
+            fprintf(stderr, "trace: conn %" PRIu64 " TLS ready\n", conn->client_id);
+        }
+        return tls_drain_plain(conn);
+    }
+    if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+        return true;
+    }
+    tls_log_conn_error(conn, "handshake", ssl_error);
+    mb_conn_begin_close(conn);
+    return false;
+}
+
+static bool tls_feed_encrypted(mb_conn *conn, const uint8_t *data, size_t len) {
+    BIO *rbio = SSL_get_rbio(conn->tls);
+    while (len > 0) {
+        const int chunk = len > (size_t)INT_MAX ? INT_MAX : (int)len;
+        const int n = BIO_write(rbio, data, chunk);
+        if (n <= 0) {
+            tls_log_conn_error(conn, "feed read bio", 0);
+            mb_conn_begin_close(conn);
+            return false;
+        }
+        data += n;
+        len -= (size_t)n;
+    }
+    if (conn->tls_state == MB_CONN_TLS_HANDSHAKE) {
+        return tls_drive_handshake(conn);
+    }
+    if (conn->tls_state == MB_CONN_TLS_READY) {
+        return tls_drain_plain(conn);
+    }
+    return true;
+}
+
+static bool tls_start(mb_conn *conn) {
+    SSL *ssl = SSL_new(conn->server->tls_ctx);
+    BIO *rbio = BIO_new(BIO_s_mem());
+    BIO *wbio = BIO_new(BIO_s_mem());
+    if (ssl == NULL || rbio == NULL || wbio == NULL) {
+        BIO_free(rbio);
+        BIO_free(wbio);
+        SSL_free(ssl);
+        tls_log_conn_error(conn, "allocate", 0);
+        mb_conn_begin_close(conn);
+        return false;
+    }
+    BIO_set_mem_eof_return(rbio, -1);
+    SSL_set_bio(ssl, rbio, wbio);
+    SSL_set_accept_state(ssl);
+    SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    conn->tls = ssl;
+    conn->tls_state = MB_CONN_TLS_HANDSHAKE;
+    if (conn->server->trace) {
+        fprintf(stderr, "trace: conn %" PRIu64 " TLS handshake\n", conn->client_id);
+    }
+    if (!start_reading(conn)) {
+        return false;
+    }
+    if (!tls_drive_handshake(conn)) {
+        return false;
+    }
+    mb_conn_kick_write(conn);
+    return true;
+}
+
+static bool tls_encrypt_pending(mb_conn *conn) {
+    if (conn->tls_state != MB_CONN_TLS_READY) {
+        return true;
+    }
+    for (;;) {
+        if (conn->tls_plain_off == conn->tls_plain.len) {
+            mb_buf_clear(&conn->tls_plain);
+            conn->tls_plain_off = 0;
+            if (conn->router_conn.out.len == 0) {
+                return true;
+            }
+            mb_buf_swap(&conn->router_conn.out, &conn->tls_plain);
+        }
+
+        const size_t pending = conn->tls_plain.len - conn->tls_plain_off;
+        const int chunk = pending > (size_t)INT_MAX ? INT_MAX : (int)pending;
+        const int n = SSL_write(conn->tls, conn->tls_plain.ptr + conn->tls_plain_off, chunk);
+        const int ssl_error = n > 0 ? SSL_ERROR_NONE : SSL_get_error(conn->tls, n);
+        if (!tls_drain_wbio(conn)) {
+            return false;
+        }
+        if (n > 0) {
+            conn->tls_plain_off += (size_t)n;
+            continue;
+        }
+        if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+            return true;
+        }
+        tls_log_conn_error(conn, "write", ssl_error);
+        mb_conn_begin_close(conn);
+        return false;
+    }
+}
+
+static bool write_socket_from(mb_conn *conn, mb_buf *src) {
+    if (conn->closing || conn->write_pending || src->len == 0) {
+        return true;
+    }
+
+    mb_buf_swap(src, &conn->in_flight);
+    if (conn->in_flight.len > UINT_MAX) {
+        mb_conn_begin_close(conn);
+        return false;
+    }
+
+    uv_buf_t uvb = uv_buf_init((char *)conn->in_flight.ptr, (unsigned int)conn->in_flight.len);
+    conn->write_req.data = conn;
+    conn->write_pending = true;
+    const int rc = uv_write(&conn->write_req, (uv_stream_t *)&conn->tcp, &uvb, 1, write_cb);
+    if (rc != 0) {
+        conn->write_pending = false;
+        mb_conn_begin_close(conn);
+        return false;
+    }
+    return true;
+}
+
 static void write_cb(uv_write_t *req, int status) {
     mb_conn *conn = req->data;
     if (status < 0 || conn->closing) {
@@ -245,6 +474,16 @@ static void write_cb(uv_write_t *req, int status) {
 
     mb_buf_clear(&conn->in_flight);
     conn->write_pending = false;
+    if (conn->tls_state == MB_CONN_TLS_INFO) {
+        (void)tls_start(conn);
+        return;
+    }
+    if (conn->tls_state == MB_CONN_TLS_HANDSHAKE) {
+        if (tls_drive_handshake(conn) && !conn->closing) {
+            mb_conn_kick_write(conn);
+        }
+        return;
+    }
     mb_conn_kick_write(conn);
 }
 
@@ -253,24 +492,26 @@ void mb_conn_kick_write(void *ctx) {
     if (conn->closing) {
         return;
     }
-    if (close_if_slow_consumer(conn) || conn->write_pending || conn->router_conn.out.len == 0) {
+    if (close_if_slow_consumer(conn) || conn->write_pending) {
         return;
     }
 
-    mb_buf_swap(&conn->router_conn.out, &conn->in_flight);
-    if (conn->in_flight.len > UINT_MAX) {
-        mb_conn_begin_close(conn);
+    if (conn->tls_state == MB_CONN_TLS_OFF) {
+        (void)write_socket_from(conn, &conn->router_conn.out);
         return;
     }
-
-    uv_buf_t uvb = uv_buf_init((char *)conn->in_flight.ptr, (unsigned int)conn->in_flight.len);
-    conn->write_req.data = conn;
-    conn->write_pending = true;
-    const int rc = uv_write(&conn->write_req, (uv_stream_t *)&conn->tcp, &uvb, 1, write_cb);
-    if (rc != 0) {
-        conn->write_pending = false;
-        mb_conn_begin_close(conn);
+    if (conn->tls_state == MB_CONN_TLS_INFO) {
+        (void)write_socket_from(conn, &conn->router_conn.out);
+        return;
     }
+    if (conn->tls_state == MB_CONN_TLS_HANDSHAKE) {
+        (void)write_socket_from(conn, &conn->tls_out);
+        return;
+    }
+    if (!tls_encrypt_pending(conn)) {
+        return;
+    }
+    (void)write_socket_from(conn, &conn->tls_out);
 }
 
 static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -282,6 +523,16 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
     }
     if (nread == 0) {
         (void)buf;
+        return;
+    }
+    if (conn->tls_state == MB_CONN_TLS_HANDSHAKE || conn->tls_state == MB_CONN_TLS_READY) {
+        if (tls_feed_encrypted(conn, (const uint8_t *)buf->base, (size_t)nread) && !conn->closing) {
+            mb_conn_kick_write(conn);
+        }
+        return;
+    }
+    if (conn->tls_state == MB_CONN_TLS_INFO) {
+        mb_conn_begin_close(conn);
         return;
     }
     if (!mb_buf_append(&conn->rx, buf->base, (size_t)nread)) {
@@ -306,6 +557,7 @@ bool mb_conn_create(mb_server *server, uv_stream_t *listener) {
     conn->router_conn.kick_ctx = conn;
     conn->router_conn.close_fn = close_conn_from_router;
     conn->router_conn.close_ctx = conn;
+    conn->tls_state = server->tls_enabled ? MB_CONN_TLS_INFO : MB_CONN_TLS_OFF;
 
     if (uv_tcp_init(&server->loop, &conn->tcp) != 0) {
         free(conn);
@@ -323,6 +575,7 @@ bool mb_conn_create(mb_server *server, uv_stream_t *listener) {
         .client_ip = conn->client_ip,
         .port = server->port,
         .client_id = conn->client_id,
+        .tls_required = server->tls_enabled,
     };
     if (!mb_write_info(&conn->router_conn.out, &info)) {
         mb_conn_begin_close(conn);
@@ -337,7 +590,7 @@ bool mb_conn_create(mb_server *server, uv_stream_t *listener) {
     conn->counted = true;
     server->conn_count += 1;
 
-    if (uv_read_start((uv_stream_t *)&conn->tcp, alloc_cb, read_cb) != 0) {
+    if (!server->tls_enabled && !start_reading(conn)) {
         mb_conn_begin_close(conn);
         return false;
     }

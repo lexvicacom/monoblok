@@ -23,6 +23,8 @@ static void usage(const char *argv0) {
            "  --patchbay FILE      Explicit patchbay path.\n"
            "  --host HOST          TCP listen host (default 127.0.0.1).\n"
            "  --port PORT          TCP listen port (default 4222).\n"
+           "  --tls-cert FILE      Enable client TLS with this certificate chain PEM.\n"
+           "  --tls-key FILE       Private key PEM for --tls-cert.\n"
            "  --no-lvc             Disable $LVC.* last-value cache streams.\n"
            "  --snapshot FILE      Load/write LVC and patchbay state snapshot.\n"
            "  --snapshot-every S   Periodically write snapshot every S seconds.\n"
@@ -133,6 +135,8 @@ int main(int argc, char **argv) {
     const char *soundcheck_path = NULL;
     const char *patchbay_path = NULL;
     const char *snapshot_path = NULL;
+    const char *tls_cert_path = NULL;
+    const char *tls_key_path = NULL;
     uint64_t snapshot_every_ms = 0;
     uint64_t stats_tick_ms = MB_DEFAULT_STATS_TICK_MS;
     uint64_t soundcheck_linger_ms = PB_SOUNDCHECK_DEFAULT_LINGER_MS;
@@ -160,6 +164,10 @@ int main(int argc, char **argv) {
             io_uring = IO_URING_DISABLE;
         } else if (strcmp(argv[i], "--no-lvc") == 0) {
             lvc_enabled = false;
+        } else if (strcmp(argv[i], "--tls-cert") == 0 && i + 1 < argc) {
+            tls_cert_path = argv[++i];
+        } else if (strcmp(argv[i], "--tls-key") == 0 && i + 1 < argc) {
+            tls_key_path = argv[++i];
         } else if (strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc) {
             snapshot_path = argv[++i];
         } else if (strcmp(argv[i], "--snapshot-every") == 0 && i + 1 < argc) {
@@ -212,6 +220,11 @@ int main(int argc, char **argv) {
             usage(argv[0]);
             return 2;
         }
+    }
+
+    if ((tls_cert_path == NULL) != (tls_key_path == NULL)) {
+        usage(argv[0]);
+        return 2;
     }
 
     soundcheck_path = patchbay_path;
@@ -270,6 +283,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "info: snapshot: disabled\n");
     }
     fprintf(stderr, "info: stats: enabled every=%" PRIu64 "ms\n", stats_tick_ms);
+    if (tls_cert_path == NULL) {
+        fprintf(stderr, "info: tls: disabled\n");
+    }
 
     mb_bridge bridge = {0};
     mb_importer importer = {0};
@@ -277,7 +293,8 @@ int main(int argc, char **argv) {
     mb_server server;
     const bool client_pubs_enabled = !program.importer.present;
     if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_runtime_enabled, snapshot_path,
-                        snapshot_every_ms, stats_tick_ms, client_pubs_enabled, trace)) {
+                        snapshot_every_ms, stats_tick_ms, client_pubs_enabled, trace,
+                        tls_cert_path, tls_key_path)) {
         pb_program_free(&program);
         return 1;
     }

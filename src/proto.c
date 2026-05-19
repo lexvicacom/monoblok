@@ -400,6 +400,7 @@ bool mb_write_info(mb_buf *out, const mb_info *info) {
            APPEND_LIT(out, ",\"version\":") &&
            append_json_string(out, MB_VERSION) &&
            APPEND_LIT(out, ",\"proto\":1,\"headers\":false,\"max_payload\":1048576") &&
+           (info->tls_required ? APPEND_LIT(out, ",\"tls_required\":true") : true) &&
            APPEND_LIT(out, ",\"host\":") &&
            append_json_string(out, info->host) &&
            APPEND_LIT(out, ",\"port\":") &&

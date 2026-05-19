@@ -196,9 +196,32 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | `$STATS.*` live counters | yes, monoblok extension |
 | bridge to real NATS | export-only |
 | import from real NATS | yes, as private patchbay ingress |
-| TLS/auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
+| TLS on the local server | yes, optional server cert/key |
+| auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
 | JetStream | no |
 | clustering | no |
+
+### TLS for local NATS clients
+
+Server-side TLS is optional. Start monoblok with a PEM certificate chain and
+matching private key:
+
+```sh
+monoblok --port 4222 --patchbay patchbay.edn \
+  --tls-cert /etc/monoblok/server.crt \
+  --tls-key /etc/monoblok/server.key
+```
+
+monoblok follows the normal NATS TLS upgrade flow: the accepted socket first
+receives a plaintext `INFO` containing `"tls_required":true`, then the client
+starts TLS on that same socket before sending `CONNECT`. Non-TLS clients will
+not be able to complete the connection once TLS is enabled.
+
+Use a certificate trusted by your clients in production. For private/self-signed
+certificates, configure clients with the CA certificate where possible. Test
+clients can disable verification, but that is insecure and should stay out of
+production. With `nats.c`, the development-only equivalent is
+`natsOptions_SkipServerVerification(opts, true)`.
 
 ### As a bridging/importing client to a NATS server
 

@@ -10,6 +10,9 @@
 #include <signal.h>
 #include <string.h>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 struct mb_snapshot_job {
     uv_work_t req;
     mb_server *server;
@@ -20,6 +23,51 @@ struct mb_snapshot_job {
 
 static void on_stats_timer(uv_timer_t *timer);
 static void on_snapshot_timer(uv_timer_t *timer);
+
+static void tls_log_error(const char *what, const char *path) {
+    char errbuf[256];
+    const unsigned long code = ERR_get_error();
+    if (code != 0) {
+        ERR_error_string_n(code, errbuf, sizeof errbuf);
+        fprintf(stderr, "tls: %s%s%s failed: %s\n", what, path == NULL ? "" : " ", path == NULL ? "" : path, errbuf);
+    } else {
+        fprintf(stderr, "tls: %s%s%s failed\n", what, path == NULL ? "" : " ", path == NULL ? "" : path);
+    }
+}
+
+static SSL_CTX *tls_ctx_create(const char *cert_path, const char *key_path) {
+    if (cert_path == NULL || key_path == NULL) {
+        fprintf(stderr, "tls: --tls-cert and --tls-key must be configured together\n");
+        return NULL;
+    }
+    if (!OPENSSL_init_ssl(0, NULL)) {
+        tls_log_error("initialize OpenSSL", NULL);
+        return NULL;
+    }
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (ctx == NULL) {
+        tls_log_error("create context", NULL);
+        return NULL;
+    }
+    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+    if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) != 1) {
+        tls_log_error("load certificate", cert_path);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+        tls_log_error("load private key", key_path);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+        tls_log_error("check private key", key_path);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    fprintf(stderr, "info: tls: enabled cert=%s key=%s\n", cert_path, key_path);
+    return ctx;
+}
 
 int64_t mb_wall_clock_ms(void) {
     uv_timeval64_t tv = {0};
@@ -255,7 +303,8 @@ static void make_server_id(char out[35]) {
 
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
-                    uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace) {
+                    uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,
+                    const char *tls_cert_path, const char *tls_key_path) {
     *server = (mb_server){
         .host = host,
         .port = port,
@@ -267,6 +316,13 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         .client_pubs_enabled = client_pubs_enabled,
         .trace = trace,
     };
+    if (tls_cert_path != NULL || tls_key_path != NULL) {
+        server->tls_ctx = tls_ctx_create(tls_cert_path, tls_key_path);
+        if (server->tls_ctx == NULL) {
+            return false;
+        }
+        server->tls_enabled = true;
+    }
     make_server_id(server->server_id);
     server->next_client_id = 1;
     mb_router_init(&server->router);
@@ -408,5 +464,10 @@ void mb_server_close(mb_server *server) {
         }
     }
     uv_loop_close(&server->loop);
+    if (server->tls_ctx != NULL) {
+        SSL_CTX_free(server->tls_ctx);
+        server->tls_ctx = NULL;
+        server->tls_enabled = false;
+    }
     mb_router_free(&server->router);
 }
