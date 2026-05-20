@@ -2,13 +2,13 @@
 
 Signal conditioning, transformation, and routing in a NATS-native message processor.
 
-  > **monoblok cleans noisy NATS streams before your subscribers ever see them.**
-  > 
-  > **monoblok speaks NATS.** Point existing publishers at it or have it consume existing subjects; declare
-  > the processing rules you need, and it will publish to clean subjects, so subscribers consume clean, actionable
-  > data.
-  >
-  > Fix noisy raw input streams once, not in every subscriber.
+>**monoblok speaks NATS.**
+>
+>Point existing publishers at it or have it consume existing subjects. Declare the processing rules you need, and monoblok republishes clean, actionable subjects for subscribers.
+>
+> _Rounding. Deadbands. Squelch. Aggregation. Moving averages. OHLC. Derived alerts._
+>
+> Fix noisy raw streams once, not in every subscriber.
 
 ## Rationale
 
