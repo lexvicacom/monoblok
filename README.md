@@ -2,10 +2,11 @@
 
 Signal conditioning, transformation, and routing in a NATS-native message processor.
 
-
+  > **monoblok cleans noisy NATS streams before your subscribers ever see them.**
+  > 
   > **monoblok speaks NATS.** Point existing publishers at it or have it consume existing subjects; declare
-  > the processing rules you need, and let subscribers consume clean, actionable
-  > subjects.
+  > the processing rules you need, and it will publish to clean subjects, so subscribers consume clean, actionable
+  > data.
   >
   > Fix noisy raw input streams once, not in every subscriber.
 
@@ -120,12 +121,6 @@ I'd **love** to hear from anyone who tries monoblok out and finds it useful.
 It's open source, without restrictions (per MIT license re attribution) or paid commercial features. However, [my company](https://lexvica.com) provides services around monoblok. I'd be happy to learn about your environment, requirements and work with you to deliver a proof of concept, case study or complete solution. 
 
 [Drop me a line](mailto:alex@lexvica.com).
-
-## AI
-
-It's 2026, Claude and Codex help a lot. All code is reviewed and iterated upon before being merged.
-
->Personal note: I had a stroke in Dec 2025 and have oddly adapted to typing with one finger with my left hand. I'd probably have given up without these tools, during my recovery. Five months on my typing has got better but it is still error prone. Think this may be as good as it gets!
 
 ## License
 
