@@ -70,7 +70,8 @@ Example shape:
   :jetstream true
   :stream "SENSORS"
   :consumer "monoblok-sensors"
-  :catch-up true)
+  :catch-up true
+  :max-catch-up-procs 1)
 ```
 
 YAML should lower to the same options:
@@ -83,6 +84,7 @@ import:
   stream: "SENSORS"
   consumer: "monoblok-sensors"
   catch-up: true
+  max-catch-up-procs: 1
 ```
 
 Proposed option meanings:
@@ -96,6 +98,8 @@ Proposed option meanings:
   behavior to live mode.
 - `:catch-up false` starts the consumer in live mode. It should not replay old
   data unless the named consumer's existing durable state already has a backlog.
+- `:max-catch-up-procs N` limits how many child catch-up processes this
+  `monoblok` parent may run at once.
 
 The current `:subject` option remains useful as the filter subject list for the
 JetStream consumer. If JetStream filter semantics cannot match the configured
@@ -104,6 +108,12 @@ list exactly, validation should fail rather than silently widening the import.
 The consumer name should be stable across restarts for normal catch-up/live
 operation. Ephemeral consumers are useful for ad hoc replay, but a durable name
 is the safer default for a daemon expected to resume after a crash.
+
+`max-catch-up-procs` is process-level coordination expressed in the import
+configuration because imports create the catch-up work. If multiple import forms
+eventually become legal, the value should be consistent across them or rejected
+as ambiguous. For the current single-import shape, it simply caps child replay
+parallelism for that daemon.
 
 ---
 
@@ -143,6 +153,26 @@ separate out-of-order policy.
 
 ---
 
+## Invariants
+
+- Import/tap mode has exactly one write ingress into patchbay state.
+- Local core NATS clients may subscribe while import/tap mode is active.
+- Local core NATS client `PUB` frames are rejected while import/tap mode is
+  active, including JetStream catch-up/live mode.
+- JetStream catch-up and live delivery use the same import-owned write path.
+- Patchbay state, router state, and LVC state remain owned by the main event
+  loop.
+- Historical replay must not mix event-time messages with processing-time local
+  publishes in the same patchbay state.
+- During catch-up, patchbay timers are advanced by the virtual scheduler rather
+  than by real sleeps.
+
+This keeps the event-time model tractable. The daemon can serve subscribers
+while replaying, but it does not accept a second producer clock into the same
+conditioning state.
+
+---
+
 ## Catch-up then live
 
 At startup, the JetStream ingress records a stream high-water sequence:
@@ -169,6 +199,10 @@ ingress as live.
 Do not use `NumPending == 0` alone as the catch-up detector. Pending counts can
 move while new messages arrive. A startup high-water sequence gives a cleaner
 handoff point.
+
+Catch-up may run in the parent process or in a short-lived child process. The
+input continuity rule is the same either way: only one process owns the durable
+consumer at a time.
 
 ---
 
@@ -200,6 +234,194 @@ to virtual catch-up mode until the event clock catches real time again.
 
 ---
 
+## Separate catch-up process
+
+For small backlogs, the parent process can catch up in place. For large
+backlogs, replay may consume CPU, allocate wide time windows, and produce a
+large historical output burst. In that case the parent can spawn a short-lived
+catch-up child.
+
+High-level shape:
+
+1. Parent starts with JetStream live import disabled.
+2. Parent decides whether catch-up is small enough to run inline.
+3. If not, parent starts a child `monoblok` process with the same patchbay
+   config and an explicit catch-up mode.
+4. Child binds the configured durable consumer name.
+5. Child records `catchup_to = stream.LastSeq`.
+6. Child consumes with `ReplayInstant`, evaluates with event time, and drains
+   virtual patchbay deadlines without sleeping.
+7. Child emits exported NATS subjects only if the catch-up output policy allows
+   historical output to leave the process.
+8. Child acks after successful evaluation/output acceptance.
+9. After acking through `catchup_to`, child flushes due virtual timers, writes a
+   snapshot, reports success to the parent, and exits.
+10. Parent loads the snapshot, attaches the same durable consumer, and continues
+    live.
+
+The child should not run concurrently with the parent on the same durable
+consumer. Sharing a durable would make ordering and state ownership harder to
+reason about. The simple model is exclusive ownership: child owns the durable
+during catch-up, then parent owns it after handoff.
+
+Durable consumer continuity preserves input position. Snapshot continuity
+preserves `monoblok` conditioning state. Handoff requires both.
+
+---
+
+## Catch-up placement heuristic
+
+The decision to catch up inline or spawn a child should be based on estimated
+catch-up duration and output cost, not raw pending count alone.
+
+Useful inputs:
+
+- message lag: stream high-water sequence minus the consumer ack floor
+- time lag: stream latest timestamp minus the consumer's last acked event time
+- measured replay/eval throughput for this patchbay on this machine
+- output amplification: derived publishes per imported message
+- whether catch-up output is allowed to reach live subscribers/export subjects
+- estimated snapshot cost for the resulting state
+
+Example policy:
+
+```text
+estimated_catchup_s = lag_messages / measured_replay_msgs_per_sec
+
+if estimated_catchup_s <= inline_catchup_max_s:
+    catch up in the parent process
+else:
+    spawn a catch-up child process
+```
+
+Configuration should make this explicit:
+
+```clojure
+(import
+  :servers ["nats://127.0.0.1:4222"]
+  :subject ["sensors.>"]
+  :jetstream true
+  :stream "SENSORS"
+  :consumer "monoblok-sensors"
+  :catch-up true
+  :catch-up-mode :auto
+  :inline-catch-up-max-ms 5000
+  :max-catch-up-procs 1)
+```
+
+Proposed modes:
+
+- `:catch-up-mode :inline` always catches up in the parent process.
+- `:catch-up-mode :child` always uses a child process.
+- `:catch-up-mode :auto` estimates catch-up cost and logs the decision.
+
+If the estimate is missing or clearly unreliable, the conservative default is to
+spawn the child or require an explicit operator choice. A bad inline estimate
+can starve subscribers and timers in the parent.
+
+If multiple JetStream imports need catch-up at once, the parent should be able
+to stagger them. Running every backlog at full speed can overload the upstream
+NATS server, the host CPU, disk, or downstream export targets.
+
+Useful throttles:
+
+- maximum concurrent catch-up imports
+- maximum concurrent child catch-up processes, configured with
+  `:max-catch-up-procs`
+- per-import replay batch size
+- per-import yield interval back to the parent event loop
+- optional delay between starting catch-up jobs
+- output/export rate limits for historical replay
+
+An `:auto` implementation should prefer predictable progress over peak replay
+speed. If several streams are behind, catching up one or two at a time is easier
+to observe and recover than letting every stream compete at once.
+
+---
+
+## Catch-up visibility
+
+Catch-up state should be visible through system subjects. Operators and local
+subscribers need to know whether a stream is historical, live, stalled, or
+handing off.
+
+Proposed live status subjects:
+
+```text
+$STATS.import.<name>.mode              core | js-inline | js-child
+$STATS.import.<name>.phase             live | catchup | handoff | stalled | failed
+$STATS.import.<name>.stream            SENSORS
+$STATS.import.<name>.consumer          monoblok-sensors
+$STATS.import.<name>.catchup.to        <stream sequence>
+$STATS.import.<name>.stream.seq        <last processed stream sequence>
+$STATS.import.<name>.lag.messages      <count>
+$STATS.import.<name>.lag.ms            <event-time lag>
+$STATS.import.<name>.processed         <count>
+$STATS.import.<name>.acked             <count>
+$STATS.import.<name>.redelivered       <count>
+$STATS.import.<name>.failed            <count>
+```
+
+The exact subject names can change, but the state must be explicit. A dashboard
+or operator should not have to infer catch-up from output volume.
+
+`<name>` should come from the import config's `:name` when present, otherwise a
+stable sanitized form of the stream or consumer name. If the status subjects are
+made LVC-enabled, late subscribers can immediately see that an import is in
+catch-up mode.
+
+Status should also be emitted during child-process catch-up. The parent can
+publish child status by reading child progress messages, or the child can emit
+status directly if it is allowed to publish system subjects. In either case,
+there should be one authoritative visible status for each configured import.
+
+---
+
+## Snapshot handoff
+
+When a child process performs catch-up, the parent must load the child's
+snapshot before attaching the durable consumer for live delivery.
+
+The child reports a small handoff record:
+
+```text
+caught-up
+snapshot=/var/lib/monoblok/replay-123.snapshot
+stream=SENSORS
+consumer=monoblok-sensors
+acked_seq=123456789
+event_wall_ms=...
+patchbay_config_hash=...
+```
+
+Parent handoff sequence:
+
+1. Keep the parent JetStream consumer disabled.
+2. Verify the child exited successfully.
+3. Verify the snapshot patchbay/config hash matches the parent's loaded config.
+4. Load snapshot state into the parent's own `pb_program`, router, and LVC
+   structures on the main loop.
+5. Restore the replay event clock from the snapshot metadata.
+6. Attach the same durable consumer name.
+7. Drain messages published after the child's acked sequence.
+8. Enable live output behavior according to configuration.
+
+The snapshot should carry enough metadata to make the handoff auditable:
+
+- LVC entries
+- patchbay state entries
+- time-window samples
+- bar state
+- armed clock deadlines
+- last event `now_ms` and `wall_ms`
+- stream name, consumer name, and acked stream sequence
+- patchbay/config identity
+
+The parent should not import process memory or share runtime structs with the
+child. The snapshot is the ownership boundary.
+
+---
+
 ## Live handoff
 
 The live handoff is not a change in source. The same durable consumer continues
@@ -221,12 +443,12 @@ show that patchbay outputs are as-of the event clock, not as-of real time.
 
 ## Local publishes while replaying
 
-Mixing direct local socket `PUB` traffic with JetStream event-time replay is
-dangerous because the same patchbay state would see two unrelated time sources.
+Mixing direct local socket `PUB` traffic with JetStream event-time replay would
+make the same patchbay state see two unrelated time sources.
 
-The first implementation should choose one simple policy:
+Import/tap mode already has the right invariant:
 
-- JetStream replay/live mode rejects local client `PUB`, similar to import mode.
+- JetStream replay/live mode rejects local client `PUB`.
 - Local clients may still subscribe to derived output.
 - Downstream output remains ordinary monoblok publish/router behavior.
 
