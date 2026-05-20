@@ -113,9 +113,13 @@ Saved sample output lives in [bench-results/](./bench-results). On Linux these
 scripts default to monoblok's opt-in libuv io_uring path to match the saved
 runs; pass `--epoll` to benchmark the production-default epoll path.
 
-## Support
+## Feedback
 
-I've been doing this for a while - while the same-old problems monoblok solves may not be readily apparent - _"it's simple - it is just rounding numbers and doing basic stats"_ ... those with battle scars are hopefully nodding along. [My company](https://lexvica.com) can provide services around monoblok. I'd be happy to learn about your environment, requirements and work with you on a proof of concept, case study or complete solution. [Drop me a line](mailto:alex@lexvica.com).
+I'd **love** to hear from anyone who tries monoblok out and finds it useful.
+
+It's open source, without restrictions (per MIT license re attribution) or paid commercial features. However, [my company](https://lexvica.com) provides services around monoblok. I'd be happy to learn about your environment, requirements and work with you to deliver a proof of concept, case study or complete solution. 
+
+[Drop me a line](mailto:alex@lexvica.com).
 
 ## AI
 
