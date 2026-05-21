@@ -9,7 +9,8 @@ For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistan
 | `(on FILTER [:reentrant true] BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. `:reentrant true` (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8. |
 | `(lvc [FILTER ...])` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings or `(env "NAME")`. Legacy `(lvc FILTER ...)` is accepted. |
 | `(export :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. Deprecated `(bridge ...)` is accepted as an alias. See export keywords below. |
-| `(import :servers ... :subject ...)` | optional, zero or one. Inbound NATS tap into patchbay. See import keywords below. |
+| `(import :servers ... :subject ...)` | optional, zero or one. Inbound core NATS tap into patchbay; compatibility alias for one `:core` entry. |
+| `(import :core [...] :streams [...])` | scoped core NATS and JetStream imports. JetStream entries are consumer-only patchbay ingress. |
 
 ## EDN / JSON / YAML
 
@@ -24,8 +25,8 @@ editing in VS Code; `clojure-mode`/CIDER or `clojure-ts-mode` plus
 Parinfer/paredit/smartparens in Emacs). JSON maps to the same form AST:
 arrays are calls, the first array item is always the operator symbol,
 object arguments become keyword options, and
-`"subject"` / `"payload"` / `"payload-float"` / `"payload-int"` become
-symbols in rule expressions.
+`"subject"` / `"payload"` / `"payload-float"` / `"payload-int"` /
+`"replaying?"` become symbols in rule expressions.
 In top-level config string positions, YAML `env: NAME` lowers to
 EDN `(env "NAME")`.
 
@@ -46,6 +47,7 @@ EDN `(env "NAME")`.
 | `payload` | incoming payload (string of bytes) |
 | `payload-float` | payload parsed as a floating-point number (errors if not numeric) |
 | `payload-int` | integer payload parsed and returned as a number (errors if not integer) |
+| `replaying?` | true while JetStream catch-up is evaluating historical messages |
 
 ## Special forms
 
@@ -205,6 +207,7 @@ non-empty, and are not comma-split.
 | `:tls-cert` / `:tls-key` | strings | client cert + key (mTLS) |
 | `:tls-skip-verify` | bool | dev only, insecure |
 | `:origin-header` | bool | when true, forwarded messages include `x-monoblok: <hostname>` |
+| `:replay-header` | bool | when true, replay bridge output includes `x-monoblok-replay: true` and `x-monoblok-assumed-ts: <unix-ms>`; live output omits both |
 | `:connect-timeout-ms` / `:ping-interval-ms` | numbers | tuning |
 | `:max-reconnect` | number | -1 for unlimited |
 | `:reconnect-wait-ms` | number | tuning |
@@ -213,10 +216,12 @@ non-empty, and are not comma-split.
 ## Import keywords
 
 A single optional `(import ...)` form at top level configures inbound tap mode
-from a real NATS cluster. Imported raw messages run through patchbay but are not
-visible to direct monoblok subscribers unless a rule republishes them. Local
-socket clients may still subscribe, but client `PUB` commands are rejected while
-import mode is configured.
+from a real NATS cluster. The flat shape configures one core NATS import;
+newer configs can use `:core [...]` for core NATS entries and `:streams [...]`
+for JetStream durable consumers. Imported raw messages run through patchbay but
+are not visible to direct monoblok subscribers unless a rule republishes them.
+Local socket clients may still subscribe, but client `PUB` commands are
+rejected while import mode is configured.
 
 Counters land on `$STATS.import.received`, `.processed`, `.dropped`, and
 `.failed` on the normal stats tick.
@@ -229,5 +234,10 @@ Connection keywords match export: `:servers`, `:name`, `:creds`, `:user` /
 | keyword | type | meaning |
 |---------|------|---------|
 | `:subject` / `:subjects` | string or vector of strings | remote subject filters to subscribe to |
+| `:core` | vector of entry vectors | scoped core NATS import entries |
+| `:streams` | vector of entry vectors | scoped JetStream import entries; one subject filter per entry in v1 |
+| `:stream` | string | JetStream stream name, required inside `:streams` entries |
+| `:consumer` | string | JetStream durable consumer name, required inside `:streams` entries |
+| `:catch-up` | bool | JetStream historical replay before listener open; default true |
 | `:origin-header` | bool | when true, imported messages carrying `x-monoblok` are ignored |
 | `:max-pending` | number | bounded NATS-to-loop queue length; default 4096 |

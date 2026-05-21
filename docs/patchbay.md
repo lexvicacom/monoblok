@@ -40,8 +40,8 @@ to make S-expressions feel less manual.
 JSON is read into the same patchbay AST, not a separate DSL: arrays are
 forms and the first array item is always the operator symbol. In
 argument positions, plain objects become keyword options, and the bound
-names `"subject"`, `"payload"`, `"payload-float"`, and `"payload-int"`
-become symbols in rule expressions.
+names `"subject"`, `"payload"`, `"payload-float"`, `"payload-int"`, and
+`"replaying?"` become symbols in rule expressions.
 
 ```json
 [
@@ -97,9 +97,9 @@ That lowers to the same AST as:
 ```
 
 Within expression arrays, the first item is a form symbol; bound names
-such as `payload`, `payload-float`, `payload-int`, and `subject` lower
-as symbols; other scalar arguments lower as strings unless they are
-numbers, booleans, nulls, or keywords like `:ms`. See
+such as `payload`, `payload-float`, `payload-int`, `subject`, and
+`replaying?` lower as symbols; other scalar arguments lower as strings
+unless they are numbers, booleans, nulls, or keywords like `:ms`. See
 [`examples/rental-car.yml`](../examples/rental-car.yml) for the fuller
 shape and [`patchbay-yaml-schema.md`](./patchbay-yaml-schema.md) for the
 YAML shape reference.
@@ -169,13 +169,96 @@ those messages into patchbay as ingress:
   (publish! "clean.temp" payload))
 ```
 
+The flat form above is a compatibility alias for one core NATS import. Newer
+configs can make the import kind explicit with a `:core` vector:
+
+```edn
+(import
+  :core
+  [[:servers ["nats://127.0.0.1:4223"]
+    :name    "monoblok-import"
+    :subject ["raw.>"]
+    :max-pending 4096]])
+```
+
+The nested shape also accepts `:streams` entries for JetStream ingress. In v1,
+each stream entry uses one subject filter so the loader can map it directly to
+one JetStream filtered durable consumer.
+
+```yaml
+lvc:
+  - "js.>"
+
+import:
+  streams:
+    - servers:
+        - env: JS_URL
+      subject: "js.sensors.temp"
+      stream: SENSORS
+      consumer: monoblok-jetstream-example
+      catch-up: true
+
+export:
+  servers:
+    - env: BRIDGE_URL
+  origin-header: true
+  replay-header: true
+  export:
+    - "js.>"
+
+on:
+  - sub: js.sensors.temp
+    form:
+      - do
+      - [count!]
+      - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
+      - [bar!, :ms, 1000, payload-float]
+      - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
+```
+
+JetStream import is consumer-only: monoblok does not serve JetStream to local
+clients. On startup, `:catch-up true` replays each configured stream entry to
+the stream's startup high-water sequence before monoblok opens its listener.
+Multiple stream entries catch up serially in config order. After catch-up, the
+same durable consumers continue in live mode. `:catch-up false` skips the
+historical event-time loading phase and consumes any durable backlog as live
+processing-time work.
+
+For filtered stream entries, the startup high-water is a global stream sequence,
+not a count of messages monoblok must consume. Catch-up stops when a delivered
+matching message reaches that startup sequence, or when the durable consumer
+reports `pending=0` for the filter.
+
+Replay-derived output is ordinary patchbay output: if it matches `export`, it is
+bridged during catch-up. With `origin-header: true`, those bridged messages carry
+the same `x-monoblok` provenance header as live bridged messages. With
+`replay-header: true`, replay-derived bridged messages also carry
+`x-monoblok-replay: true` and `x-monoblok-assumed-ts: <unix-ms>`, where the
+timestamp is the wall timestamp used for patchbay evaluation. Live bridged
+messages do not carry these replay headers.
+
+During JetStream catch-up, rules see `replaying?` as true. After the listener
+opens, `replaying?` is false. Rules that do not mention `replaying?` produce
+the same subjects during replay and live operation; rules that want to suppress
+or redirect historical output should gate that behavior explicitly. See
+[`examples/jetstream.yml`](../examples/jetstream.yml) and
+[`examples/jetstream.sh`](../examples/jetstream.sh) for a runnable example that
+starts JetStream on `JS_PORT` (default `15889`), exports `JS_URL`, populates
+`COUNT=1000` historical events with a default pause halfway through population,
+starts a plain NATS bridge target on `BRIDGE_PORT` (default `15890`) and exports
+`BRIDGE_URL`, then runs monoblok through catch-up plus one live event. That
+pause gives the replay clock enough event-time gap to close the example
+`bar! :ms 1000` window during catch-up. The bridge subscriber is active during
+catch-up, so replay-derived `js.>` output is visible there while monoblok's
+local listener is still closed.
+
 When `(import ...)` is present, monoblok's local NATS socket remains open for
 `SUB`, `UNSUB`, `PING`, and LVC/stats reads, but client `PUB` commands are
 rejected. Imported messages are private inputs. A direct monoblok subscriber to
 `raw.>` will not see the imported `raw.temp`; subscribers only see subjects
 emitted explicitly by rules, such as `clean.temp` above.
 
-Both forms accept the same connection keywords: `:creds`, `:user` /
+Core import entries accept the same connection keywords: `:creds`, `:user` /
 `:password`, `:token`, `:tls`, `:tls-ca`, `:tls-cert` / `:tls-key`,
 `:tls-skip-verify` (dev only), `:connect-timeout-ms`,
 `:ping-interval-ms`, `:max-reconnect` (-1 unlimited), and
@@ -183,6 +266,12 @@ Both forms accept the same connection keywords: `:creds`, `:user` /
 messages carrying monoblok's `x-monoblok` header, useful when export
 and import touch the same cluster. `:max-pending` bounds the
 cross-thread import queue; the default is 4096 messages.
+
+JetStream stream entries use the same connection/auth keywords plus `:stream`,
+`:consumer`, and `:catch-up`. Event time comes from JetStream message metadata.
+Malformed subjects, oversized payloads, missing metadata, failed rule
+evaluation, or failed downstream publish prevent acking the JetStream message;
+JetStream owns redelivery.
 
 Top-level config string values may be written as `(env "NAME")`.
 This is load-time only, not a rule-body form, and it reads exactly one
@@ -225,6 +314,7 @@ Bare symbols inside a body that resolve against the current message:
 | `payload`       | string     | the raw payload bytes              |
 | `payload-float` | number     | `payload` parsed as a floating-point number (errors if not numeric) |
 | `payload-int`   | number     | `payload` parsed as an integer and returned as a number (errors on non-integer input) |
+| `replaying?`    | bool       | true while JetStream loading-phase replay is evaluating historical messages |
 
 ## Special forms
 

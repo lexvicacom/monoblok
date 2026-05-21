@@ -281,6 +281,16 @@ natsStatus natsMsgHeader_Set(natsMsg *msg, const char *key, const char *value) {
     g_fake_nats.msg_header_set_calls += 1;
     copy_cstr(g_fake_nats.last_header_name, sizeof g_fake_nats.last_header_name, key);
     copy_cstr(g_fake_nats.last_header_value, sizeof g_fake_nats.last_header_value, value);
+    if (key != NULL && strcmp(key, "x-monoblok") == 0) {
+        g_fake_nats.origin_header_set_calls += 1;
+        copy_cstr(g_fake_nats.last_origin_header_value, sizeof g_fake_nats.last_origin_header_value, value);
+    } else if (key != NULL && strcmp(key, "x-monoblok-replay") == 0) {
+        g_fake_nats.replay_header_set_calls += 1;
+        copy_cstr(g_fake_nats.last_replay_header_value, sizeof g_fake_nats.last_replay_header_value, value);
+    } else if (key != NULL && strcmp(key, "x-monoblok-assumed-ts") == 0) {
+        g_fake_nats.assumed_ts_header_set_calls += 1;
+        copy_cstr(g_fake_nats.last_assumed_ts_header_value, sizeof g_fake_nats.last_assumed_ts_header_value, value);
+    }
     return g_fake_nats.msg_header_set_status;
 }
 

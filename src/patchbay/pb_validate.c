@@ -94,6 +94,113 @@ static bool validate_config_string_list(pb_value value, const char *form_name, p
     return true;
 }
 
+static bool config_string_list_has_one(pb_value value) {
+    if (value.kind == PB_STRING || value_is_env_form(value)) {
+        return true;
+    }
+    return (value.kind == PB_VECTOR || value.kind == PB_LIST) && value.seq.len == 1;
+}
+
+static bool validate_import_entry_options(pb_values options, const char *label, bool stream_entry) {
+    if (options.len == 0 || (options.len % 2) != 0) {
+        fprintf(stderr, "validate: %s expects keyword/value options\n", label);
+        return false;
+    }
+    bool has_servers = false;
+    bool has_subjects = false;
+    bool has_stream = false;
+    bool has_consumer = false;
+    for (size_t i = 0; i < options.len; i += 2) {
+        if (options.items[i].kind != PB_KEYWORD) {
+            fprintf(stderr, "validate: %s option must be keyword\n", label);
+            return false;
+        }
+        pb_slice key = options.items[i].text;
+        pb_value value = options.items[i + 1];
+        if (pb_slice_eq_lit(key, "servers") || pb_slice_eq_lit(key, "subject") || pb_slice_eq_lit(key, "subjects")) {
+            if (pb_slice_eq_lit(key, "servers")) {
+                has_servers = true;
+            } else {
+                has_subjects = true;
+                if (stream_entry && !config_string_list_has_one(value)) {
+                    fprintf(stderr, "validate: %s :%.*s expects exactly one filter in v1\n", label, (int)key.len, key.ptr);
+                    return false;
+                }
+            }
+            if (!validate_config_string_list(value, label, key)) {
+                return false;
+            }
+        } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
+                   pb_slice_eq_lit(key, "origin-header") || pb_slice_eq_lit(key, "catch-up")) {
+            if (!stream_entry && pb_slice_eq_lit(key, "catch-up")) {
+                fprintf(stderr, "validate: unknown %s option: %.*s\n", label, (int)key.len, key.ptr);
+                return false;
+            }
+            if (value.kind != PB_BOOL) {
+                fprintf(stderr, "validate: %s :%.*s expects boolean\n", label, (int)key.len, key.ptr);
+                return false;
+            }
+        } else if (pb_slice_eq_lit(key, "connect-timeout-ms") || pb_slice_eq_lit(key, "ping-interval-ms") ||
+                   pb_slice_eq_lit(key, "reconnect-wait-ms") || pb_slice_eq_lit(key, "max-reconnect") ||
+                   pb_slice_eq_lit(key, "max-pending")) {
+            if (value.kind != PB_NUMBER) {
+                fprintf(stderr, "validate: %s :%.*s expects number\n", label, (int)key.len, key.ptr);
+                return false;
+            }
+        } else if (pb_slice_eq_lit(key, "name") || pb_slice_eq_lit(key, "creds") || pb_slice_eq_lit(key, "user") ||
+                   pb_slice_eq_lit(key, "password") || pb_slice_eq_lit(key, "token") || pb_slice_eq_lit(key, "tls-ca") ||
+                   pb_slice_eq_lit(key, "tls-cert") || pb_slice_eq_lit(key, "tls-key") ||
+                   (stream_entry && (pb_slice_eq_lit(key, "stream") || pb_slice_eq_lit(key, "consumer")))) {
+            if (pb_slice_eq_lit(key, "stream")) {
+                has_stream = true;
+            } else if (pb_slice_eq_lit(key, "consumer")) {
+                has_consumer = true;
+            }
+            if (!validate_config_string(value, label, key)) {
+                return false;
+            }
+        } else {
+            fprintf(stderr, "validate: unknown %s option: %.*s\n", label, (int)key.len, key.ptr);
+            return false;
+        }
+    }
+    if (!has_servers) {
+        fprintf(stderr, "validate: %s requires :servers\n", label);
+        return false;
+    }
+    if (!has_subjects) {
+        fprintf(stderr, "validate: %s requires :subject\n", label);
+        return false;
+    }
+    if (stream_entry && !has_stream) {
+        fprintf(stderr, "validate: %s requires :stream\n", label);
+        return false;
+    }
+    if (stream_entry && !has_consumer) {
+        fprintf(stderr, "validate: %s requires :consumer\n", label);
+        return false;
+    }
+    return true;
+}
+
+static bool validate_import_entries(pb_value value, const char *label, bool stream_entry) {
+    if (value.kind != PB_VECTOR || value.seq.len == 0) {
+        fprintf(stderr, "validate: %s expects a non-empty vector of entries\n", label);
+        return false;
+    }
+    for (size_t i = 0; i < value.seq.len; i += 1) {
+        pb_value entry = value.seq.items[i];
+        if (entry.kind != PB_VECTOR) {
+            fprintf(stderr, "validate: %s entry must be a vector of keyword/value options\n", label);
+            return false;
+        }
+        if (!validate_import_entry_options(entry.seq, label, stream_entry)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool validate_on_form(pb_value form, size_t *rule_count) {
     if (form.kind != PB_LIST || form.seq.len == 0 || form.seq.items[0].kind != PB_SYMBOL) {
         fprintf(stderr, "validate: top-level form must be a list headed by a symbol\n");
@@ -150,7 +257,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                     return false;
                 }
             } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
-                       pb_slice_eq_lit(key, "origin-header")) {
+                       pb_slice_eq_lit(key, "origin-header") || pb_slice_eq_lit(key, "replay-header")) {
                 if (value.kind != PB_BOOL) {
                     fprintf(stderr, "validate: %s :%.*s expects boolean\n", form_name, (int)key.len, key.ptr);
                     return false;
@@ -183,41 +290,39 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
             fprintf(stderr, "validate: import expects keyword/value options\n");
             return false;
         }
-        bool has_servers = false;
-        bool has_subjects = false;
+        bool saw_nested = false;
+        bool saw_flat = false;
         for (size_t i = 1; i < items.len; i += 2) {
             if (items.items[i].kind != PB_KEYWORD) {
                 fprintf(stderr, "validate: import option must be keyword\n");
                 return false;
             }
             pb_slice key = items.items[i].text;
+            if (pb_slice_eq_lit(key, "core") || pb_slice_eq_lit(key, "streams")) {
+                saw_nested = true;
+            } else {
+                saw_flat = true;
+            }
+        }
+        if (saw_nested && saw_flat) {
+            fprintf(stderr, "validate: import cannot mix nested :core/:streams with flat options\n");
+            return false;
+        }
+        if (!saw_nested) {
+            return validate_import_entry_options((pb_values){.items = items.items + 1, .len = items.len - 1}, "import", false);
+        }
+        bool saw_entry = false;
+        for (size_t i = 1; i < items.len; i += 2) {
+            pb_slice key = items.items[i].text;
             pb_value value = items.items[i + 1];
-            if (pb_slice_eq_lit(key, "servers") || pb_slice_eq_lit(key, "subject") || pb_slice_eq_lit(key, "subjects")) {
-                if (pb_slice_eq_lit(key, "servers")) {
-                    has_servers = true;
-                } else {
-                    has_subjects = true;
-                }
-                if (!validate_config_string_list(value, "import", key)) {
+            if (pb_slice_eq_lit(key, "core")) {
+                saw_entry = true;
+                if (!validate_import_entries(value, "import :core", false)) {
                     return false;
                 }
-            } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
-                       pb_slice_eq_lit(key, "origin-header")) {
-                if (value.kind != PB_BOOL) {
-                    fprintf(stderr, "validate: import :%.*s expects boolean\n", (int)key.len, key.ptr);
-                    return false;
-                }
-            } else if (pb_slice_eq_lit(key, "connect-timeout-ms") || pb_slice_eq_lit(key, "ping-interval-ms") ||
-                       pb_slice_eq_lit(key, "reconnect-wait-ms") || pb_slice_eq_lit(key, "max-reconnect") ||
-                       pb_slice_eq_lit(key, "max-pending")) {
-                if (value.kind != PB_NUMBER) {
-                    fprintf(stderr, "validate: import :%.*s expects number\n", (int)key.len, key.ptr);
-                    return false;
-                }
-            } else if (pb_slice_eq_lit(key, "name") || pb_slice_eq_lit(key, "creds") || pb_slice_eq_lit(key, "user") ||
-                       pb_slice_eq_lit(key, "password") || pb_slice_eq_lit(key, "token") || pb_slice_eq_lit(key, "tls-ca") ||
-                       pb_slice_eq_lit(key, "tls-cert") || pb_slice_eq_lit(key, "tls-key")) {
-                if (!validate_config_string(value, "import", key)) {
+            } else if (pb_slice_eq_lit(key, "streams")) {
+                saw_entry = true;
+                if (!validate_import_entries(value, "import :streams", true)) {
                     return false;
                 }
             } else {
@@ -225,12 +330,8 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                 return false;
             }
         }
-        if (!has_servers) {
-            fprintf(stderr, "validate: import requires :servers\n");
-            return false;
-        }
-        if (!has_subjects) {
-            fprintf(stderr, "validate: import requires :subject\n");
+        if (!saw_entry) {
+            fprintf(stderr, "validate: import requires at least one :core or :streams entry\n");
             return false;
         }
         return true;

@@ -100,7 +100,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev netcat-openbsd
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Install NATS smoke tools
+        run: |
+          go install github.com/nats-io/nats-server/v2@v2.12.7
+          go install github.com/nats-io/natscli/nats@v0.2.3
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Server smoke
         run: cmake --build build --target smoke --parallel
+      - name: JetStream smoke
+        run: scripts/jetstream-smoke.sh

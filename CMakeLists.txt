@@ -217,6 +217,7 @@ add_test(NAME importer COMMAND importer-tests)
 add_executable(monoblok
   src/bridge.c
   src/importer.c
+  src/jetstream.c
   src/nats_common.c
   src/snapshot.c
   src/server/conn.c

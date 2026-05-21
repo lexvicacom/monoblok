@@ -8,6 +8,7 @@
 #include "router.h"
 
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,7 +106,14 @@ static bool eval_on_form(pb_value form, size_t rule_id, pb_eval_state *state,
 static bool state_entry_deadline(const pb_eval_state_entry *entry, uint64_t *out_ms) {
     if (entry->kind == PB_EVAL_STATE_RING && entry->ring_time_window && entry->ring_len > 0) {
         const size_t idx = entry->ring_start;
-        *out_ms = entry->ring_times_ms[idx] + entry->ring_window_ms;
+        uint64_t deadline = UINT64_MAX;
+        if (entry->ring_times_ms[idx] <= UINT64_MAX - entry->ring_window_ms) {
+            deadline = entry->ring_times_ms[idx] + entry->ring_window_ms;
+            if (deadline < UINT64_MAX) {
+                deadline += 1;
+            }
+        }
+        *out_ms = deadline;
         return true;
     }
     if (entry->kind == PB_EVAL_STATE_BAR && entry->bar_time_window && entry->bar_count > 0) {

@@ -46,7 +46,8 @@ static pb_value string_value(json_conv *c, yyjson_val *v) {
     const size_t len = yyjson_get_len(v);
     pb_slice raw = {.ptr = s, .len = len};
     if (pb_slice_eq_lit(raw, "subject") || pb_slice_eq_lit(raw, "payload") ||
-        pb_slice_eq_lit(raw, "payload-float") || pb_slice_eq_lit(raw, "payload-int")) {
+        pb_slice_eq_lit(raw, "payload-float") || pb_slice_eq_lit(raw, "payload-int") ||
+        pb_slice_eq_lit(raw, "replaying?")) {
         return text_value(c, PB_SYMBOL, s, len);
     }
     return text_value(c, PB_STRING, s, len);

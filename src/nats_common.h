@@ -9,6 +9,8 @@
 #include "nats.h"
 
 #define MB_NATS_ORIGIN_HEADER "x-monoblok"
+#define MB_NATS_REPLAY_HEADER "x-monoblok-replay"
+#define MB_NATS_ASSUMED_TS_HEADER "x-monoblok-assumed-ts"
 
 // Temporary C strings passed into nats.c option setup.
 typedef struct mb_nats_strings {

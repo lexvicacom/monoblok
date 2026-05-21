@@ -439,6 +439,9 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
         if (text_eq(expr.text, "payload")) {
             return ok((pb_value){.kind = PB_STRING, .text = ctx->payload});
         }
+        if (text_eq(expr.text, "replaying?")) {
+            return ok(bool_value(ctx->replaying));
+        }
         if (text_eq(expr.text, "payload-float") || text_eq(expr.text, "payload-int")) {
             pb_value payload = {.kind = PB_STRING, .text = ctx->payload};
             double n = 0;

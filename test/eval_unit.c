@@ -66,6 +66,23 @@ static pb_eval_result eval_src(pb_arena *arena, const char *src, published *pub)
     return r;
 }
 
+static pb_eval_result eval_src_replaying(pb_arena *arena, const char *src, bool replaying) {
+    pb_parse_result parsed = pb_parse_all(arena, src, strlen(src));
+    CHECK(parsed.err == PB_PARSE_OK);
+    CHECK(parsed.forms.len == 1);
+    pb_eval_state state = {0};
+    pb_eval_ctx ctx = {
+        .arena = arena,
+        .state = &state,
+        .replaying = replaying,
+        .subject = {.ptr = "sensors.temp", .len = 12},
+        .payload = {.ptr = "42", .len = 2},
+    };
+    pb_eval_result r = pb_eval(&ctx, parsed.forms.items[0]);
+    pb_eval_state_free(&state);
+    return r;
+}
+
 static void test_bound_symbols_and_math(void) {
     pb_arena arena = {0};
     published pub = {0};
@@ -80,6 +97,20 @@ static void test_bound_symbols_and_math(void) {
     CHECK(r.err == PB_EVAL_OK);
     CHECK(r.value.kind == PB_NUMBER);
     CHECK(fabs(r.value.number - 3.0) < 0.00001);
+    pb_arena_free(&arena);
+}
+
+static void test_replaying_symbol(void) {
+    pb_arena arena = {0};
+    pb_eval_result r = eval_src_replaying(&arena, "replaying?", false);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(r.value.kind == PB_BOOL && !r.value.boolean);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    r = eval_src_replaying(&arena, "replaying?", true);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(r.value.kind == PB_BOOL && r.value.boolean);
     pb_arena_free(&arena);
 }
 
@@ -794,6 +825,7 @@ static void test_json_demux(void) {
 
 TEST_MAIN(eval,
           test_bound_symbols_and_math,
+          test_replaying_symbol,
           test_contains_string_and_vector,
           test_if_when_do,
           test_subject_helpers,

@@ -600,7 +600,8 @@ static bool scalar_is_bound(pb_slice s) {
     return slice_eq_lit(s, "subject") ||
            slice_eq_lit(s, "payload") ||
            slice_eq_lit(s, "payload-float") ||
-           slice_eq_lit(s, "payload-int");
+           slice_eq_lit(s, "payload-int") ||
+           slice_eq_lit(s, "replaying?");
 }
 
 static bool lower_scalar(pb_arena *arena, y_node *n, bool expr, pb_value *out) {
@@ -805,7 +806,24 @@ static bool lower_env_config_value(pb_arena *arena, y_node *n, pb_value *out) {
 
 static bool lower_config_value(pb_arena *arena, y_node *n, pb_value *out) {
     if (n->kind == Y_MAP) {
-        return lower_env_config_value(arena, n, out);
+        if (n->pair_len == 1 && map_find(n, "env") != NULL) {
+            return lower_env_config_value(arena, n, out);
+        }
+        pb_build_vec v = {0};
+        for (size_t i = 0; i < n->pair_len; i += 1) {
+            pb_value key = {0};
+            pb_value value = {0};
+            if (!arena_text(arena, PB_KEYWORD, n->pairs[i].key, &key) ||
+                !lower_config_value(arena, n->pairs[i].value, &value) ||
+                !pb_vec_push(&v, key) ||
+                !pb_vec_push(&v, value)) {
+                free(v.items);
+                return false;
+            }
+        }
+        const bool ok = freeze_pb_vec(arena, &v, PB_VECTOR, out);
+        free(v.items);
+        return ok;
     }
     if (n->kind == Y_LIST) {
         pb_build_vec v = {0};

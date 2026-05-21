@@ -2,6 +2,7 @@
 
 #include "bridge.h"
 #include "importer.h"
+#include "jetstream.h"
 #include "server.h"
 #include "pb_soundcheck.h"
 #include "pb_validate.h"
@@ -10,6 +11,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -89,9 +91,119 @@ static bool import_ingress(void *ctx, mb_slice subject, mb_slice payload) {
     server->total_pubs += 1;
     uv_update_time(&server->loop);
     const bool ok = pb_program_eval_publish(server->program, &server->router, subject, payload,
-                                            uv_now(&server->loop), mb_wall_clock_ms());
+                                            mb_server_patchbay_now_ms(server), mb_wall_clock_ms());
     mb_server_reschedule_patchbay_clock(server);
     return ok;
+}
+
+static bool jetstream_ingress(void *ctx, const pb_import_stream_config *config,
+                              mb_slice subject, mb_slice payload,
+                              uint64_t event_now_ms, int64_t event_wall_ms,
+                              bool replaying) {
+    (void)config;
+    mb_server *server = ctx;
+    if (server == NULL || server->closing) {
+        return false;
+    }
+    pb_program_eval_options options = {.replaying = replaying};
+    server->total_pubs += 1;
+    const bool tick_ok = pb_program_tick_until(server->program, &server->router, event_now_ms, event_wall_ms, options);
+    const bool eval_ok = pb_program_eval_publish_with_options(server->program, &server->router, subject, payload,
+                                                              event_now_ms, event_wall_ms, options);
+    if (!replaying) {
+        mb_server_reschedule_patchbay_clock(server);
+    }
+    return tick_ok && eval_ok;
+}
+
+typedef struct import_group {
+    mb_importer *items;
+    size_t len;
+    uint64_t received;
+    uint64_t processed;
+    uint64_t dropped;
+    uint64_t failed;
+} import_group;
+
+typedef struct import_totals {
+    import_group *core;
+    mb_js_importer *jetstream;
+    uint64_t received;
+    uint64_t processed;
+    uint64_t dropped;
+    uint64_t failed;
+} import_totals;
+
+static void import_group_refresh(void *ctx) {
+    import_group *group = ctx;
+    if (group == NULL) {
+        return;
+    }
+    group->received = 0;
+    group->processed = 0;
+    group->dropped = 0;
+    group->failed = 0;
+    for (size_t i = 0; i < group->len; i += 1) {
+        group->received += group->items[i].received;
+        group->processed += group->items[i].processed;
+        group->dropped += group->items[i].dropped;
+        group->failed += group->items[i].failed;
+    }
+}
+
+static void import_group_close(import_group *group) {
+    if (group == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < group->len; i += 1) {
+        mb_importer_close(&group->items[i]);
+    }
+    free(group->items);
+    *group = (import_group){0};
+}
+
+static bool import_group_start(import_group *group, uv_loop_t *loop, const pb_imports_config *config,
+                               mb_importer_handler handler, void *handler_ctx) {
+    if (config == NULL || config->cores_len == 0) {
+        return true;
+    }
+    group->items = calloc(config->cores_len, sizeof group->items[0]);
+    if (group->items == NULL) {
+        return false;
+    }
+    group->len = config->cores_len;
+    for (size_t i = 0; i < config->cores_len; i += 1) {
+        if (!mb_importer_start(&group->items[i], loop, &config->cores[i], handler, handler_ctx)) {
+            import_group_close(group);
+            return false;
+        }
+    }
+    import_group_refresh(group);
+    return true;
+}
+
+static void import_totals_refresh(void *ctx) {
+    import_totals *totals = ctx;
+    if (totals == NULL) {
+        return;
+    }
+    totals->received = 0;
+    totals->processed = 0;
+    totals->dropped = 0;
+    totals->failed = 0;
+    if (totals->core != NULL) {
+        import_group_refresh(totals->core);
+        totals->received += totals->core->received;
+        totals->processed += totals->core->processed;
+        totals->dropped += totals->core->dropped;
+        totals->failed += totals->core->failed;
+    }
+    if (totals->jetstream != NULL) {
+        mb_js_importer_refresh(totals->jetstream);
+        totals->received += totals->jetstream->received;
+        totals->processed += totals->jetstream->processed;
+        totals->failed += totals->jetstream->failed;
+    }
 }
 
 typedef enum {
@@ -288,13 +400,16 @@ int main(int argc, char **argv) {
     }
 
     mb_bridge bridge = {0};
-    mb_importer importer = {0};
+    import_group imports = {0};
+    mb_js_importer js_importer = {0};
+    import_totals import_stats = {0};
 
     mb_server server;
     const bool client_pubs_enabled = !program.importer.present;
+    const bool listen_immediately = program.importer.streams_len == 0;
     if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_runtime_enabled, snapshot_path,
                         snapshot_every_ms, stats_tick_ms, client_pubs_enabled, trace,
-                        tls_cert_path, tls_key_path)) {
+                        tls_cert_path, tls_key_path, listen_immediately)) {
         pb_program_free(&program);
         return 1;
     }
@@ -306,7 +421,7 @@ int main(int argc, char **argv) {
             return 1;
         }
         server.router.bridge_ctx = &bridge;
-        server.router.bridge_fn = mb_bridge_publish;
+        server.router.bridge_fn = mb_bridge_publish_with_options;
         server.bridge_published = &bridge.published;
         server.bridge_dropped = &bridge.dropped;
         fprintf(stderr, "info: bridge: connected to NATS (%zu server%s, %zu export filter%s)\n", program.bridge.servers_len,
@@ -315,22 +430,62 @@ int main(int argc, char **argv) {
     } else {
         fprintf(stderr, "info: bridge: disabled\n");
     }
-    if (program.importer.present) {
-        if (!mb_importer_start(&importer, &server.loop, &program.importer, import_ingress, &server)) {
-            mb_importer_close(&importer);
+    if (program.importer.streams_len != 0) {
+        if (!mb_js_importer_start(&js_importer, &server.loop, &program.importer, jetstream_ingress, &server)) {
+            mb_js_importer_close(&js_importer);
             mb_server_close(&server);
             mb_bridge_close(&bridge);
             pb_program_free(&program);
             return 1;
         }
-        server.import_received = &importer.received;
-        server.import_processed = &importer.processed;
-        server.import_dropped = &importer.dropped;
-        server.import_failed = &importer.failed;
-        fprintf(stderr, "info: import: connected to NATS (%zu server%s, %zu subject filter%s, max-pending=%zu)\n",
-                program.importer.servers_len, program.importer.servers_len == 1 ? "" : "s",
-                program.importer.subjects_len, program.importer.subjects_len == 1 ? "" : "s",
-                program.importer.has_max_pending ? program.importer.max_pending : (size_t)MB_IMPORT_DEFAULT_MAX_PENDING);
+        uv_update_time(&server.loop);
+        const int64_t wall_now = mb_wall_clock_ms();
+        const uint64_t loop_now = uv_now(&server.loop);
+        int64_t offset = 0;
+        if (wall_now >= 0 && (uint64_t)wall_now >= loop_now && (uint64_t)wall_now - loop_now <= (uint64_t)INT64_MAX) {
+            offset = (int64_t)((uint64_t)wall_now - loop_now);
+        }
+        mb_server_set_patchbay_clock_offset(&server, offset);
+        (void)pb_program_tick_until(server.program, &server.router, (uint64_t)wall_now, wall_now,
+                                    (pb_program_eval_options){.replaying = true});
+        fprintf(stderr, "info: patchbay clock: JetStream replay event-time complete; live timers now use wall-clock deadlines\n");
+        if (!mb_server_listen(&server) || !mb_js_importer_start_live(&js_importer)) {
+            mb_js_importer_close(&js_importer);
+            mb_server_close(&server);
+            mb_bridge_close(&bridge);
+            pb_program_free(&program);
+            return 1;
+        }
+        fprintf(stderr, "info: jetstream import: connected to NATS (%zu stream source%s, serial catch-up complete)\n",
+                program.importer.streams_len, program.importer.streams_len == 1 ? "" : "s");
+    }
+    if (program.importer.cores_len != 0) {
+        if (!import_group_start(&imports, &server.loop, &program.importer, import_ingress, &server)) {
+            import_group_close(&imports);
+            mb_js_importer_close(&js_importer);
+            mb_server_close(&server);
+            mb_bridge_close(&bridge);
+            pb_program_free(&program);
+            return 1;
+        }
+        size_t subject_filters = 0;
+        for (size_t i = 0; i < program.importer.cores_len; i += 1) {
+            subject_filters += program.importer.cores[i].subjects_len;
+        }
+        fprintf(stderr, "info: import: connected to NATS (%zu core source%s, %zu subject filter%s)\n",
+                program.importer.cores_len, program.importer.cores_len == 1 ? "" : "s",
+                subject_filters, subject_filters == 1 ? "" : "s");
+    }
+    if (program.importer.present) {
+        import_stats.core = imports.len == 0 ? NULL : &imports;
+        import_stats.jetstream = js_importer.streams_len == 0 ? NULL : &js_importer;
+        import_totals_refresh(&import_stats);
+        server.import_received = &import_stats.received;
+        server.import_processed = &import_stats.processed;
+        server.import_dropped = &import_stats.dropped;
+        server.import_failed = &import_stats.failed;
+        server.stats_refresh = import_totals_refresh;
+        server.stats_refresh_ctx = &import_stats;
     } else {
         fprintf(stderr, "info: import: disabled\n");
     }
@@ -339,7 +494,8 @@ int main(int argc, char **argv) {
     const int rc = mb_server_run(&server);
 
     // bye
-    mb_importer_close(&importer);
+    import_group_close(&imports);
+    mb_js_importer_close(&js_importer);
     mb_server_close(&server);
     mb_bridge_close(&bridge);
     pb_program_free(&program);

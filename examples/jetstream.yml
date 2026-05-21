@@ -1,0 +1,68 @@
+# JetStream replay example.
+#
+# Run the full demo:
+#   examples/jetstream.sh
+#   JS_PORT=15999 COUNT=1000 examples/jetstream.sh
+#
+# Or manually:
+#   export JS_URL=nats://127.0.0.1:15889
+#   export BRIDGE_URL=nats://127.0.0.1:15890
+#   nats-server -js -sd /tmp/monoblok-js-store -p 15889
+#   nats-server -p 15890
+#   COUNT=1000 PAUSE_EVERY=500 PAUSE_MS=1100 examples/jetstream-populate.sh
+#   ./build/monoblok --port 14222 --patchbay examples/jetstream.yml
+#   nats -s nats://127.0.0.1:14222 sub '$LVC.js.>'
+#
+# monoblok is a JetStream consumer here, not a JetStream server. The source
+# subject stays private patchbay ingress unless a rule publishes derived output.
+
+lvc:
+  - "js.>"
+
+import:
+  streams:
+    - servers:
+        - env: JS_URL
+      subject: "js.sensors.temp"
+      stream: SENSORS
+      consumer: monoblok-jetstream-example
+      catch-up: true
+
+export:
+  servers:
+    - env: BRIDGE_URL
+  origin-header: true
+  replay-header: true
+  export:
+    - "js.>"
+
+on:
+  - sub: js.sensors.temp
+    form:
+      - do
+      - [count!]
+      - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
+      - [bar!, :ms, 1000, payload-float]
+      - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
+
+  # A few simple variants to try:
+  #
+  # Publish only meaningful live movement:
+  - sub: js.sensors.temp
+    when:
+      test: [not, replaying?]
+      then:
+        thread:
+          from: payload-float
+          steps:
+            - [deadband, 0.25]
+            - [publish!, "js.live.deadband"]
+  #
+  # Publish a rounded stable signal from both replay and live data:
+  # - sub: js.sensors.temp
+  #   thread:
+  #     from: payload-float
+  #     steps:
+  #       - [round, 1]
+  #       - [squelch]
+  #       - [publish!, "js.metrics.stable"]

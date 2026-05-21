@@ -62,6 +62,19 @@ static void test_json_single_form_and_special_objects(void) {
     pb_arena_free(&arena);
 }
 
+static void test_json_replaying_symbol(void) {
+    const char *src = "[[\"on\", \"foo\", [\"publish!\", \"out\", \"replaying?\"]]]";
+
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "patchbay.json", src, strlen(src));
+    CHECK(r.err == PB_PARSE_OK);
+    CHECK(r.forms.len == 1);
+    pb_values body = r.forms.items[0].seq.items[2].seq;
+    CHECK(body.items[2].kind == PB_SYMBOL);
+    check_text(body.items[2].text, "replaying?");
+    pb_arena_free(&arena);
+}
+
 static void test_json_invalid_inputs(void) {
     pb_arena arena = {0};
     pb_parse_result r = pb_parse_patchbay_source(&arena, "patchbay.json", "{\"not\":\"a list\"}", strlen("{\"not\":\"a list\"}"));
@@ -166,6 +179,54 @@ static void test_yaml_config_env_sugar(void) {
     pb_arena_free(&arena);
 }
 
+static void test_yaml_replaying_symbol(void) {
+    const char *src =
+        "on:\n"
+        "  - sub: foo\n"
+        "    form: [publish!, out, replaying?]\n";
+
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "replay.yml", src, strlen(src));
+    CHECK(r.err == PB_PARSE_OK);
+    CHECK(r.forms.len == 1);
+    pb_values body = r.forms.items[0].seq.items[2].seq;
+    CHECK(body.items[2].kind == PB_SYMBOL);
+    check_text(body.items[2].text, "replaying?");
+    pb_arena_free(&arena);
+}
+
+static void test_yaml_nested_import_config_sugar(void) {
+    const char *src =
+        "import:\n"
+        "  core:\n"
+        "    - servers: [\"nats://core:4222\"]\n"
+        "      subject: [raw.>]\n"
+        "  streams:\n"
+        "    - servers: [\"nats://js:4222\"]\n"
+        "      subject: [sensors.>]\n"
+        "      stream: SENSORS\n"
+        "      consumer: monoblok-sensors\n"
+        "      catch-up: true\n";
+
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "nested-import.yml", src, strlen(src));
+    CHECK(r.err == PB_PARSE_OK);
+    CHECK(r.forms.len == 1);
+    pb_values form = r.forms.items[0].seq;
+    check_text(form.items[0].text, "import");
+    check_text(form.items[1].text, "core");
+    CHECK(form.items[2].kind == PB_VECTOR);
+    CHECK(form.items[2].seq.items[0].kind == PB_VECTOR);
+    check_text(form.items[2].seq.items[0].seq.items[0].text, "servers");
+    check_text(form.items[3].text, "streams");
+    CHECK(form.items[4].kind == PB_VECTOR);
+    CHECK(form.items[4].seq.items[0].kind == PB_VECTOR);
+    check_text(form.items[4].seq.items[0].seq.items[0].text, "servers");
+    check_text(form.items[4].seq.items[0].seq.items[4].text, "stream");
+    check_text(form.items[4].seq.items[0].seq.items[5].text, "SENSORS");
+    pb_arena_free(&arena);
+}
+
 static void test_yaml_invalid_inputs(void) {
     const char *src = "on:\n  - sub: car.*.rpm\n    thread:\n      from: payload-float\n";
     pb_arena arena = {0};
@@ -177,7 +238,10 @@ static void test_yaml_invalid_inputs(void) {
 TEST_MAIN(json,
           test_json_patchbay_form,
           test_json_single_form_and_special_objects,
+          test_json_replaying_symbol,
           test_json_invalid_inputs,
           test_yaml_patchbay_sugar,
           test_yaml_config_env_sugar,
+          test_yaml_replaying_symbol,
+          test_yaml_nested_import_config_sugar,
           test_yaml_invalid_inputs)

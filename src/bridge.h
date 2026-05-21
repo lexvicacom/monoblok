@@ -20,6 +20,7 @@ typedef struct mb_bridge {
 
 bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config);
 void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload);
+void mb_bridge_publish_with_options(void *ctx, mb_slice subject, mb_slice payload, mb_router_publish_options options);
 void mb_bridge_close(mb_bridge *bridge);
 
 #endif

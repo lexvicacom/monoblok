@@ -2,20 +2,19 @@
 
 ## Status
 
-Draft / exploratory design notes.
+Implemented v1 notes.
 
-This document describes a JetStream ingress mode for `monoblok`.
+This document describes the JetStream ingress mode for `monoblok`.
 
-The v1 design is deliberately simple:
+The implemented v1 is deliberately simple:
 
 - `monoblok` is a JetStream *consumer*, never a JetStream server
 - replay is a startup phase, not a runtime mode
 - the daemon catches up every configured stream before it serves anyone
-- catch-up runs in the same process, on the main event loop, with ports closed
+- catch-up runs in the same process, on the main thread, with ports closed
 - there is one atomic transition: virtual clock to real clock, ports closed to
   ports open
-- there is no live handoff, no child process, and no snapshot in the
-  catch-up path
+- there is no child process and no snapshot in the catch-up path
 
 The goal is to let a `monoblok` process consume an existing JetStream stream,
 rebuild correct patchbay-derived output over historical data as fast as the
@@ -113,36 +112,48 @@ source and opens sockets.
 ## Import configuration
 
 JetStream ingress extends the existing top-level `(import ...)` shape with
-explicit options. Operators should be able to tell from the patchbay config
-whether import is a plain core NATS subscription or a JetStream consumer.
+explicitly scoped import kinds. Operators should be able to tell from the
+patchbay config whether an import entry is a plain core NATS subscription or a
+JetStream consumer.
 
 Example shape:
 
 ```clojure
 (import
-  :servers ["nats://127.0.0.1:4222"]
-  :subject ["sensors.>"]
-  :jetstream true
-  :stream "SENSORS"
-  :consumer "monoblok-sensors"
-  :catch-up true)
+  :core
+  [[:servers ["nats://127.0.0.1:4222"]
+    :subject ["raw.>"]]]
+
+  :streams
+  [[:servers ["nats://127.0.0.1:4222"]
+    :subject ["sensors.>"]
+    :stream "SENSORS"
+    :consumer "monoblok-sensors"
+    :catch-up true]])
 ```
 
 YAML lowers to the same options:
 
 ```yaml
 import:
-  servers: ["nats://127.0.0.1:4222"]
-  subject: ["sensors.>"]
-  jetstream: true
-  stream: "SENSORS"
-  consumer: "monoblok-sensors"
-  catch-up: true
+  core:
+    - servers: ["nats://127.0.0.1:4222"]
+      subject: ["raw.>"]
+
+  streams:
+    - servers: ["nats://127.0.0.1:4222"]
+      subject: ["sensors.>"]
+      stream: "SENSORS"
+      consumer: "monoblok-sensors"
+      catch-up: true
 ```
 
 Option meanings:
 
-- `:jetstream true` selects JetStream import instead of core NATS import.
+- `:core [...]` lists plain core NATS import entries. The older flat
+  `(import :servers ... :subject ...)` shape remains a compatibility alias for
+  one core entry.
+- `:streams [...]` lists JetStream import entries.
 - `:stream "NAME"` names the source stream. Required for JetStream import unless
   the implementation can unambiguously discover it.
 - `:consumer "NAME"` names the durable consumer used by `monoblok`. It should be
@@ -155,9 +166,12 @@ Option meanings:
   durable consumer already has a backlog, that backlog is consumed in live
   processing time, not replayed with the virtual clock.
 
-The `:subject` option remains the filter subject list for the JetStream
-consumer. If JetStream filter semantics cannot match the configured list
+The `:subject` option remains the filter subject list for each import entry. If
+JetStream filter semantics cannot match a stream entry's configured list
 exactly, validation should fail rather than silently widening the import.
+The v1 runtime accepts exactly one subject filter per JetStream stream entry.
+Operators who need multiple filters should configure multiple entries or use a
+stream subject that already covers the desired set.
 
 There is no `:max-catch-up-procs`, `:catch-up-mode`, or
 `:inline-catch-up-max-ms` option. Catch-up is always inline in the loading
@@ -247,30 +261,32 @@ is correct for a live firehose. For replay it has two problems:
   or pause the consumer) until the loop thread catches up. A dropped message
   during replay is silent state corruption.
 
-- **The slot carries no metadata.** The existing slot holds only subject and
-  payload bytes. JetStream replay needs the event timestamp and the stream
-  sequence at drain time — the timestamp to advance the virtual clock, the
-  sequence to detect the high-water mark. The JetStream ingress slot must carry
-  `event_wall_ms` and `stream_seq` alongside the bytes.
+- **The core import slot carries no metadata.** The existing slot holds only
+  subject and payload bytes. JetStream replay needs the event timestamp and the
+  stream sequence before evaluation — the timestamp to advance the virtual
+  clock, the sequence to detect the high-water mark. The JetStream path reads
+  that metadata from `natsMsg` before evaluation rather than copying messages
+  through the core import ring.
 
 Implications for the implementation:
 
-- The JetStream ingress is a separate module from `importer.c`. It may borrow
-  the cross-thread ring *pattern* (callback threads producing, loop thread
-  draining, `uv_async` wakeups) but with a non-lossy, backpressured queue and a
-  wider slot.
+- The JetStream ingress is a separate module from `importer.c`. It borrows the
+  same ownership principle — `nats.c` work happens off-loop, patchbay evaluation
+  happens on the loop thread — but keeps the handoff non-lossy and backpressured
+  instead of using the core importer's bounded drop ring.
 - During the loading phase the producer side is paced by JetStream pull
-  batches, so backpressure is natural: the ingress simply does not request the
-  next batch until the queue has room. There is no firehose to outrun.
-- After the transition to live, the same non-lossy path continues. A live
-  JetStream consumer that cannot keep up should let the consumer's pending
-  count grow (visible as lag) rather than silently drop, which is the correct
-  JetStream behavior anyway.
-- `pb_program_eval_publish()` and `pb_program_tick()` are unchanged: they
-  already take `now_ms` and `wall_ms`. Only the ingress feeding them is new.
+  batches, so backpressure is natural: the ingress does not request the next
+  batch until the previous batch has been evaluated and acked.
+- After the transition to live, each stream has a worker thread that fetches
+  one message at a time and hands it to the libuv loop with `uv_async_t`. The
+  worker waits for loop-thread evaluation before fetching the next message, so
+  live JetStream ingress is backpressured rather than lossy.
+- `pb_program_eval_publish_with_options()` and
+  `pb_program_tick_with_options()` carry the `replaying` flag. The default
+  wrappers keep existing core traffic behavior unchanged.
 
 The existing core-NATS import path is untouched. This is an additional ingress,
-selected by `:jetstream true`, not a modification of the existing one.
+selected by scoped `:streams` entries, not a modification of the existing one.
 
 ---
 
@@ -284,6 +300,25 @@ catchup_to = stream.LastSeq
 ```
 
 It then creates or resumes the durable consumer using `ReplayInstant`.
+
+The v1 catch-up loop is:
+
+```text
+startup_stream_checkpoint = stream.LastSeq
+
+while true:
+  if last_delivered_stream_seq >= startup_stream_checkpoint:
+    caught up
+  fetch matching messages for this durable consumer
+  evaluate and ack each delivered message
+  if filtered_consumer_pending == 0:
+    caught up
+```
+
+The checkpoint is a global stream sequence, not a count of messages this
+filtered consumer must receive. A filtered consumer can therefore finish with
+`pending=0` even when its ack floor is below the stream checkpoint, because the
+remaining stream messages are outside its filter.
 
 For each delivered message:
 
@@ -302,9 +337,18 @@ Do not use `NumPending == 0` alone as the catch-up detector. Pending counts can
 move while new messages arrive. A startup high-water sequence gives a clean,
 fixed target.
 
-If multiple JetStream imports are configured, the loading phase replays them
-and waits until *all* of them have reached their high-water sequence. There is
-no per-stream readiness in v1 — readiness is a single, whole-daemon property.
+The implementation records `stream.LastSeq` as the high-water target. Because a
+filtered durable consumer may not receive the stream's last message when that
+message is outside the filter, v1 also accepts `NumPending == 0` after a fetch
+or timeout as "caught up for this filtered consumer." It never uses pending
+zero by itself before the startup high-water target has been recorded.
+
+If multiple JetStream imports are configured, v1 replays them serially in
+configuration order and waits until *all* of them have reached their high-water
+sequence. There is no per-stream readiness in v1 — readiness is a single,
+whole-daemon property. Operators who need strict cross-stream event-time
+ordering should put those subjects in the same stream, or wait for a later merge
+policy; the first cut keeps stream ordering explicit and boring.
 
 ---
 
@@ -317,7 +361,8 @@ performs one atomic transition:
 2. Switch the patchbay clock source from virtual to real (`uv_now()` and the
    daemon wall clock).
 3. Open the listener ports.
-4. Emit the readiness signal (see below).
+4. Start live JetStream workers.
+5. Log that serial catch-up is complete.
 
 After this point the daemon is an ordinary live JetStream consumer. The same
 durable consumers keep delivering messages; only the clock source has changed.
@@ -333,22 +378,16 @@ service.
 
 ## Readiness and visibility
 
-During the loading phase the listener ports are closed, so the `$STATS.*`
-subjects cannot be used to report progress — nobody can subscribe yet. Loading
-phase visibility therefore uses out-of-band channels:
+During the loading phase the listener ports are closed, so `$STATS.*` subjects
+cannot be used to report progress — nobody can subscribe yet. The implemented
+v1 uses stderr log lines for visibility: stream high-water, filtered catch-up,
+catch-up disabled, and the final "serial catch-up complete" transition line.
 
-- structured log lines on stderr: per-import phase, `lag.messages`,
-  `lag.ms`, processed count, and a coarse ETA where throughput is known
-- a readiness signal at the transition, suitable for an init system or
-  container orchestrator:
-  - `systemd`: `Type=notify`, send `READY=1` at the transition
-  - Kubernetes: a readiness probe that fails until the transition
-
-Once the ports are open, the existing `$STATS.import.<name>.*` subjects report
-ordinary live consumer state: stream and consumer names, last processed
-sequence, lag, processed/acked/redelivered/failed counters. If event time lags
-real time by more than a configured threshold, expose that as ingress lag so
-dashboards can show that patchbay output is as-of the event clock.
+Once the ports are open, the existing `$STATS.import.*` subjects report
+aggregate import state. Core imports and JetStream imports are summed into the
+same counters: received, processed, dropped, and failed. JetStream acked and
+redelivered counters are tracked internally but are not exposed as separate
+per-stream stats subjects in v1.
 
 A dashboard or operator should never have to infer progress from output volume.
 
@@ -431,6 +470,18 @@ writes the upstream `publish!` behind `(when (not replaying?) ...)`, or routes
 replay output to a subject the export config does not forward. No separate
 "export during replay" flag is required.
 
+If the export config enables `:origin-header true`, replay-derived bridged
+messages carry the existing `x-monoblok: <hostname>` provenance header, just
+like live bridged messages. That header says where the bridged publish came
+from; it is not a replay/live discriminator.
+
+If the export config enables `:replay-header true`, bridge publishes emitted
+while `replaying?` is true also carry `x-monoblok-replay: true` and
+`x-monoblok-assumed-ts: <unix-ms>`. The timestamp is the wall timestamp used by
+patchbay evaluation, which is the JetStream stored message timestamp during v1
+catch-up. This is scoped to export bridge output; it does not add headers to
+local monoblok delivery or to patchbay's `publish!` syntax.
+
 ### Note on headers
 
 A header on replay output — for example an `Mb-Replay` application header so a
@@ -451,14 +502,14 @@ the non-goals.
 Acking before patchbay evaluation risks losing a message whose derived output
 was not produced. Acking after evaluation preserves replay correctness.
 
-The v1 implementation should:
+The v1 implementation:
 
-- ack after successful patchbay evaluation and accepted downstream publish
+- acks after successful patchbay evaluation and accepted downstream publish
   attempts
-- leave idempotence to downstream subject design or a replay namespace
-- expose counters for received, processed, acked, redelivered, failed, and lag
-- fail closed on malformed metadata unless an explicit processing-time fallback
-  is configured
+- leaves idempotence to downstream subject design or a replay namespace
+- tracks received, processed, acked, redelivered, and failed counters
+- fails closed on malformed metadata; no processing-time fallback is currently
+  implemented
 
 Because durability and redelivery are owned by JetStream, a `monoblok` crash
 during the loading phase is recoverable: on restart the durable consumer
@@ -483,43 +534,43 @@ must not be confused with cross-process handoff — there is no second process.
 
 ## Implementation shape
 
-Keep this separate from the current core import path.
+The current implementation keeps JetStream separate from the core import path:
 
-Likely pieces:
-
-- `pb_program_tick_until(program, router, event_now_ms, event_wall_ms)` helper,
-  or a small loop around `pb_program_next_clock_deadline()` and
-  `pb_program_tick()`
-- a JetStream ingress module using the `nats.c` JetStream APIs — a *separate*
-  module from `importer.c`, with a non-lossy backpressured queue and a slot
-  that carries `event_wall_ms` and `stream_seq` (see *Relationship to the
-  existing importer*)
-- durable consumer configuration in the patchbay top-level config
-- event-time conversion and per-domain monotonicity checks
-- per-import startup high-water tracking and an all-imports-caught-up gate
-- a clock source abstraction with virtual and real implementations, switched
-  once at the transition
-- an event-time *resolver* seam: even though v1 has only the JetStream
-  stored-time resolver, the ingress should obtain event time through a small
-  resolver interface rather than calling `natsMsg_GetMetaData()` inline, so the
-  v1.1 header/JSON sources slot in without a refactor
-- a startup state machine: ports-closed/clock-virtual, then the atomic
-  transition, then ordinary live service
-- a readiness signal at the transition
+- `src/jetstream.c` owns JetStream connection, pull subscription, startup
+  catch-up, live workers, metadata timestamp extraction, acking, and counters.
+- `src/main.c` wires JetStream ingress before starting core imports. If any
+  `:streams` entries exist, `mb_server_init()` binds but does not listen until
+  JetStream catch-up has completed.
+- `pb_program_tick_until()` drains due virtual deadlines up to each event-time
+  message timestamp.
+- `pb_program_eval_publish_with_options()` and
+  `pb_program_tick_with_options()` carry `replaying=true` during catch-up and
+  false during live delivery.
+- `mb_server_patchbay_now_ms()` adds a one-time offset after the transition so
+  ordinary timer scheduling uses the same patchbay clock surface.
+- The loader stores imports as `pb_imports_config`, split into `cores[]` and
+  `streams[]`. The older flat import shape still loads as one `cores[]` entry.
+- `scripts/jetstream-smoke.sh` exercises a real JetStream server: historical
+  replay through `replaying?`, live delivery after listener open, and source
+  subject privacy.
+- `examples/jetstream.yml` is the runnable YAML patchbay. `examples/jetstream.sh`
+  starts a JetStream server and a plain NATS bridge target, exports `JS_URL`
+  and `BRIDGE_URL`, calls `examples/jetstream-populate.sh` to write
+  `COUNT=1000` historical events by default, starts monoblok, and then
+  publishes one live event.
 
 The important boundary is that patchbay already has the right shape: evaluation
-takes `now_ms` and `wall_ms`. The missing piece is an ingress that advances
-those values from JetStream metadata during a loading phase, plus the one
-atomic transition to real time and open ports.
+takes `now_ms` and `wall_ms`. JetStream ingress advances those values from
+JetStream metadata during the loading phase, then performs one transition to
+real time and open ports.
 
 ---
 
-## Planned for v1.1
+## Future refinements
 
-Two refinements are deliberately deferred to a v1.1 point release. Neither
-changes the v1 architecture — both only add choices at the ingress edge, in
-front of the same `now_ms` / `wall_ms` the patchbay already takes — so v1 can
-ship and be exercised on real streams first.
+These refinements are deliberately deferred. They do not change the v1
+architecture; they add choices at the ingress edge, in front of the same
+`now_ms` / `wall_ms` the patchbay already takes.
 
 ### Skip the loading phase when lag is trivial
 
@@ -557,12 +608,14 @@ Proposed config:
 
 ```clojure
 (import
-  :jetstream true
-  :stream "SENSORS"
-  :consumer "monoblok-sensors"
-  :catch-up true
-  :live-start-max-messages 1000
-  :live-start-max-ms 5000)
+  :streams
+  [[:servers ["nats://127.0.0.1:4222"]
+    :subject "sensors.>"
+    :stream "SENSORS"
+    :consumer "monoblok-sensors"
+    :catch-up true
+    :live-start-max-messages 1000
+    :live-start-max-ms 5000]])
 ```
 
 ### Configurable event-time clock source

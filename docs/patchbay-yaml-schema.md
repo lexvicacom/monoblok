@@ -58,6 +58,7 @@ In expression positions:
 | `payload-float` | bound symbol |
 | `payload-int` | bound symbol |
 | `subject` | bound symbol |
+| `replaying?` | bound symbol |
 | `:ms` | keyword `:ms` |
 | `true` / `false` | boolean |
 | `null` / `nil` / `~` | nil |
@@ -125,6 +126,8 @@ export:
   servers:
     - "nats://127.0.0.1:4223"
   name: "monoblok-export"
+  origin-header: true
+  replay-header: true
   export:
     - "sensors.*.stable"
     - "alerts.>"
@@ -144,6 +147,7 @@ Supported fields:
 | `tls-cert` / `tls-key` | strings | client certificate and key |
 | `tls-skip-verify` | bool | disable TLS verification; development only |
 | `origin-header` | bool | add `x-monoblok` provenance header |
+| `replay-header` | bool | add `x-monoblok-replay: true` and `x-monoblok-assumed-ts: <unix-ms>` to bridged replay output; live output omits both |
 | `connect-timeout-ms` | number | connection timeout |
 | `ping-interval-ms` | number | ping interval |
 | `max-reconnect` | number | reconnect count; `-1` means unlimited |
@@ -160,8 +164,8 @@ bridge:
 
 ## `import`
 
-`import` configures inbound tap mode from a real NATS cluster. It requires
-`servers` and `subject` or `subjects`.
+`import` configures inbound tap mode from a real NATS cluster. The flat shape
+requires `servers` and `subject` or `subjects`.
 
 ```yaml
 import:
@@ -174,6 +178,80 @@ import:
   max-pending: 4096
 ```
 
+The flat shape is a compatibility alias for one core NATS import. New configs
+can scope core imports explicitly:
+
+```yaml
+import:
+  core:
+    - servers: ["nats://127.0.0.1:4223"]
+      name: "monoblok-import"
+      subject: ["raw.>"]
+      max-pending: 4096
+```
+
+`streams` entries configure JetStream ingress and use the same connection
+fields plus `stream`, `consumer`, and `catch-up`. In v1, each stream entry uses
+one subject filter:
+
+```yaml
+import:
+  streams:
+    - servers: ["nats://127.0.0.1:4222"]
+      subject: ["sensors.>"]
+      stream: SENSORS
+      consumer: monoblok-sensors
+      catch-up: true
+```
+
+`catch-up: true` replays the durable consumer to the stream's startup high-water
+sequence before monoblok opens its listener. During that loading phase, rule
+bodies can branch on `replaying?`. Multiple stream entries catch up serially in
+config order.
+
+Small JetStream replay example:
+
+```yaml
+lvc:
+  - "js.>"
+
+import:
+  streams:
+    - servers:
+        - env: JS_URL
+      subject: "js.sensors.temp"
+      stream: SENSORS
+      consumer: monoblok-jetstream-example
+      catch-up: true
+
+export:
+  servers:
+    - env: BRIDGE_URL
+  origin-header: true
+  replay-header: true
+  export:
+    - "js.>"
+
+on:
+  - sub: js.sensors.temp
+    form:
+      - do
+      - [count!]
+      - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
+      - [bar!, :ms, 1000, payload-float]
+      - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
+
+  - sub: js.sensors.temp
+    when:
+      test: [not, replaying?]
+      then:
+        thread:
+          from: payload-float
+          steps:
+            - [deadband, 0.25]
+            - [publish!, "js.live.deadband"]
+```
+
 Connection fields match `export`: `servers`, `name`, `creds`, `user`,
 `password`, `token`, `tls`, `tls-ca`, `tls-cert`, `tls-key`,
 `tls-skip-verify`, `connect-timeout-ms`, `ping-interval-ms`,
@@ -183,9 +261,11 @@ Import-only fields:
 
 | field | type | meaning |
 |-------|------|---------|
-| `subject` / `subjects` | string or list of strings | remote subject filters to subscribe to |
+| `subject` / `subjects` | string or list of strings | remote subject filters to subscribe to; JetStream stream entries accept one filter in v1 |
 | `origin-header` | bool | ignore imported messages carrying `x-monoblok` |
 | `max-pending` | number | bounded import queue length; default 4096 |
+| `core` | list of maps | scoped core NATS import entries |
+| `streams` | list of maps | scoped JetStream import entries |
 
 Imported raw messages are private patchbay ingress. Direct monoblok subscribers
 do not see them unless a rule republishes them.
@@ -344,6 +424,8 @@ export:
   servers:
     - "nats://127.0.0.1:14889"
   name: "monoblok-export-example"
+  origin-header: true
+  replay-header: true
   export:
     - "clean.>"
 
