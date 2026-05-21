@@ -100,63 +100,73 @@ static bool stream_config_strings(mb_js_stream *stream, mb_nats_strings *strings
 
 static bool js_stream_connect(mb_js_stream *stream) {
     natsOptions *opts = NULL;
-    natsStatus status = natsOptions_Create(&opts);
-    if (!set_status(stream, status, "create options")) {
-        return false;
-    }
-
     mb_nats_strings strings = {0};
-    const mb_nats_options_config options = mb_nats_options_from_import(&stream->config->source);
-    bool ok = mb_nats_set_options(opts, &options, &strings);
     natsConnection *conn = NULL;
     jsCtx *js = NULL;
     natsSubscription *sub = NULL;
-    bool retained = false;
-    if (ok) {
-        mb_nats_retain();
-        retained = true;
-        status = natsConnection_Connect(&conn, opts);
-        ok = set_status(stream, status, "connect");
-        if (ok) {
-            status = natsConnection_JetStream(&js, conn, NULL);
-            ok = set_status(stream, status, "create JetStream context");
-        }
-    }
-
+    const mb_nats_options_config options = mb_nats_options_from_import(&stream->config->source);
     char *subject = NULL;
     char *stream_name = NULL;
     char *consumer_name = NULL;
     jsSubOptions sub_opts;
-    memset(&sub_opts, 0, sizeof sub_opts);
-    if (ok) {
-        ok = stream_config_strings(stream, &strings, &subject, &stream_name, &consumer_name);
-    }
-    if (ok) {
-        status = jsSubOptions_Init(&sub_opts);
-        ok = set_status(stream, status, "initialize subscribe options");
-    }
-    if (ok) {
-        sub_opts.Stream = stream_name;
-        sub_opts.Config.Name = consumer_name;
-        sub_opts.Config.Durable = consumer_name;
-        sub_opts.Config.AckPolicy = js_AckExplicit;
-        sub_opts.Config.DeliverPolicy = js_DeliverAll;
-        sub_opts.Config.ReplayPolicy = js_ReplayInstant;
-        sub_opts.Config.FilterSubject = subject;
-        jsErrCode err = 0;
-        status = js_PullSubscribe(&sub, js, subject, consumer_name, NULL, &sub_opts, &err);
-        ok = set_status(stream, status, "pull subscribe");
-        if (!ok && err != 0) {
-            fprintf(stderr, "warn: jetstream import: server error code=%d\n", (int)err);
-        }
+    jsErrCode err = 0;
+    bool retained = false;
+    bool ok = false;
+
+    natsStatus status = natsOptions_Create(&opts);
+    if (!set_status(stream, status, "create options")) {
+        goto cleanup;
     }
 
-    if (ok) {
-        stream->conn = conn;
-        stream->js = js;
-        stream->sub = sub;
-        stream->started = true;
-    } else {
+    if (!mb_nats_set_options(opts, &options, &strings)) {
+        goto cleanup;
+    }
+
+    mb_nats_retain();
+    retained = true;
+    status = natsConnection_Connect(&conn, opts);
+    if (!set_status(stream, status, "connect")) {
+        goto cleanup;
+    }
+
+    status = natsConnection_JetStream(&js, conn, NULL);
+    if (!set_status(stream, status, "create JetStream context")) {
+        goto cleanup;
+    }
+
+    memset(&sub_opts, 0, sizeof sub_opts);
+    if (!stream_config_strings(stream, &strings, &subject, &stream_name, &consumer_name)) {
+        goto cleanup;
+    }
+
+    status = jsSubOptions_Init(&sub_opts);
+    if (!set_status(stream, status, "initialize subscribe options")) {
+        goto cleanup;
+    }
+
+    sub_opts.Stream = stream_name;
+    sub_opts.Config.Name = consumer_name;
+    sub_opts.Config.Durable = consumer_name;
+    sub_opts.Config.AckPolicy = js_AckExplicit;
+    sub_opts.Config.DeliverPolicy = js_DeliverAll;
+    sub_opts.Config.ReplayPolicy = js_ReplayInstant;
+    sub_opts.Config.FilterSubject = subject;
+    status = js_PullSubscribe(&sub, js, subject, consumer_name, NULL, &sub_opts, &err);
+    if (!set_status(stream, status, "pull subscribe")) {
+        if (err != 0) {
+            fprintf(stderr, "warn: jetstream import: server error code=%d\n", (int)err);
+        }
+        goto cleanup;
+    }
+
+    ok = true;
+    stream->conn = conn;
+    stream->js = js;
+    stream->sub = sub;
+    stream->started = true;
+
+cleanup:
+    if (!ok) {
         if (sub != NULL) {
             natsSubscription_Destroy(sub);
         }
@@ -171,7 +181,9 @@ static bool js_stream_connect(mb_js_stream *stream) {
         }
     }
 
-    natsOptions_Destroy(opts);
+    if (opts != NULL) {
+        natsOptions_Destroy(opts);
+    }
     mb_nats_strings_free(&strings);
     return ok;
 }
@@ -179,19 +191,27 @@ static bool js_stream_connect(mb_js_stream *stream) {
 static bool js_stream_load_highwater(mb_js_stream *stream) {
     jsStreamInfo *info = NULL;
     jsErrCode err = 0;
+    natsStatus status = NATS_OK;
     const pb_import_stream_config *config = stream->config;
     mb_nats_strings strings = {0};
     char *stream_name = track_slice(&strings, config->stream);
-    bool ok = stream_name != NULL;
-    if (ok) {
-        const natsStatus status = js_GetStreamInfo(&info, stream->js, stream_name, NULL, &err);
-        ok = set_status(stream, status, "get stream info");
+    bool ok = false;
+    if (stream_name == NULL) {
+        goto cleanup;
     }
-    if (ok) {
-        stream->catchup_to = info->State.LastSeq;
-        fprintf(stderr, "info: jetstream import: stream=%s catch-up high-water=%" PRIu64 "\n",
-                stream_name, stream->catchup_to);
-    } else if (err != 0) {
+
+    status = js_GetStreamInfo(&info, stream->js, stream_name, NULL, &err);
+    if (!set_status(stream, status, "get stream info")) {
+        goto cleanup;
+    }
+
+    stream->catchup_to = info->State.LastSeq;
+    fprintf(stderr, "info: jetstream import: stream=%s catch-up high-water=%" PRIu64 "\n",
+            stream_name, stream->catchup_to);
+    ok = true;
+
+cleanup:
+    if (!ok && err != 0) {
         fprintf(stderr, "warn: jetstream import: stream info server error code=%d\n", (int)err);
     }
     jsStreamInfo_Destroy(info);
@@ -290,29 +310,35 @@ static bool js_stream_process_msg(mb_js_stream *stream, natsMsg *msg, bool repla
 static bool js_stream_pending_zero(mb_js_stream *stream, bool *out) {
     jsConsumerInfo *info = NULL;
     jsErrCode err = 0;
+    natsStatus status = NATS_OK;
     mb_nats_strings strings = {0};
     char *stream_name = track_slice(&strings, stream->config->stream);
     char *consumer_name = track_slice(&strings, stream->config->consumer);
-    bool ok = stream_name != NULL && consumer_name != NULL;
-    natsStatus status = NATS_OK;
-    if (ok) {
-        status = js_GetConsumerInfo(&info, stream->js, stream_name, consumer_name, NULL, &err);
-        ok = set_status(stream, status, "get consumer info");
+    bool ok = false;
+    if (stream_name == NULL || consumer_name == NULL) {
+        goto cleanup;
     }
-    if (!ok) {
-        if (err != 0) {
-            fprintf(stderr, "warn: jetstream import: consumer info server error code=%d\n", (int)err);
-        }
-        mb_nats_strings_free(&strings);
-        return false;
+
+    status = js_GetConsumerInfo(&info, stream->js, stream_name, consumer_name, NULL, &err);
+    if (!set_status(stream, status, "get consumer info")) {
+        goto cleanup;
     }
+
     *out = info->NumPending == 0;
     if (*out && info->AckFloor.Stream > stream->last_stream_seq) {
         stream->last_stream_seq = info->AckFloor.Stream;
     }
-    jsConsumerInfo_Destroy(info);
+    ok = true;
+
+cleanup:
+    if (!ok && err != 0) {
+        fprintf(stderr, "warn: jetstream import: consumer info server error code=%d\n", (int)err);
+    }
+    if (info != NULL) {
+        jsConsumerInfo_Destroy(info);
+    }
     mb_nats_strings_free(&strings);
-    return true;
+    return ok;
 }
 
 static bool js_stream_fetch_and_process(mb_js_stream *stream, int batch, int64_t timeout_ms,
