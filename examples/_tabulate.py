@@ -11,9 +11,10 @@ for raw in sys.stdin:
     if not line:
         continue
     parts = line.split("\t")
-    if len(parts) == 3:
-        t, subj, payload = (p.strip() for p in parts)
-        rows.append((subj, payload))
+    if len(parts) in (3, 4):
+        t, subj, payload = (p.strip() for p in parts[:3])
+        headers = parts[3].strip() if len(parts) == 4 else ""
+        rows.append((subj, payload, headers))
     else:
         passthrough.append(line)
 
@@ -23,7 +24,12 @@ for line in passthrough:
 if not rows:
     sys.exit(0)
 
-HEADERS = ("subject", "payload")
+show_headers = any(row[2] for row in rows)
+if show_headers:
+    HEADERS = ("subject", "payload", "headers")
+else:
+    HEADERS = ("subject", "payload")
+    rows = [(subject, payload) for subject, payload, headers in rows]
 widths = [len(h) for h in HEADERS]
 for row in rows:
     for i, cell in enumerate(row):

@@ -60,20 +60,12 @@ start_daemon() {
     fi
 }
 
+monitor() {
+    python3 "$ROOT/examples/_nats_monitor.py" "$1" "$2" >"$TMP/$3" &
+}
+
 subscribe() {
-    nats --no-context -s "$URL" sub -d "$1" 2>&1 | awk -v OFS="\t" '
-        /^\[#[0-9]+\] @ / {
-            line = $0
-            sub(/^\[#[0-9]+\] @ /, "", line)
-            sub(/ Received on "/, "\t", line)
-            sub(/"$/, "", line)
-            if ((getline payload) > 0) { print line, payload; fflush() }
-            next
-        }
-        /^[[:space:]]*$/ { next }
-        /^[0-9]+:[0-9]+:[0-9]+ / { next }
-        { print $0; fflush() }
-    ' >"$TMP/$2" &
+    monitor "$URL" "$1" "$2"
 }
 
 pub() {

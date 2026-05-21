@@ -89,31 +89,12 @@ fi
 JS_URL="$JS_URL" COUNT="$COUNT" PAUSE_EVERY="$PAUSE_EVERY" PAUSE_MS="$PAUSE_MS" "$ROOT/examples/jetstream-populate.sh" >"$TMP/populate.log"
 
 bridge_subscribe() {
-    nats --no-context -s "$BRIDGE_URL" sub -d "$1" 2>&1 | awk -v OFS="\t" '
-        /^\[#[0-9]+\] @ / {
-            line = $0
-            sub(/^\[#[0-9]+\] @ /, "", line)
-            sub(/ Received on "/, "\t", line)
-            sub(/"$/, "", line)
-            if ((getline payload) > 0) { print line, payload; fflush() }
-            next
-        }
-        /^[[:space:]]*$/ { next }
-        /^[0-9]+:[0-9]+:[0-9]+ / { next }
-        { print $0; fflush() }
-    ' >"$TMP/$2" &
+    monitor "$BRIDGE_URL" "$1" "$2"
 }
 
 bridge_subscribe 'js.>' bridge-js.txt
+bridge_subscribe 'js.replay.last-temp' bridge-headers.txt
 bridge_subscribe 'js.sensors.temp' bridge-raw.txt
-if command -v nc >/dev/null; then
-    (
-        printf 'CONNECT {"headers":true}\r\n'
-        printf 'SUB js.replay.last-temp 19\r\n'
-        printf 'PING\r\n'
-        sleep 5
-    ) | nc -w 5 127.0.0.1 "$BRIDGE_PORT" | tr -d '\r' >"$TMP/bridge-headers.txt" &
-fi
 settle 0.4
 
 start_daemon examples/jetstream.yml
@@ -148,9 +129,9 @@ note \
 
 show "populate"                       populate.log
 show "monoblok JetStream startup"      daemon.log 20
-show "late LVC view after replay + live" lvc.txt
-show "bridge target js.> exports"        bridge-js.txt
+show "late LVC view after replay + live" lvc.txt 20
+show "bridge target js.> exports"        bridge-js.txt 20
 show "bridge target replay headers"      bridge-headers.txt 20
-show "bridge target raw source"         bridge-raw.txt
-show "live output after catch-up"       live.txt
-show "local raw source subscription"   raw.txt
+show "bridge target raw source"         bridge-raw.txt 20
+show "live output after catch-up"       live.txt 20
+show "local raw source subscription"   raw.txt 20
