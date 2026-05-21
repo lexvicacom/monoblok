@@ -102,6 +102,7 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 | [`rental-car.edn`](../examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
 | [`rental-car.yml`](../examples/rental-car.yml)     | the same rules using YAML sugar                                 |
 | [`bridge.edn`](../examples/bridge.edn)             | export selected subjects to a real NATS server                  |
+| [`jetstream.yml`](../examples/jetstream.yml)       | replay a populated JetStream stream, then continue live         |
 | [`demo.edn`](../examples/demo.edn)                 | tour of every primitive on `demo.sensors.*`                     |
 | [`lvc.edn`](../examples/lvc.edn)                   | `$LVC.>` cache replay: a late joiner gets the last value        |
 
@@ -196,9 +197,10 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | `$STATS.*` live counters | yes, monoblok extension |
 | bridge to real NATS | export-only |
 | import from real NATS | yes, as private patchbay ingress |
+| JetStream import | yes, as consumer-only patchbay ingress |
 | TLS on the local server | yes, optional server cert/key |
 | auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
-| JetStream | no |
+| JetStream service for local clients | no |
 | clustering | no |
 
 ### TLS for local NATS clients
@@ -248,7 +250,8 @@ Zero or one `(export ...)` form in the patchbay file configures it. The old
 
 A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. With `:origin-header true`, forwarded messages also carry `x-monoblok: <hostname>` for remote-side provenance. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.c.
 
-Zero or one `(import ...)` form configures inbound tap mode:
+Zero or one `(import ...)` form configures inbound tap mode. The flat import
+shape is a compatibility alias for one core NATS import:
 
 ```edn
 (import
@@ -261,6 +264,33 @@ Imported messages are patchbay inputs only. Direct monoblok subscribers do not
 see the raw imported subject unless a rule republishes it. In import mode, the
 local socket remains available for subscribers, but client `PUB` commands are
 rejected.
+
+Newer configs can make the import kind explicit. `:core` entries are live core
+NATS subscriptions; `:streams` entries are JetStream durable consumers:
+
+```edn
+(import
+  :core
+  [[:servers ["nats://raw.example:4222"]
+    :subject ["raw.>"]]]
+
+  :streams
+  [[:servers ["nats://js.example:4222"]
+    :subject "sensors.temp"
+    :stream "SENSORS"
+    :consumer "monoblok-prod-1"
+    :catch-up true]])
+```
+
+With `:streams`, monoblok consumes JetStream; it does not serve JetStream to
+local clients. On startup it can replay historical messages before opening its
+listener, using JetStream message metadata as the event-time clock. During that
+loading phase, rules can branch on `replaying?` to warm LVC, suppress historical
+output, or publish replay output to a separate subject. See
+[`examples/jetstream.yml`](../examples/jetstream.yml) and
+[`examples/jetstream.sh`](../examples/jetstream.sh), which starts a JetStream
+server on `JS_PORT` (default `15889`), exports `JS_URL`, and populates it with
+`COUNT=1000` events by default.
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./patchbay-cheatsheet.md).
 

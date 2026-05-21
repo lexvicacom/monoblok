@@ -13,6 +13,11 @@ typedef struct pb_rule {
     pb_eval_state state;
 } pb_rule;
 
+// Per-evaluation flags supplied by ingress paths.
+typedef struct pb_program_eval_options {
+    bool replaying;
+} pb_program_eval_options;
+
 // Top-level `(lvc ...)` filters borrowed from the parse arena.
 typedef struct pb_lvc_config {
     pb_slice *filters;
@@ -71,7 +76,7 @@ typedef struct pb_bridge_config {
     bool has_max_reconnect;
 } pb_bridge_config;
 
-// Top-level `(import ...)` remote NATS subscription config.
+// One core-NATS import source; slices borrow from the parse arena.
 typedef struct pb_import_config {
     pb_slice *servers;
     size_t servers_len;
@@ -111,6 +116,28 @@ typedef struct pb_import_config {
     bool has_max_pending;
 } pb_import_config;
 
+// One JetStream import source; base connection fields borrow from the parse arena.
+typedef struct pb_import_stream_config {
+    pb_import_config source;
+    pb_slice stream;
+    pb_slice consumer;
+    bool catch_up;
+    bool has_stream;
+    bool has_consumer;
+    bool has_catch_up;
+} pb_import_stream_config;
+
+// Top-level `(import ...)` config split by ingress kind.
+typedef struct pb_imports_config {
+    pb_import_config *cores;
+    size_t cores_len;
+    size_t cores_cap;
+    pb_import_stream_config *streams;
+    size_t streams_len;
+    size_t streams_cap;
+    bool present;
+} pb_imports_config;
+
 // The loaded and validated patchbay program: rules/config plus runtime state and eval scratch.
 typedef struct pb_program {
     pb_arena parse_arena;
@@ -124,7 +151,7 @@ typedef struct pb_program {
     pb_rule_ref_list rule_global;
     pb_lvc_config lvc;
     pb_bridge_config bridge;
-    pb_import_config importer;
+    pb_imports_config importer;
     bool uses_wall_clock;
     bool uses_clock_timer;
     size_t eval_depth;
@@ -139,7 +166,13 @@ void pb_program_set_eval_hooks(pb_program *program, pb_eval_symbol_fn user_symbo
 void pb_program_free(pb_program *program);
 bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
                              uint64_t now_ms, int64_t wall_ms);
+bool pb_program_eval_publish_with_options(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
+                                          uint64_t now_ms, int64_t wall_ms, pb_program_eval_options options);
 bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms);
+bool pb_program_tick_with_options(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms,
+                                  pb_program_eval_options options);
+bool pb_program_tick_until(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms,
+                           pb_program_eval_options options);
 bool pb_program_next_clock_deadline(const pb_program *program, uint64_t *out_ms);
 
 #endif

@@ -188,7 +188,7 @@ static void handle_op(mb_conn *conn, mb_op op) {
         conn->server->total_pubs += 1;
         uv_update_time(&conn->server->loop);
         if (!pb_program_eval_publish(conn->server->program, &conn->server->router, op.subject, op.payload,
-                                     uv_now(&conn->server->loop), mb_wall_clock_ms())) {
+                                     mb_server_patchbay_now_ms(conn->server), mb_wall_clock_ms())) {
             write_err_or_close(conn, "Patchbay Failed");
         }
         mb_server_reschedule_patchbay_clock(conn->server);

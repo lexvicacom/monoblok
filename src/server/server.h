@@ -19,6 +19,7 @@ enum {
 
 typedef struct mb_conn mb_conn;
 typedef struct mb_snapshot_job mb_snapshot_job;
+typedef void (*mb_server_stats_refresh_fn)(void *ctx);
 
 // Process-local server state owned by one uv loop thread.
 typedef struct mb_server {
@@ -43,15 +44,19 @@ typedef struct mb_server {
     uint64_t snapshot_every_ms;
     uint64_t stats_tick_ms;
     uint64_t total_pubs;
+    int64_t patchbay_clock_offset_ms;
     const uint64_t *bridge_published;
     const uint64_t *bridge_dropped;
     const uint64_t *import_received;
     const uint64_t *import_processed;
     const uint64_t *import_dropped;
     const uint64_t *import_failed;
+    mb_server_stats_refresh_fn stats_refresh;
+    void *stats_refresh_ctx;
     bool patchbay_timer_started;
     bool snapshot_timer_started;
     bool stats_timer_started;
+    bool listener_started;
     bool sigint_started;
     bool sigterm_started;
     bool snapshot_write_pending;
@@ -66,11 +71,14 @@ typedef struct mb_server {
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
                     uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,
-                    const char *tls_cert_path, const char *tls_key_path);
+                    const char *tls_cert_path, const char *tls_key_path, bool listen_immediately);
+bool mb_server_listen(mb_server *server);
 int mb_server_run(mb_server *server);
 void mb_server_close(mb_server *server);
 bool mb_server_emit_stats(mb_server *server);
 int64_t mb_wall_clock_ms(void);
+uint64_t mb_server_patchbay_now_ms(mb_server *server);
+void mb_server_set_patchbay_clock_offset(mb_server *server, int64_t offset_ms);
 void mb_server_reschedule_patchbay_clock(mb_server *server);
 
 #endif

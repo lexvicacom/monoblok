@@ -119,6 +119,7 @@ struct pb_eval_ctx {
     size_t rule_id;
     uint64_t now_ms;
     int64_t wall_ms;
+    bool replaying;
     pb_slice subject;
     pb_slice payload;
     pb_publish_fn publish;

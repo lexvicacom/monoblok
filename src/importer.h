@@ -25,6 +25,7 @@ typedef struct mb_importer {
     const pb_import_config *config;
     mb_importer_handler handler;
     void *handler_ctx;
+    uv_loop_t *loop;
     uv_async_t async;
     uv_mutex_t lock;
     uv_thread_t thread;
@@ -42,6 +43,7 @@ typedef struct mb_importer {
     int last_status;
     bool lock_started;
     bool async_started;
+    bool async_closed;
     bool thread_started;
     bool started;
     bool closing;

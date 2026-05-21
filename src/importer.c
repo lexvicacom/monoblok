@@ -173,6 +173,13 @@ static void on_import_async(uv_async_t *async) {
     mb_importer_drain(async->data);
 }
 
+static void on_import_async_close(uv_handle_t *handle) {
+    mb_importer *importer = handle->data;
+    if (importer != NULL) {
+        importer->async_closed = true;
+    }
+}
+
 static bool sub_vec_append(mb_importer *importer, natsSubscription *sub) {
     if (!mb_array_reserve((void **)&importer->subs, &importer->subs_cap, importer->subs_len + 1,
                           sizeof importer->subs[0], 4)) {
@@ -185,7 +192,7 @@ static bool sub_vec_append(mb_importer *importer, natsSubscription *sub) {
 
 bool mb_importer_start(mb_importer *importer, uv_loop_t *loop, const pb_import_config *config,
                        mb_importer_handler handler, void *handler_ctx) {
-    *importer = (mb_importer){.config = config, .handler = handler, .handler_ctx = handler_ctx};
+    *importer = (mb_importer){.config = config, .handler = handler, .handler_ctx = handler_ctx, .loop = loop};
     if (config == NULL || !config->present) {
         return true;
     }
@@ -370,7 +377,11 @@ void mb_importer_close(mb_importer *importer) {
         importer->started = false;
     }
     if (importer->async_started && !uv_is_closing((uv_handle_t *)&importer->async)) {
-        uv_close((uv_handle_t *)&importer->async, NULL);
+        importer->async_closed = false;
+        uv_close((uv_handle_t *)&importer->async, on_import_async_close);
+        while (!importer->async_closed && importer->loop != NULL) {
+            (void)uv_run(importer->loop, UV_RUN_NOWAIT);
+        }
     }
     importer->async_started = false;
     for (size_t i = 0; i < importer->ring_cap; i += 1) {

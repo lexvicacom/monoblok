@@ -164,6 +164,52 @@ static void test_rule_stats_count_emits_and_suppression(void) {
     pb_program_free(&program);
 }
 
+static void test_replaying_publish_option(void) {
+    pb_program program = {0};
+    load_program(&program, "(on \"foo\" (if replaying?\n"
+                           "              (publish! \"replay.foo\" payload)\n"
+                           "              (publish! \"live.foo\" payload)))\n");
+
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+
+    CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("x"), 0, 0));
+    CHECK(buf_contains(&conn.out, "MSG live.foo 1 1\r\nx\r\n"));
+    CHECK(!buf_contains(&conn.out, "MSG replay.foo 1 1\r\nx\r\n"));
+
+    mb_buf_clear(&conn.out);
+    CHECK(pb_program_eval_publish_with_options(&program, &router, lit("foo"), lit("x"), 0, 0,
+                                               (pb_program_eval_options){.replaying = true}));
+    CHECK(buf_contains(&conn.out, "MSG replay.foo 1 1\r\nx\r\n"));
+    CHECK(!buf_contains(&conn.out, "MSG live.foo 1 1\r\nx\r\n"));
+
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
+static void test_tick_until_drains_due_deadlines(void) {
+    pb_program program = {0};
+    load_program(&program, "(on \"foo\" (debounce! :ms 100 \"settled.foo\" payload))\n");
+
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+
+    CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("x"), 1000, 0));
+    CHECK(pb_program_tick_until(&program, &router, 1099, 1099, (pb_program_eval_options){0}));
+    CHECK(conn.out.len == 0);
+    CHECK(pb_program_tick_until(&program, &router, 1100, 1100, (pb_program_eval_options){0}));
+    CHECK(buf_contains(&conn.out, "MSG settled.foo 1 1\r\nx\r\n"));
+
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
 static void test_lvc_filters_load(void) {
     pb_program program = {0};
     load_program(&program, "(lvc [\"hot.>\" \"devices.*\"])\n"
@@ -241,12 +287,14 @@ static void test_config_env_values_load(void) {
     CHECK(program.bridge.has_token);
     CHECK(slice_is(program.bridge.token, "env-token"));
     CHECK(program.importer.present);
-    CHECK(program.importer.servers_len == 1);
-    CHECK(program.importer.subjects_len == 1);
-    CHECK(slice_is(program.importer.servers[0], "nats://env:4222"));
-    CHECK(slice_is(program.importer.subjects[0], "raw.>"));
-    CHECK(program.importer.has_creds);
-    CHECK(slice_is(program.importer.creds, "/tmp/env.creds"));
+    CHECK(program.importer.cores_len == 1);
+    const pb_import_config *core = &program.importer.cores[0];
+    CHECK(core->servers_len == 1);
+    CHECK(core->subjects_len == 1);
+    CHECK(slice_is(core->servers[0], "nats://env:4222"));
+    CHECK(slice_is(core->subjects[0], "raw.>"));
+    CHECK(core->has_creds);
+    CHECK(slice_is(core->creds, "/tmp/env.creds"));
     pb_program_free(&program);
 
     unsetenv("MB_TEST_PB_LVC");
@@ -293,8 +341,9 @@ static void test_yaml_config_env_values_load(void) {
     CHECK(program.bridge.has_name);
     CHECK(slice_is(program.bridge.name, "yaml-name"));
     CHECK(program.importer.present);
-    CHECK(slice_is(program.importer.servers[0], "nats://yaml:4222"));
-    CHECK(slice_is(program.importer.subjects[0], "raw.yaml.>"));
+    CHECK(program.importer.cores_len == 1);
+    CHECK(slice_is(program.importer.cores[0].servers[0], "nats://yaml:4222"));
+    CHECK(slice_is(program.importer.cores[0].subjects[0], "raw.yaml.>"));
     pb_program_free(&program);
 
     unsetenv("MB_TEST_PB_YAML_SERVER");
@@ -331,22 +380,110 @@ static void test_import_config_loads(void) {
                            "        :max-pending 128)\n"
                            "(on \"raw.*\" (publish! \"clean\" payload))\n");
     CHECK(program.importer.present);
-    CHECK(program.importer.servers_len == 1);
-    CHECK(program.importer.subjects_len == 2);
-    CHECK(slice_is(program.importer.servers[0], "nats://a:4222"));
-    CHECK(slice_is(program.importer.subjects[0], "raw.>"));
-    CHECK(slice_is(program.importer.subjects[1], "replay.*"));
-    CHECK(program.importer.has_name);
-    CHECK(slice_is(program.importer.name, "monoblok-import"));
-    CHECK(program.importer.origin_header);
-    CHECK(program.importer.has_max_pending);
-    CHECK(program.importer.max_pending == 128);
+    CHECK(program.importer.cores_len == 1);
+    CHECK(program.importer.streams_len == 0);
+    const pb_import_config *core = &program.importer.cores[0];
+    CHECK(core->servers_len == 1);
+    CHECK(core->subjects_len == 2);
+    CHECK(slice_is(core->servers[0], "nats://a:4222"));
+    CHECK(slice_is(core->subjects[0], "raw.>"));
+    CHECK(slice_is(core->subjects[1], "replay.*"));
+    CHECK(core->has_name);
+    CHECK(slice_is(core->name, "monoblok-import"));
+    CHECK(core->origin_header);
+    CHECK(core->has_max_pending);
+    CHECK(core->max_pending == 128);
+    pb_program_free(&program);
+}
+
+static void test_nested_import_config_loads(void) {
+    pb_program program = {0};
+    load_program(&program, "(import\n"
+                           "  :core [[ :servers [\"nats://core:4222\"]\n"
+                           "           :subject [\"raw.>\"]\n"
+                           "           :max-pending 64 ]]\n"
+                           "  :streams [[ :servers [\"nats://js:4222\"]\n"
+                           "              :subject [\"sensors.>\"]\n"
+                           "              :stream \"SENSORS\"\n"
+                           "              :consumer \"monoblok-sensors\"\n"
+                           "              :catch-up true ]\n"
+                           "            [ :servers [\"nats://js2:4222\"]\n"
+                           "              :subject \"events.>\"\n"
+                           "              :stream \"EVENTS\"\n"
+                           "              :consumer \"monoblok-events\"\n"
+                           "              :catch-up false ]])\n");
+    CHECK(program.importer.present);
+    CHECK(program.importer.cores_len == 1);
+    CHECK(program.importer.streams_len == 2);
+    CHECK(slice_is(program.importer.cores[0].servers[0], "nats://core:4222"));
+    CHECK(slice_is(program.importer.cores[0].subjects[0], "raw.>"));
+    CHECK(program.importer.cores[0].has_max_pending);
+    CHECK(program.importer.cores[0].max_pending == 64);
+
+    const pb_import_stream_config *sensors = &program.importer.streams[0];
+    CHECK(slice_is(sensors->source.servers[0], "nats://js:4222"));
+    CHECK(slice_is(sensors->source.subjects[0], "sensors.>"));
+    CHECK(slice_is(sensors->stream, "SENSORS"));
+    CHECK(slice_is(sensors->consumer, "monoblok-sensors"));
+    CHECK(sensors->has_catch_up);
+    CHECK(sensors->catch_up);
+
+    const pb_import_stream_config *events = &program.importer.streams[1];
+    CHECK(slice_is(events->source.servers[0], "nats://js2:4222"));
+    CHECK(slice_is(events->source.subjects[0], "events.>"));
+    CHECK(slice_is(events->stream, "EVENTS"));
+    CHECK(slice_is(events->consumer, "monoblok-events"));
+    CHECK(events->has_catch_up);
+    CHECK(!events->catch_up);
+    pb_program_free(&program);
+}
+
+static void test_yaml_nested_import_config_loads(void) {
+    pb_program program = {0};
+    const char *src =
+        "import:\n"
+        "  core:\n"
+        "    - servers: [\"nats://core-yaml:4222\"]\n"
+        "      subject: [\"raw.yaml.>\"]\n"
+        "      max-pending: 32\n"
+        "  streams:\n"
+        "    - servers: [\"nats://js-yaml:4222\"]\n"
+        "      subject: [\"sensors.yaml.>\"]\n"
+        "      stream: SENSORS_YAML\n"
+        "      consumer: monoblok-sensors-yaml\n"
+        "      catch-up: true\n";
+    CHECK(pb_program_load_source(&program, "nested-import.yml", src, strlen(src)));
+    CHECK(program.importer.present);
+    CHECK(program.importer.cores_len == 1);
+    CHECK(program.importer.streams_len == 1);
+    CHECK(slice_is(program.importer.cores[0].servers[0], "nats://core-yaml:4222"));
+    CHECK(slice_is(program.importer.cores[0].subjects[0], "raw.yaml.>"));
+    CHECK(program.importer.cores[0].max_pending == 32);
+    CHECK(slice_is(program.importer.streams[0].source.servers[0], "nats://js-yaml:4222"));
+    CHECK(slice_is(program.importer.streams[0].source.subjects[0], "sensors.yaml.>"));
+    CHECK(slice_is(program.importer.streams[0].stream, "SENSORS_YAML"));
+    CHECK(slice_is(program.importer.streams[0].consumer, "monoblok-sensors-yaml"));
+    CHECK(program.importer.streams[0].catch_up);
     pb_program_free(&program);
 }
 
 static void test_import_requires_subject(void) {
     pb_program program = {0};
     const char *src = "(import :servers [\"nats://a:4222\"])\n";
+    CHECK(!pb_program_load_source(&program, "<test>", src, strlen(src)));
+    pb_program_free(&program);
+}
+
+static void test_nested_import_rejects_malformed_stream(void) {
+    pb_program program = {0};
+    const char *src = "(import :streams [[ :servers [\"nats://js:4222\"] :subject [\"sensors.>\"] :stream \"SENSORS\" ]])\n";
+    CHECK(!pb_program_load_source(&program, "<test>", src, strlen(src)));
+    pb_program_free(&program);
+}
+
+static void test_nested_import_rejects_multi_filter_stream(void) {
+    pb_program program = {0};
+    const char *src = "(import :streams [[ :servers [\"nats://js:4222\"] :subject [\"sensors.>\" \"events.>\"] :stream \"SENSORS\" :consumer \"monoblok\" ]])\n";
     CHECK(!pb_program_load_source(&program, "<test>", src, strlen(src)));
     pb_program_free(&program);
 }
@@ -358,6 +495,8 @@ TEST_MAIN(program,
           test_reentry_depth_cap,
           test_rule_dispatch_preserves_source_order,
           test_rule_stats_count_emits_and_suppression,
+          test_replaying_publish_option,
+          test_tick_until_drains_due_deadlines,
           test_lvc_filters_load,
           test_export_config_loads,
           test_config_env_values_load,
@@ -366,4 +505,8 @@ TEST_MAIN(program,
           test_deprecated_bridge_config_loads,
           test_export_requires_servers,
           test_import_config_loads,
-          test_import_requires_subject)
+          test_nested_import_config_loads,
+          test_yaml_nested_import_config_loads,
+          test_import_requires_subject,
+          test_nested_import_rejects_malformed_stream,
+          test_nested_import_rejects_multi_filter_stream)

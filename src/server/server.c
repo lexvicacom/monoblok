@@ -4,6 +4,7 @@
 #include "snapshot.h"
 
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -77,10 +78,29 @@ int64_t mb_wall_clock_ms(void) {
     return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+static uint64_t add_clock_offset(uint64_t now_ms, int64_t offset_ms) {
+    if (offset_ms >= 0) {
+        const uint64_t add = (uint64_t)offset_ms;
+        return now_ms > UINT64_MAX - add ? UINT64_MAX : now_ms + add;
+    }
+    const uint64_t sub = offset_ms == INT64_MIN ? (uint64_t)INT64_MAX + 1 : (uint64_t)(-offset_ms);
+    return now_ms > sub ? now_ms - sub : 0;
+}
+
+uint64_t mb_server_patchbay_now_ms(mb_server *server) {
+    return add_clock_offset(uv_now(&server->loop), server->patchbay_clock_offset_ms);
+}
+
+void mb_server_set_patchbay_clock_offset(mb_server *server, int64_t offset_ms) {
+    if (server != NULL) {
+        server->patchbay_clock_offset_ms = offset_ms;
+    }
+}
+
 static void on_patchbay_timer(uv_timer_t *timer) {
     mb_server *server = timer->data;
     uv_update_time(&server->loop);
-    (void)pb_program_tick(server->program, &server->router, uv_now(&server->loop), mb_wall_clock_ms());
+    (void)pb_program_tick(server->program, &server->router, mb_server_patchbay_now_ms(server), mb_wall_clock_ms());
     mb_server_reschedule_patchbay_clock(server);
 }
 
@@ -98,6 +118,9 @@ static bool publish_stat(mb_server *server, const char *subject, uint64_t value)
 bool mb_server_emit_stats(mb_server *server) {
     if (server == NULL) {
         return false;
+    }
+    if (server->stats_refresh != NULL) {
+        server->stats_refresh(server->stats_refresh_ctx);
     }
     bool ok = publish_stat(server, "$STATS.global.pubs", server->total_pubs);
 
@@ -238,7 +261,7 @@ void mb_server_reschedule_patchbay_clock(mb_server *server) {
         return;
     }
     uv_update_time(&server->loop);
-    const uint64_t now = uv_now(&server->loop);
+    const uint64_t now = mb_server_patchbay_now_ms(server);
     const uint64_t due = deadline <= now ? 0 : deadline - now;
     (void)uv_timer_start(&server->patchbay_timer, on_patchbay_timer, due, 0);
 }
@@ -304,7 +327,7 @@ static void make_server_id(char out[35]) {
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
                     uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,
-                    const char *tls_cert_path, const char *tls_key_path) {
+                    const char *tls_cert_path, const char *tls_key_path, bool listen_immediately) {
     *server = (mb_server){
         .host = host,
         .port = port,
@@ -408,17 +431,30 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         fprintf(stderr, "bind failed: %s\n", uv_strerror(bind_rc));
         return false;
     }
+    if (!listen_immediately) {
+        return true;
+    }
+    return mb_server_listen(server);
+}
+
+bool mb_server_listen(mb_server *server) {
+    if (server->listener_started) {
+        return true;
+    }
     const int listen_rc = uv_listen((uv_stream_t *)&server->listener, 128, on_connection);
     if (listen_rc != 0) {
         fprintf(stderr, "listen failed: %s\n", uv_strerror(listen_rc));
         return false;
     }
+    server->listener_started = true;
     return true;
 }
 
 int mb_server_run(mb_server *server) {
-    printf("monoblok listening on %s:%u\n", server->host, server->port);
-    fflush(stdout);
+    if (server->listener_started) {
+        printf("monoblok listening on %s:%u\n", server->host, server->port);
+        fflush(stdout);
+    }
     return uv_run(&server->loop, UV_RUN_DEFAULT);
 }
 

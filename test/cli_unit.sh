@@ -12,6 +12,7 @@ trap cleanup EXIT INT TERM
 
 valid="$tmp/valid.edn"
 valid_config="$tmp/valid-config.edn"
+valid_nested_import="$tmp/valid-nested-import.edn"
 bad_lvc="$tmp/bad-lvc.edn"
 bad_export="$tmp/bad-export.edn"
 bad_import="$tmp/bad-import.edn"
@@ -49,6 +50,18 @@ cat > "$valid_config" <<'EOF'
         :name "monoblok-import-test"
         :origin-header true)
 (on "sensors.*" :reentrant true (publish! (subject-append "seen") payload))
+EOF
+
+cat > "$valid_nested_import" <<'EOF'
+(import
+  :core [[ :servers ["nats://127.0.0.1:4223"]
+           :subject ["raw.>"] ]]
+  :streams [[ :servers ["nats://127.0.0.1:4222"]
+              :subject "sensors.temp"
+              :stream "SENSORS"
+              :consumer "monoblok-test"
+              :catch-up true ]])
+(on "sensors.temp" (if replaying? (publish! "replay.temp" payload) (publish! "live.temp" payload)))
 EOF
 
 cat > "$bad_lvc" <<'EOF'
@@ -90,6 +103,8 @@ grep '^Usage:' "$tmp/missing-validate.out" >/dev/null
 grep ': ok (2 rules)' "$tmp/validate.out" >/dev/null
 "$bin" --validate "$valid_config" > "$tmp/validate-config.out" 2> "$tmp/validate-config.err"
 grep ': ok (1 rule)' "$tmp/validate-config.out" >/dev/null
+"$bin" --validate "$valid_nested_import" > "$tmp/validate-nested-import.out" 2> "$tmp/validate-nested-import.err"
+grep ': ok (1 rule)' "$tmp/validate-nested-import.out" >/dev/null
 
 if "$bin" --validate "$bad_lvc" > "$tmp/bad-lvc.out" 2> "$tmp/bad-lvc.err"; then
     echo "invalid lvc unexpectedly validated" >&2

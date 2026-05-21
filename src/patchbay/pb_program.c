@@ -20,6 +20,7 @@ typedef struct publish_ctx {
     size_t rule_idx;
     size_t depth;
     bool reentrant;
+    bool replaying;
 } publish_ctx;
 
 enum {
@@ -371,6 +372,321 @@ static bool load_import_size(pb_value value, const char *name, size_t *out) {
     return load_remote_size(value, "import", name, out);
 }
 
+static void import_core_free(pb_import_config *config) {
+    free(config->servers);
+    free(config->subjects);
+    *config = (pb_import_config){0};
+}
+
+static void import_stream_free(pb_import_stream_config *stream) {
+    import_core_free(&stream->source);
+    *stream = (pb_import_stream_config){0};
+}
+
+static void import_set_free(pb_imports_config *imports) {
+    for (size_t i = 0; i < imports->cores_len; i += 1) {
+        import_core_free(&imports->cores[i]);
+    }
+    for (size_t i = 0; i < imports->streams_len; i += 1) {
+        import_stream_free(&imports->streams[i]);
+    }
+    free(imports->cores);
+    free(imports->streams);
+    *imports = (pb_imports_config){0};
+}
+
+static bool import_core_append(pb_imports_config *imports, pb_import_config config) {
+    if (!mb_array_reserve((void **)&imports->cores, &imports->cores_cap, imports->cores_len + 1,
+                          sizeof imports->cores[0], 2)) {
+        return false;
+    }
+    imports->cores[imports->cores_len] = config;
+    imports->cores_len += 1;
+    return true;
+}
+
+static bool import_stream_append(pb_imports_config *imports, pb_import_stream_config stream) {
+    if (!mb_array_reserve((void **)&imports->streams, &imports->streams_cap, imports->streams_len + 1,
+                          sizeof imports->streams[0], 2)) {
+        return false;
+    }
+    imports->streams[imports->streams_len] = stream;
+    imports->streams_len += 1;
+    return true;
+}
+
+static bool import_key_is_nested(pb_slice key) {
+    return pb_slice_eq_lit(key, "core") || pb_slice_eq_lit(key, "streams");
+}
+
+static bool load_import_common_option(pb_program *program, pb_import_config *importer,
+                                      pb_slice key, pb_value value, bool *matched) {
+    *matched = true;
+    if (pb_slice_eq_lit(key, "servers")) {
+        return load_remote_list(program, &importer->servers, &importer->servers_len, &importer->servers_cap, value, "import", "servers");
+    }
+    if (pb_slice_eq_lit(key, "subject") || pb_slice_eq_lit(key, "subjects")) {
+        return load_remote_list(program, &importer->subjects, &importer->subjects_len, &importer->subjects_cap, value, "import", "subject");
+    }
+    if (pb_slice_eq_lit(key, "name")) {
+        if (!load_config_string(program, value, "import", "name", &importer->name)) {
+            return false;
+        }
+        importer->has_name = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "creds")) {
+        if (!load_config_string(program, value, "import", "creds", &importer->creds)) {
+            return false;
+        }
+        importer->has_creds = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "user")) {
+        if (!load_config_string(program, value, "import", "user", &importer->user)) {
+            return false;
+        }
+        importer->has_user = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "password")) {
+        if (!load_config_string(program, value, "import", "password", &importer->password)) {
+            return false;
+        }
+        importer->has_password = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "token")) {
+        if (!load_config_string(program, value, "import", "token", &importer->token)) {
+            return false;
+        }
+        importer->has_token = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "tls")) {
+        return load_import_bool(value, "tls", &importer->tls);
+    }
+    if (pb_slice_eq_lit(key, "tls-ca")) {
+        if (!load_config_string(program, value, "import", "tls-ca", &importer->tls_ca)) {
+            return false;
+        }
+        importer->has_tls_ca = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "tls-cert")) {
+        if (!load_config_string(program, value, "import", "tls-cert", &importer->tls_cert)) {
+            return false;
+        }
+        importer->has_tls_cert = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "tls-key")) {
+        if (!load_config_string(program, value, "import", "tls-key", &importer->tls_key)) {
+            return false;
+        }
+        importer->has_tls_key = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "tls-skip-verify")) {
+        return load_import_bool(value, "tls-skip-verify", &importer->tls_skip_verify);
+    }
+    if (pb_slice_eq_lit(key, "origin-header")) {
+        return load_import_bool(value, "origin-header", &importer->origin_header);
+    }
+    if (pb_slice_eq_lit(key, "connect-timeout-ms")) {
+        if (!load_import_i64(value, "connect-timeout-ms", &importer->connect_timeout_ms)) {
+            return false;
+        }
+        importer->has_connect_timeout_ms = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "ping-interval-ms")) {
+        if (!load_import_i64(value, "ping-interval-ms", &importer->ping_interval_ms)) {
+            return false;
+        }
+        importer->has_ping_interval_ms = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "reconnect-wait-ms")) {
+        if (!load_import_i64(value, "reconnect-wait-ms", &importer->reconnect_wait_ms)) {
+            return false;
+        }
+        importer->has_reconnect_wait_ms = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "max-reconnect")) {
+        if (!load_import_int(value, "max-reconnect", &importer->max_reconnect)) {
+            return false;
+        }
+        importer->has_max_reconnect = true;
+        return true;
+    }
+    if (pb_slice_eq_lit(key, "max-pending")) {
+        if (!load_import_size(value, "max-pending", &importer->max_pending)) {
+            return false;
+        }
+        importer->has_max_pending = true;
+        return true;
+    }
+    *matched = false;
+    return true;
+}
+
+static bool validate_import_core(const pb_import_config *importer, const char *label) {
+    if (importer->servers_len == 0) {
+        fprintf(stderr, "patchbay: %s requires :servers\n", label);
+        return false;
+    }
+    if (importer->subjects_len == 0) {
+        fprintf(stderr, "patchbay: %s requires :subject\n", label);
+        return false;
+    }
+    return true;
+}
+
+static bool load_import_core_entry(pb_program *program, pb_values items, const char *label, pb_import_config *out) {
+    if (items.len == 0 || (items.len % 2) != 0) {
+        fprintf(stderr, "patchbay: %s expects keyword/value options\n", label);
+        return false;
+    }
+    pb_import_config importer = {.present = true};
+    for (size_t i = 0; i < items.len; i += 2) {
+        if (items.items[i].kind != PB_KEYWORD) {
+            fprintf(stderr, "patchbay: %s option must be keyword\n", label);
+            goto fail;
+        }
+        bool matched = false;
+        if (!load_import_common_option(program, &importer, items.items[i].text, items.items[i + 1], &matched)) {
+            goto fail;
+        }
+        if (!matched) {
+            fprintf(stderr, "patchbay: unknown %s option: %.*s\n", label, (int)items.items[i].text.len, items.items[i].text.ptr);
+            goto fail;
+        }
+    }
+    if (!validate_import_core(&importer, label)) {
+        goto fail;
+    }
+    *out = importer;
+    return true;
+
+fail:
+    import_core_free(&importer);
+    return false;
+}
+
+static bool load_import_stream_entry(pb_program *program, pb_values items, const char *label, pb_import_stream_config *out) {
+    if (items.len == 0 || (items.len % 2) != 0) {
+        fprintf(stderr, "patchbay: %s expects keyword/value options\n", label);
+        return false;
+    }
+    pb_import_stream_config stream = {.source = {.present = true}, .catch_up = true};
+    for (size_t i = 0; i < items.len; i += 2) {
+        if (items.items[i].kind != PB_KEYWORD) {
+            fprintf(stderr, "patchbay: %s option must be keyword\n", label);
+            goto fail;
+        }
+        const pb_slice key = items.items[i].text;
+        pb_value value = items.items[i + 1];
+        bool matched = false;
+        if (!load_import_common_option(program, &stream.source, key, value, &matched)) {
+            goto fail;
+        }
+        if (matched) {
+            continue;
+        }
+        if (pb_slice_eq_lit(key, "stream")) {
+            if (!load_config_string(program, value, "import", "stream", &stream.stream)) {
+                goto fail;
+            }
+            stream.has_stream = true;
+        } else if (pb_slice_eq_lit(key, "consumer")) {
+            if (!load_config_string(program, value, "import", "consumer", &stream.consumer)) {
+                goto fail;
+            }
+            stream.has_consumer = true;
+        } else if (pb_slice_eq_lit(key, "catch-up")) {
+            if (!load_import_bool(value, "catch-up", &stream.catch_up)) {
+                goto fail;
+            }
+            stream.has_catch_up = true;
+        } else {
+            fprintf(stderr, "patchbay: unknown %s option: %.*s\n", label, (int)key.len, key.ptr);
+            goto fail;
+        }
+    }
+    if (!validate_import_core(&stream.source, label)) {
+        goto fail;
+    }
+    if (stream.source.subjects_len != 1) {
+        fprintf(stderr, "patchbay: %s expects exactly one :subject filter in v1\n", label);
+        goto fail;
+    }
+    if (!stream.has_stream) {
+        fprintf(stderr, "patchbay: %s requires :stream\n", label);
+        goto fail;
+    }
+    if (!stream.has_consumer) {
+        fprintf(stderr, "patchbay: %s requires :consumer\n", label);
+        goto fail;
+    }
+    *out = stream;
+    return true;
+
+fail:
+    import_stream_free(&stream);
+    return false;
+}
+
+static bool import_entry_values(pb_value value, const char *label, pb_values *out) {
+    if (value.kind != PB_VECTOR) {
+        fprintf(stderr, "patchbay: %s entry must be a vector of keyword/value options\n", label);
+        return false;
+    }
+    *out = value.seq;
+    return true;
+}
+
+static bool load_import_core_entries(pb_program *program, pb_imports_config *imports, pb_value value) {
+    if (value.kind != PB_VECTOR || value.seq.len == 0) {
+        fprintf(stderr, "patchbay: import :core expects a non-empty vector of entries\n");
+        return false;
+    }
+    for (size_t i = 0; i < value.seq.len; i += 1) {
+        pb_values entry = {0};
+        pb_import_config core = {0};
+        if (!import_entry_values(value.seq.items[i], "import :core", &entry) ||
+            !load_import_core_entry(program, entry, "import :core", &core)) {
+            return false;
+        }
+        if (!import_core_append(imports, core)) {
+            import_core_free(&core);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool load_import_stream_entries(pb_program *program, pb_imports_config *imports, pb_value value) {
+    if (value.kind != PB_VECTOR || value.seq.len == 0) {
+        fprintf(stderr, "patchbay: import :streams expects a non-empty vector of entries\n");
+        return false;
+    }
+    for (size_t i = 0; i < value.seq.len; i += 1) {
+        pb_values entry = {0};
+        pb_import_stream_config stream = {0};
+        if (!import_entry_values(value.seq.items[i], "import :streams", &entry) ||
+            !load_import_stream_entry(program, entry, "import :streams", &stream)) {
+            return false;
+        }
+        if (!import_stream_append(imports, stream)) {
+            import_stream_free(&stream);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool load_import_form(pb_program *program, pb_values items) {
     if (program->importer.present) {
         fprintf(stderr, "patchbay: duplicate import form\n");
@@ -381,120 +697,62 @@ static bool load_import_form(pb_program *program, pb_values items) {
         return false;
     }
 
-    pb_import_config importer = {0};
-    importer.present = true;
+    bool saw_nested = false;
+    bool saw_flat = false;
     for (size_t i = 1; i < items.len; i += 2) {
         if (items.items[i].kind != PB_KEYWORD) {
             fprintf(stderr, "patchbay: import option must be keyword\n");
+            return false;
+        }
+        if (import_key_is_nested(items.items[i].text)) {
+            saw_nested = true;
+        } else {
+            saw_flat = true;
+        }
+    }
+    if (saw_nested && saw_flat) {
+        fprintf(stderr, "patchbay: import cannot mix nested :core/:streams with flat options\n");
+        return false;
+    }
+
+    pb_imports_config imports = {.present = true};
+    if (!saw_nested) {
+        pb_import_config core = {0};
+        if (!load_import_core_entry(program, (pb_values){.items = items.items + 1, .len = items.len - 1}, "import", &core)) {
             goto fail;
         }
-        pb_slice key = items.items[i].text;
-        pb_value value = items.items[i + 1];
-        if (pb_slice_eq_lit(key, "servers")) {
-            if (!load_remote_list(program, &importer.servers, &importer.servers_len, &importer.servers_cap, value, "import", "servers")) {
-                goto fail;
-            }
-        } else if (pb_slice_eq_lit(key, "subject") || pb_slice_eq_lit(key, "subjects")) {
-            if (!load_remote_list(program, &importer.subjects, &importer.subjects_len, &importer.subjects_cap, value, "import", "subject")) {
-                goto fail;
-            }
-        } else if (pb_slice_eq_lit(key, "name")) {
-            if (!load_config_string(program, value, "import", "name", &importer.name)) {
-                goto fail;
-            }
-            importer.has_name = true;
-        } else if (pb_slice_eq_lit(key, "creds")) {
-            if (!load_config_string(program, value, "import", "creds", &importer.creds)) {
-                goto fail;
-            }
-            importer.has_creds = true;
-        } else if (pb_slice_eq_lit(key, "user")) {
-            if (!load_config_string(program, value, "import", "user", &importer.user)) {
-                goto fail;
-            }
-            importer.has_user = true;
-        } else if (pb_slice_eq_lit(key, "password")) {
-            if (!load_config_string(program, value, "import", "password", &importer.password)) {
-                goto fail;
-            }
-            importer.has_password = true;
-        } else if (pb_slice_eq_lit(key, "token")) {
-            if (!load_config_string(program, value, "import", "token", &importer.token)) {
-                goto fail;
-            }
-            importer.has_token = true;
-        } else if (pb_slice_eq_lit(key, "tls")) {
-            if (!load_import_bool(value, "tls", &importer.tls)) {
-                goto fail;
-            }
-        } else if (pb_slice_eq_lit(key, "tls-ca")) {
-            if (!load_config_string(program, value, "import", "tls-ca", &importer.tls_ca)) {
-                goto fail;
-            }
-            importer.has_tls_ca = true;
-        } else if (pb_slice_eq_lit(key, "tls-cert")) {
-            if (!load_config_string(program, value, "import", "tls-cert", &importer.tls_cert)) {
-                goto fail;
-            }
-            importer.has_tls_cert = true;
-        } else if (pb_slice_eq_lit(key, "tls-key")) {
-            if (!load_config_string(program, value, "import", "tls-key", &importer.tls_key)) {
-                goto fail;
-            }
-            importer.has_tls_key = true;
-        } else if (pb_slice_eq_lit(key, "tls-skip-verify")) {
-            if (!load_import_bool(value, "tls-skip-verify", &importer.tls_skip_verify)) {
-                goto fail;
-            }
-        } else if (pb_slice_eq_lit(key, "origin-header")) {
-            if (!load_import_bool(value, "origin-header", &importer.origin_header)) {
-                goto fail;
-            }
-        } else if (pb_slice_eq_lit(key, "connect-timeout-ms")) {
-            if (!load_import_i64(value, "connect-timeout-ms", &importer.connect_timeout_ms)) {
-                goto fail;
-            }
-            importer.has_connect_timeout_ms = true;
-        } else if (pb_slice_eq_lit(key, "ping-interval-ms")) {
-            if (!load_import_i64(value, "ping-interval-ms", &importer.ping_interval_ms)) {
-                goto fail;
-            }
-            importer.has_ping_interval_ms = true;
-        } else if (pb_slice_eq_lit(key, "reconnect-wait-ms")) {
-            if (!load_import_i64(value, "reconnect-wait-ms", &importer.reconnect_wait_ms)) {
-                goto fail;
-            }
-            importer.has_reconnect_wait_ms = true;
-        } else if (pb_slice_eq_lit(key, "max-reconnect")) {
-            if (!load_import_int(value, "max-reconnect", &importer.max_reconnect)) {
-                goto fail;
-            }
-            importer.has_max_reconnect = true;
-        } else if (pb_slice_eq_lit(key, "max-pending")) {
-            if (!load_import_size(value, "max-pending", &importer.max_pending)) {
-                goto fail;
-            }
-            importer.has_max_pending = true;
-        } else {
-            fprintf(stderr, "patchbay: unknown import option: %.*s\n", (int)key.len, key.ptr);
+        if (!import_core_append(&imports, core)) {
+            import_core_free(&core);
             goto fail;
+        }
+    } else {
+        for (size_t i = 1; i < items.len; i += 2) {
+            const pb_slice key = items.items[i].text;
+            pb_value value = items.items[i + 1];
+            if (pb_slice_eq_lit(key, "core")) {
+                if (!load_import_core_entries(program, &imports, value)) {
+                    goto fail;
+                }
+            } else if (pb_slice_eq_lit(key, "streams")) {
+                if (!load_import_stream_entries(program, &imports, value)) {
+                    goto fail;
+                }
+            } else {
+                fprintf(stderr, "patchbay: unknown import option: %.*s\n", (int)key.len, key.ptr);
+                goto fail;
+            }
         }
     }
 
-    if (importer.servers_len == 0) {
-        fprintf(stderr, "patchbay: import requires :servers\n");
+    if (imports.cores_len == 0 && imports.streams_len == 0) {
+        fprintf(stderr, "patchbay: import requires at least one :core or :streams entry\n");
         goto fail;
     }
-    if (importer.subjects_len == 0) {
-        fprintf(stderr, "patchbay: import requires :subject\n");
-        goto fail;
-    }
-    program->importer = importer;
+    program->importer = imports;
     return true;
 
 fail:
-    free(importer.servers);
-    free(importer.subjects);
+    import_set_free(&imports);
     return false;
 }
 
@@ -756,8 +1014,7 @@ void pb_program_free(pb_program *program) {
     free(program->lvc.filters);
     free(program->bridge.servers);
     free(program->bridge.exports);
-    free(program->importer.servers);
-    free(program->importer.subjects);
+    import_set_free(&program->importer);
     pb_arena_free(&program->scratch);
     pb_arena_free(&program->parse_arena);
     *program = (pb_program){0};
@@ -778,7 +1035,7 @@ static const pb_rule_ref_list *rule_refs_for_subject(const pb_program *program, 
 }
 
 static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice subject, pb_slice payload,
-                                uint64_t now_ms, int64_t wall_ms, size_t depth);
+                                uint64_t now_ms, int64_t wall_ms, size_t depth, bool replaying);
 
 static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     publish_ctx *p = ctx;
@@ -800,13 +1057,13 @@ static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
         fprintf(stderr, "patchbay: reentry depth cap reached\n");
         return true;
     }
-    (void)eval_publish_slices(p->program, p->router, subject, payload, p->now_ms, p->wall_ms, p->depth + 1);
+    (void)eval_publish_slices(p->program, p->router, subject, payload, p->now_ms, p->wall_ms, p->depth + 1, p->replaying);
     return true;
 }
 
 static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t rule_idx,
                                   pb_slice subject, pb_slice payload,
-                                  uint64_t now_ms, int64_t wall_ms, size_t depth) {
+                                  uint64_t now_ms, int64_t wall_ms, size_t depth, bool replaying) {
     pb_rule *rule = &program->rules[rule_idx];
     if (!slice_match(rule->filter, subject)) {
         return true;
@@ -819,6 +1076,7 @@ static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t
         .rule_idx = rule_idx,
         .depth = depth,
         .reentrant = rule->reentrant,
+        .replaying = replaying,
     };
     pb_eval_ctx ctx = {
         .arena = &program->scratch,
@@ -826,6 +1084,7 @@ static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t
         .rule_id = rule_idx,
         .now_ms = now_ms,
         .wall_ms = wall_ms,
+        .replaying = replaying,
         .subject = subject,
         .payload = payload,
         .publish = publish_cb,
@@ -845,7 +1104,7 @@ static bool eval_rule_for_publish(pb_program *program, mb_router *router, size_t
 }
 
 static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice subject, pb_slice payload,
-                                uint64_t now_ms, int64_t wall_ms, size_t depth) {
+                                uint64_t now_ms, int64_t wall_ms, size_t depth, bool replaying) {
     if (program == NULL || program->len == 0) {
         return true;
     }
@@ -865,15 +1124,15 @@ static bool eval_publish_slices(pb_program *program, mb_router *router, pb_slice
             rule_idx = global_idx;
             global_pos += 1;
         }
-        if (!eval_rule_for_publish(program, router, rule_idx, subject, payload, now_ms, wall_ms, depth)) {
+        if (!eval_rule_for_publish(program, router, rule_idx, subject, payload, now_ms, wall_ms, depth, replaying)) {
             ok = false;
         }
     }
     return ok;
 }
 
-bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
-                             uint64_t now_ms, int64_t wall_ms) {
+bool pb_program_eval_publish_with_options(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
+                                          uint64_t now_ms, int64_t wall_ms, pb_program_eval_options options) {
     if (program == NULL || program->len == 0) {
         return true;
     }
@@ -881,7 +1140,8 @@ bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice su
     program->eval_depth += 1;
     const bool ok =
         eval_publish_slices(program, router, (pb_slice){.ptr = (const char *)subject.ptr, .len = subject.len},
-                            (pb_slice){.ptr = (const char *)payload.ptr, .len = payload.len}, now_ms, wall_ms, 0);
+                            (pb_slice){.ptr = (const char *)payload.ptr, .len = payload.len}, now_ms, wall_ms, 0,
+                            options.replaying);
     program->eval_depth -= 1;
     if (outer) {
         reset_scratch(program);
@@ -889,7 +1149,14 @@ bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice su
     return ok;
 }
 
-bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms) {
+bool pb_program_eval_publish(pb_program *program, mb_router *router, mb_slice subject, mb_slice payload,
+                             uint64_t now_ms, int64_t wall_ms) {
+    return pb_program_eval_publish_with_options(program, router, subject, payload, now_ms, wall_ms,
+                                                (pb_program_eval_options){0});
+}
+
+bool pb_program_tick_with_options(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms,
+                                  pb_program_eval_options options) {
     if (program == NULL || program->len == 0) {
         return true;
     }
@@ -909,6 +1176,7 @@ bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, in
                 .rule_idx = rule_idx,
                 .depth = 0,
                 .reentrant = rule->reentrant,
+                .replaying = options.replaying,
             };
             pb_eval_ctx ctx = {
                 .arena = &program->scratch,
@@ -916,6 +1184,7 @@ bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, in
                 .rule_id = rule_idx,
                 .now_ms = now_ms,
                 .wall_ms = wall_ms,
+                .replaying = options.replaying,
                 .subject = {.ptr = entry->subject, .len = entry->subject_len},
                 .payload = {.ptr = "", .len = 0},
                 .publish = publish_cb,
@@ -936,6 +1205,27 @@ bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, in
     program->eval_depth -= 1;
     if (outer) {
         reset_scratch(program);
+    }
+    return ok;
+}
+
+bool pb_program_tick(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms) {
+    return pb_program_tick_with_options(program, router, now_ms, wall_ms, (pb_program_eval_options){0});
+}
+
+bool pb_program_tick_until(pb_program *program, mb_router *router, uint64_t now_ms, int64_t wall_ms,
+                           pb_program_eval_options options) {
+    bool ok = true;
+    uint64_t deadline = 0;
+    while (pb_program_next_clock_deadline(program, &deadline) && deadline <= now_ms) {
+        int64_t tick_wall_ms = wall_ms;
+        const uint64_t delta = now_ms - deadline;
+        if (delta <= (uint64_t)INT64_MAX) {
+            tick_wall_ms = wall_ms - (int64_t)delta;
+        }
+        if (!pb_program_tick_with_options(program, router, deadline, tick_wall_ms, options)) {
+            ok = false;
+        }
     }
     return ok;
 }
