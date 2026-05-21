@@ -210,6 +210,30 @@ static void test_tick_until_drains_due_deadlines(void) {
     pb_program_free(&program);
 }
 
+static void test_time_window_deadline_uses_inclusive_cutoff(void) {
+    pb_program program = {0};
+    load_program(&program, "(on \"foo\" (moving-avg :ms 1000 payload-float))\n");
+
+    mb_router router;
+    mb_router_init(&router);
+
+    CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("10"), 1000, 0));
+
+    uint64_t deadline = 0;
+    CHECK(pb_program_next_clock_deadline(&program, &deadline));
+    CHECK(deadline == 2001);
+
+    CHECK(pb_program_tick_until(&program, &router, 2000, 2000, (pb_program_eval_options){0}));
+    CHECK(pb_program_next_clock_deadline(&program, &deadline));
+    CHECK(deadline == 2001);
+
+    CHECK(pb_program_tick_until(&program, &router, 2001, 2001, (pb_program_eval_options){0}));
+    CHECK(!pb_program_next_clock_deadline(&program, &deadline));
+
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
 static void test_lvc_filters_load(void) {
     pb_program program = {0};
     load_program(&program, "(lvc [\"hot.>\" \"devices.*\"])\n"
@@ -497,6 +521,7 @@ TEST_MAIN(program,
           test_rule_stats_count_emits_and_suppression,
           test_replaying_publish_option,
           test_tick_until_drains_due_deadlines,
+          test_time_window_deadline_uses_inclusive_cutoff,
           test_lvc_filters_load,
           test_export_config_loads,
           test_config_env_values_load,

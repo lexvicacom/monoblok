@@ -22,6 +22,17 @@ JS_PORT="${JS_PORT:-15889}"
 JS_URL="${JS_URL:-nats://127.0.0.1:$JS_PORT}"
 export JS_URL
 COUNT="${COUNT:-1000}"
+if [ -z "${PAUSE_EVERY:-}" ]; then
+    if [ "$COUNT" -gt 1 ]; then
+        PAUSE_EVERY=$((COUNT / 2))
+        if [ "$PAUSE_EVERY" -lt 1 ]; then
+            PAUSE_EVERY=1
+        fi
+    else
+        PAUSE_EVERY=0
+    fi
+fi
+PAUSE_MS="${PAUSE_MS:-1100}"
 
 nats-server -js -sd "$TMP/js-store" -p "$JS_PORT" >"$TMP/js-server.log" 2>&1 &
 JS_PID=$!
@@ -43,7 +54,7 @@ if ! grep -q 'Server is ready' "$TMP/js-server.log"; then
     exit 1
 fi
 
-JS_URL="$JS_URL" COUNT="$COUNT" "$ROOT/examples/jetstream-populate.sh" >"$TMP/populate.log"
+JS_URL="$JS_URL" COUNT="$COUNT" PAUSE_EVERY="$PAUSE_EVERY" PAUSE_MS="$PAUSE_MS" "$ROOT/examples/jetstream-populate.sh" >"$TMP/populate.log"
 
 start_daemon examples/jetstream.yml
 for _ in $(seq 1 80); do
@@ -67,6 +78,7 @@ settle 0.8
 note \
     "Started a JetStream nats-server on port $JS_PORT." \
     "Populated stream SENSORS with $COUNT historical js.sensors.temp events before monoblok started." \
+    "Population pauses every $PAUSE_EVERY events for ${PAUSE_MS}ms so replay catch-up closes a time bar from JetStream timestamps." \
     "monoblok replayed the stream before opening its listener, so late LVC subscribers see warm replay-derived state." \
     "A final live event was published after startup and appears on js.live.temp." \
     "The raw js.sensors.temp source remains private patchbay ingress."

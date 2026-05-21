@@ -7,7 +7,7 @@
 # Or manually:
 #   export JS_URL=nats://127.0.0.1:15889
 #   nats-server -js -sd /tmp/monoblok-js-store -p 15889
-#   COUNT=1000 examples/jetstream-populate.sh
+#   COUNT=1000 PAUSE_EVERY=500 PAUSE_MS=1100 examples/jetstream-populate.sh
 #   ./build/monoblok --port 14222 --patchbay examples/jetstream.yml
 #   nats -s nats://127.0.0.1:14222 sub '$LVC.js.>'
 #
@@ -32,6 +32,7 @@ on:
       - do
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
+      - [bar!, :ms, 1000, payload-float]
       - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
 
   # A few simple variants to try:

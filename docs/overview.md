@@ -290,7 +290,9 @@ output, or publish replay output to a separate subject. See
 [`examples/jetstream.yml`](../examples/jetstream.yml) and
 [`examples/jetstream.sh`](../examples/jetstream.sh), which starts a JetStream
 server on `JS_PORT` (default `15889`), exports `JS_URL`, and populates it with
-`COUNT=1000` events by default.
+`COUNT=1000` events by default. The example pauses once during population so
+JetStream replay has enough event-time gap to close a `bar! :ms` window during
+catch-up.
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./patchbay-cheatsheet.md).
 

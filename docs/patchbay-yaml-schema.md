@@ -227,6 +227,7 @@ on:
       - do
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
+      - [bar!, :ms, 1000, payload-float]
       - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
 
   - sub: js.sensors.temp

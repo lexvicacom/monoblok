@@ -7,6 +7,8 @@ STREAM="${STREAM:-SENSORS}"
 STREAM_SUBJECTS="${STREAM_SUBJECTS:-js.sensors.>}"
 SUBJECT="${SUBJECT:-js.sensors.temp}"
 COUNT="${COUNT:-1000}"
+PAUSE_EVERY="${PAUSE_EVERY:-0}"
+PAUSE_MS="${PAUSE_MS:-0}"
 
 if ! command -v nats >/dev/null; then
     echo "the nats CLI is required (https://github.com/nats-io/natscli)" >&2
@@ -19,6 +21,18 @@ case "$COUNT" in
         exit 1
         ;;
 esac
+case "$PAUSE_EVERY" in
+    ''|*[!0-9]*)
+        echo "PAUSE_EVERY must be a non-negative integer" >&2
+        exit 1
+        ;;
+esac
+case "$PAUSE_MS" in
+    ''|*[!0-9]*)
+        echo "PAUSE_MS must be a non-negative integer" >&2
+        exit 1
+        ;;
+esac
 
 nats --no-context -s "$JS_URL" stream rm "$STREAM" --force >/dev/null 2>&1 || true
 nats --no-context -s "$JS_URL" stream add "$STREAM" \
@@ -26,15 +40,18 @@ nats --no-context -s "$JS_URL" stream add "$STREAM" \
     --storage file \
     --defaults >/dev/null
 
-python3 - "$JS_URL" "$SUBJECT" "$COUNT" <<'PY'
+python3 - "$JS_URL" "$SUBJECT" "$COUNT" "$PAUSE_EVERY" "$PAUSE_MS" <<'PY'
 import math
 import socket
 import sys
+import time
 from urllib.parse import urlparse
 
 url = sys.argv[1]
 subject = sys.argv[2].encode("ascii")
 count = int(sys.argv[3])
+pause_every = int(sys.argv[4])
+pause_ms = int(sys.argv[5])
 
 parsed = urlparse(url if "://" in url else f"nats://{url}")
 host = parsed.hostname or "127.0.0.1"
@@ -44,6 +61,16 @@ sock = socket.create_connection((host, port), timeout=5)
 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 sock.sendall(b"CONNECT {}\r\n")
 
+def flush():
+    sock.sendall(b"PING\r\n")
+    buf = b""
+    sock.settimeout(5)
+    while b"PONG\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("server closed before PONG")
+        buf += chunk
+
 for i in range(1, count + 1):
     # Slow drift plus a small wave gives replay something more realistic than
     # a constant payload while keeping the stream deterministic.
@@ -51,16 +78,12 @@ for i in range(1, count + 1):
     payload = f"{value:.3f}".encode("ascii")
     frame = b"PUB " + subject + b" " + str(len(payload)).encode("ascii") + b"\r\n" + payload + b"\r\n"
     sock.sendall(frame)
+    if pause_every > 0 and pause_ms > 0 and i < count and i % pause_every == 0:
+        flush()
+        time.sleep(pause_ms / 1000.0)
 
-sock.sendall(b"PING\r\n")
-buf = b""
-sock.settimeout(5)
-while b"PONG\r\n" not in buf:
-    chunk = sock.recv(4096)
-    if not chunk:
-        raise RuntimeError("server closed before PONG")
-    buf += chunk
+flush()
 sock.close()
 PY
 
-echo "populated stream=$STREAM subject=$SUBJECT count=$COUNT url=$JS_URL"
+echo "populated stream=$STREAM subject=$SUBJECT count=$COUNT url=$JS_URL pause_every=$PAUSE_EVERY pause_ms=$PAUSE_MS"

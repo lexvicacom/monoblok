@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end JetStream import test: start a real JetStream-enabled nats-server,
-# replay one stored message before monoblok opens its listener, then verify live
-# delivery through the same stream import.
+# replay two stored messages with a timestamp gap before monoblok opens its
+# listener, then verify virtual-clock bar closure and live delivery through the
+# same stream import.
 #
 # Requires: nats-server + the nats CLI on PATH.
 
@@ -12,7 +13,7 @@ MONO_PORT="${MONO_PORT:-15223}"
 JS_PORT="${JS_PORT:-15889}"
 BIN="$ROOT/build/monoblok"
 WORKDIR="${TMPDIR:-/tmp}/monoblok-jetstream-smoke"
-PATCHBAY="$WORKDIR/patchbay.edn"
+PATCHBAY="$ROOT/examples/jetstream.yml"
 STORE="$WORKDIR/store"
 JS_URL="nats://127.0.0.1:${JS_PORT}"
 MONO_URL="nats://127.0.0.1:${MONO_PORT}"
@@ -38,25 +39,10 @@ fi
 rm -rf "$WORKDIR"
 mkdir -p "$STORE"
 
-cat > "$PATCHBAY" <<EOF
-(lvc ["replay.temp"])
-
-(import
-  :streams [[ :servers ["${JS_URL}"]
-              :subject "sensors.temp"
-              :stream "SENSORS"
-              :consumer "monoblok-jetstream-smoke"
-              :catch-up true ]])
-
-(on "sensors.temp"
-  (if replaying?
-    (publish! "replay.temp" payload)
-    (publish! "live.temp" payload)))
-EOF
-
 cleanup() {
     [ -n "${MONO_PID:-}" ] && kill "$MONO_PID" 2>/dev/null || true
     [ -n "${LVC_SUB_PID:-}" ] && kill "$LVC_SUB_PID" 2>/dev/null || true
+    [ -n "${BAR_SUB_PID:-}" ] && kill "$BAR_SUB_PID" 2>/dev/null || true
     [ -n "${LIVE_SUB_PID:-}" ] && kill "$LIVE_SUB_PID" 2>/dev/null || true
     [ -n "${RAW_SUB_PID:-}" ] && kill "$RAW_SUB_PID" 2>/dev/null || true
     [ -n "${JS_PID:-}" ] && kill "$JS_PID" 2>/dev/null || true
@@ -81,17 +67,22 @@ if ! grep -q 'Server is ready' "$WORKDIR/js.log"; then
     echo "FAIL: JetStream nats-server did not become ready within 5s"; cat "$WORKDIR/js.log"; exit 1
 fi
 
-nats -s "$JS_URL" stream add SENSORS --subjects "sensors.>" --storage file --defaults > "$WORKDIR/stream-add.log" 2>&1
+nats -s "$JS_URL" stream add SENSORS --subjects "js.sensors.>" --storage file --defaults > "$WORKDIR/stream-add.log" 2>&1
 if [ "$?" != "0" ]; then
     echo "FAIL: could not create JetStream stream"; cat "$WORKDIR/stream-add.log"; exit 1
 fi
-nats -s "$JS_URL" pub sensors.temp 41 > "$WORKDIR/history-pub.log" 2>&1
+nats -s "$JS_URL" pub js.sensors.temp 41 > "$WORKDIR/history-pub.log" 2>&1
 if [ "$?" != "0" ]; then
     echo "FAIL: could not publish historical JetStream message"; cat "$WORKDIR/history-pub.log"; exit 1
 fi
+sleep 1.2
+nats -s "$JS_URL" pub js.sensors.temp 43 > "$WORKDIR/history-pub-2.log" 2>&1
+if [ "$?" != "0" ]; then
+    echo "FAIL: could not publish second historical JetStream message"; cat "$WORKDIR/history-pub-2.log"; exit 1
+fi
 
 echo "starting monoblok on :$MONO_PORT with JetStream import <- :$JS_PORT..."
-"$BIN" --port "$MONO_PORT" --patchbay "$PATCHBAY" > "$WORKDIR/mono.log" 2>&1 &
+JS_URL="$JS_URL" "$BIN" --port "$MONO_PORT" --patchbay "$PATCHBAY" > "$WORKDIR/mono.log" 2>&1 &
 MONO_PID=$!
 
 for _ in $(seq 1 80); do
@@ -107,21 +98,33 @@ if ! grep -q 'jetstream import: connected' "$WORKDIR/mono.log"; then
 fi
 echo "ok: JetStream import connected after serial catch-up"
 
-nats -s "$MONO_URL" sub '$LVC.replay.temp' > "$WORKDIR/lvc.log" 2>&1 &
+nats -s "$MONO_URL" sub '$LVC.js.replay.last-temp' > "$WORKDIR/lvc.log" 2>&1 &
 LVC_SUB_PID=$!
 for _ in $(seq 1 30); do
-    grep -q 'Received on "\$LVC\.replay\.temp"' "$WORKDIR/lvc.log" && break
+    grep -q 'Received on "\$LVC\.js\.replay\.last-temp"' "$WORKDIR/lvc.log" && break
     sleep 0.1
 done
-REPLAY_COUNT=$(grep -c 'Received on "\$LVC\.replay\.temp"' "$WORKDIR/lvc.log" || true)
-if [ "$REPLAY_COUNT" != "1" ] || ! grep -q '^41$' "$WORKDIR/lvc.log"; then
-    echo "FAIL: expected replay.temp LVC value 41 from catch-up"
+REPLAY_COUNT=$(grep -c 'Received on "\$LVC\.js\.replay\.last-temp"' "$WORKDIR/lvc.log" || true)
+if [ "$REPLAY_COUNT" != "1" ] || ! grep -q '^43$' "$WORKDIR/lvc.log"; then
+    echo "FAIL: expected js.replay.last-temp LVC value 43 from catch-up"
     cat "$WORKDIR/lvc.log"; exit 1
 fi
 
-nats -s "$MONO_URL" sub 'live.temp' > "$WORKDIR/live.log" 2>&1 &
+nats -s "$MONO_URL" sub '$LVC.js.sensors.temp.bar.close' > "$WORKDIR/bar.log" 2>&1 &
+BAR_SUB_PID=$!
+for _ in $(seq 1 30); do
+    grep -q 'Received on "\$LVC\.js\.sensors\.temp\.bar\.close"' "$WORKDIR/bar.log" && break
+    sleep 0.1
+done
+BAR_COUNT=$(grep -c 'Received on "\$LVC\.js\.sensors\.temp\.bar\.close"' "$WORKDIR/bar.log" || true)
+if [ "$BAR_COUNT" != "1" ] || ! grep -Eq '^(41|43)$' "$WORKDIR/bar.log"; then
+    echo "FAIL: expected replay-time bar close from virtual catch-up clock"
+    cat "$WORKDIR/bar.log"; exit 1
+fi
+
+nats -s "$MONO_URL" sub 'js.live.temp' > "$WORKDIR/live.log" 2>&1 &
 LIVE_SUB_PID=$!
-nats -s "$MONO_URL" sub 'sensors.temp' > "$WORKDIR/raw.log" 2>&1 &
+nats -s "$MONO_URL" sub 'js.sensors.temp' > "$WORKDIR/raw.log" 2>&1 &
 RAW_SUB_PID=$!
 for _ in $(seq 1 30); do
     grep -q 'Subscribing on' "$WORKDIR/live.log" &&
@@ -129,16 +132,16 @@ for _ in $(seq 1 30); do
     sleep 0.1
 done
 
-nats -s "$JS_URL" pub sensors.temp 42 > "$WORKDIR/live-pub.log" 2>&1
+nats -s "$JS_URL" pub js.sensors.temp 42 > "$WORKDIR/live-pub.log" 2>&1
 if [ "$?" != "0" ]; then
     echo "FAIL: could not publish live JetStream message"; cat "$WORKDIR/live-pub.log"; exit 1
 fi
 sleep 1
 
-LIVE_COUNT=$(grep -c 'Received on "live\.temp"' "$WORKDIR/live.log" || true)
-RAW_COUNT=$(grep -c 'Received on "sensors\.temp"' "$WORKDIR/raw.log" || true)
+LIVE_COUNT=$(grep -c 'Received on "js\.live\.temp"' "$WORKDIR/live.log" || true)
+RAW_COUNT=$(grep -c 'Received on "js\.sensors\.temp"' "$WORKDIR/raw.log" || true)
 if [ "$LIVE_COUNT" != "1" ] || ! grep -q '^42$' "$WORKDIR/live.log"; then
-    echo "FAIL: expected live.temp once from live JetStream message"
+    echo "FAIL: expected js.live.temp once from live JetStream message"
     cat "$WORKDIR/live.log"; exit 1
 fi
 if [ "$RAW_COUNT" != "0" ]; then
@@ -146,8 +149,9 @@ if [ "$RAW_COUNT" != "0" ]; then
     cat "$WORKDIR/raw.log"; exit 1
 fi
 
-echo "ok: replayed historical sensors.temp into replay.temp"
-echo "ok: delivered live sensors.temp into live.temp"
+echo "ok: replayed historical js.sensors.temp into js.replay.last-temp"
+echo "ok: closed a replay-time bar from JetStream message timestamps"
+echo "ok: delivered live js.sensors.temp into js.live.temp"
 echo "ok: JetStream source subject stayed private to patchbay"
 echo
 echo "jetstream smoke test passed."

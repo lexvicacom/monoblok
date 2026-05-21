@@ -204,6 +204,7 @@ on:
       - do
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
+      - [bar!, :ms, 1000, payload-float]
       - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
 ```
 
@@ -222,8 +223,10 @@ or redirect historical output should gate that behavior explicitly. See
 [`examples/jetstream.yml`](../examples/jetstream.yml) and
 [`examples/jetstream.sh`](../examples/jetstream.sh) for a runnable example that
 starts JetStream on `JS_PORT` (default `15889`), exports `JS_URL`, populates
-`COUNT=1000` historical events, and then runs monoblok through catch-up plus
-one live event.
+`COUNT=1000` historical events with a default pause halfway through population,
+and then runs monoblok through catch-up plus one live event. That pause gives
+the replay clock enough event-time gap to close the example `bar! :ms 1000`
+window during catch-up.
 
 When `(import ...)` is present, monoblok's local NATS socket remains open for
 `SUB`, `UNSUB`, `PING`, and LVC/stats reads, but client `PUB` commands are
