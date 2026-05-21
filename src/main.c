@@ -116,6 +116,7 @@ static bool jetstream_ingress(void *ctx, const pb_import_stream_config *config,
     return tick_ok && eval_ok;
 }
 
+// Owns the runtime core-importer instances and cached aggregate counters.
 typedef struct import_group {
     mb_importer *items;
     size_t len;
@@ -125,6 +126,7 @@ typedef struct import_group {
     uint64_t failed;
 } import_group;
 
+// Borrows active import groups and exposes combined counters to server stats.
 typedef struct import_totals {
     import_group *core;
     mb_js_importer *jetstream;

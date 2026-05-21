@@ -118,7 +118,7 @@ runs; pass `--epoll` to benchmark the production-default epoll path.
 
 I'd **love** to hear from anyone who tries monoblok out and finds it useful.
 
-It's open source, without restrictions (per MIT license re attribution) or paid commercial features. However, [my company](https://lexvica.com) provides services around monoblok. I'd be happy to learn about your environment, requirements and work with you to deliver a proof of concept, case study or complete solution. 
+It's open source, without restrictions (per MIT license re attribution) or paid commercial features. However, [my company](https://lexvica.com) provides services around monoblok. I'd be happy to learn about your environment, requirements and work with you to deliver a proof of concept, case study or complete solution.
 
 [Drop me a line](mailto:alex@lexvica.com).
 
