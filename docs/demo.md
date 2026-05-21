@@ -7,13 +7,6 @@ running your own server. Loaded from [`examples/demo.edn`](../examples/demo.edn)
 subscribe to anything. Don't send secrets. Don't rely on `$LVC`
 retention.
 
-> **Small VPS.** This is a single low-spec box with no rate limiting
-> and no backpressure beyond the OS. A tight publish loop or
-> hundreds of concurrent subscribers will knock it over. If it's
-> dead when you try it, wait a bit and try again, or spin up your
-> own: `./zig-out/bin/monoblok --port 4222 --patchbay examples/demo.edn`.
-
-## Quick start
 
 You need the [`nats` CLI](https://github.com/nats-io/natscli). Save
 the demo server as a context once, then select it and forget about
@@ -178,11 +171,13 @@ You can connect to `demo.monoblok.host:4223` which is a real NATS to observe the
 nats -s 127.0.0.1:4223 sub "demo.sensors.*.spike"
 ```
 
+## TLS
+
+For testing purposes `nats -s tls://monoblok.host:4224` runs as a distinct instance.
+
+
 ## What it can't do
 
-- **No ticker.** The server doesn't generate input on its own. A
-  read-only visitor sees nothing on `demo.>` until someone
-  publishes.
 - **No auth.** Treat it as a whiteboard, not storage.
 - **No JetStream or local headers.** Core NATS only
   (`PUB`, `SUB`, `UNSUB`, `PING`/`PONG`, `INFO`, `-ERR`), with local
