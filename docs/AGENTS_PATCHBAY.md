@@ -169,7 +169,7 @@ comparison. The compact schema is:
   those values.
 - `export` is a config map with fields such as `servers`, `name`, `creds`,
   `user`, `password`, `token`, `tls`, `tls-ca`, `tls-cert`, `tls-key`,
-  `tls-skip-verify`, `origin-header`, `connect-timeout-ms`,
+  `tls-skip-verify`, `origin-header`, `replay-header`, `connect-timeout-ms`,
   `ping-interval-ms`, `max-reconnect`, `reconnect-wait-ms`, and `export`.
   `bridge` has the same shape but is deprecated.
 - `import` is a config map with the connection fields above plus `subject` /
@@ -336,6 +336,7 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
   :tls     true
   :name    "monoblok-prod-1"
   :origin-header true
+  :replay-header true
   :export  ["telemetry.>" "alerts.>"])
 ```
 
@@ -344,6 +345,8 @@ Other keywords: `:user` / `:password`, `:token`, `:tls-ca`, `:tls-cert`
 / `:tls-key`, `:tls-skip-verify` (dev only), `:connect-timeout-ms`,
 `:ping-interval-ms`, `:max-reconnect` (-1 unlimited), `:reconnect-wait-ms`.
 `:origin-header true` adds `x-monoblok: <hostname>` to forwarded messages.
+`:replay-header true` adds `x-monoblok-replay: true` and
+`x-monoblok-assumed-ts: <unix-ms>` to bridged replay output.
 `:export` is a vector of subject filters; matched publishes are
 forwarded as-is. Nothing flows back. Both `:servers` and `:export`
 also accept the legacy `(...)` list syntax, but `[...]` is the

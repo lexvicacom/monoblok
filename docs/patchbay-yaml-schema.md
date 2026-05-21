@@ -126,6 +126,8 @@ export:
   servers:
     - "nats://127.0.0.1:4223"
   name: "monoblok-export"
+  origin-header: true
+  replay-header: true
   export:
     - "sensors.*.stable"
     - "alerts.>"
@@ -145,6 +147,7 @@ Supported fields:
 | `tls-cert` / `tls-key` | strings | client certificate and key |
 | `tls-skip-verify` | bool | disable TLS verification; development only |
 | `origin-header` | bool | add `x-monoblok` provenance header |
+| `replay-header` | bool | add `x-monoblok-replay: true` and `x-monoblok-assumed-ts: <unix-ms>` to bridged replay output; live output omits both |
 | `connect-timeout-ms` | number | connection timeout |
 | `ping-interval-ms` | number | ping interval |
 | `max-reconnect` | number | reconnect count; `-1` means unlimited |
@@ -220,6 +223,14 @@ import:
       stream: SENSORS
       consumer: monoblok-jetstream-example
       catch-up: true
+
+export:
+  servers:
+    - env: BRIDGE_URL
+  origin-header: true
+  replay-header: true
+  export:
+    - "js.>"
 
 on:
   - sub: js.sensors.temp
@@ -413,6 +424,8 @@ export:
   servers:
     - "nats://127.0.0.1:14889"
   name: "monoblok-export-example"
+  origin-header: true
+  replay-header: true
   export:
     - "clean.>"
 

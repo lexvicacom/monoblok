@@ -62,6 +62,7 @@ typedef struct pb_bridge_config {
     bool tls;
     bool tls_skip_verify;
     bool origin_header;
+    bool replay_header;
     bool has_name;
     bool has_creds;
     bool has_user;

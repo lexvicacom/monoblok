@@ -49,7 +49,7 @@ bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config) {
         mb_nats_retain();
         status = natsConnection_Connect(&conn, opts);
         ok = set_status(status, "connect");
-        if (ok && config->origin_header) {
+        if (ok && (config->origin_header || config->replay_header)) {
             ok = set_status(natsConnection_HasHeaderSupport(conn), "check header support");
         }
         if (ok) {
@@ -83,6 +83,10 @@ static bool bridge_matches_export(const mb_bridge *bridge, mb_slice subject) {
 }
 
 void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload) {
+    mb_bridge_publish_with_options(ctx, subject, payload, (mb_router_publish_options){0});
+}
+
+void mb_bridge_publish_with_options(void *ctx, mb_slice subject, mb_slice payload, mb_router_publish_options options) {
     mb_bridge *bridge = ctx;
     if (bridge == NULL || !bridge->started || bridge->conn == NULL || !bridge_matches_export(bridge, subject)) {
         return;
@@ -100,11 +104,24 @@ void mb_bridge_publish(void *ctx, mb_slice subject, mb_slice payload) {
     bridge->subject_scratch[subject.len] = '\0';
 
     natsStatus status = NATS_OK;
-    if (bridge->origin_header_value != NULL) {
+    const bool add_origin_header = bridge->origin_header_value != NULL;
+    const bool add_replay_header = bridge->config->replay_header && options.replaying;
+    const bool add_assumed_ts_header = add_replay_header && options.has_assumed_ts_ms;
+    char assumed_ts_value[32];
+    if (add_assumed_ts_header) {
+        snprintf(assumed_ts_value, sizeof assumed_ts_value, "%lld", (long long)options.assumed_ts_ms);
+    }
+    if (add_origin_header || add_replay_header || add_assumed_ts_header) {
         natsMsg *msg = NULL;
         status = natsMsg_Create(&msg, bridge->subject_scratch, NULL, (const char *)payload.ptr, (int)payload.len);
-        if (status == NATS_OK) {
+        if (status == NATS_OK && add_origin_header) {
             status = natsMsgHeader_Set(msg, MB_NATS_ORIGIN_HEADER, bridge->origin_header_value);
+        }
+        if (status == NATS_OK && add_replay_header) {
+            status = natsMsgHeader_Set(msg, MB_NATS_REPLAY_HEADER, "true");
+        }
+        if (status == NATS_OK && add_assumed_ts_header) {
+            status = natsMsgHeader_Set(msg, MB_NATS_ASSUMED_TS_HEADER, assumed_ts_value);
         }
         if (status == NATS_OK) {
             status = natsConnection_PublishMsg((natsConnection *)bridge->conn, msg);

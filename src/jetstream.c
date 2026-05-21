@@ -32,6 +32,7 @@ struct mb_js_stream {
     mb_js_import_handler handler;
     void *handler_ctx;
     natsMsg *pending_msg;
+    // Global stream LastSeq sampled at startup; filtered consumers may catch up earlier with pending=0.
     uint64_t catchup_to;
     uint64_t last_stream_seq;
     uint64_t last_event_now_ms;
@@ -289,15 +290,28 @@ static bool js_stream_process_msg(mb_js_stream *stream, natsMsg *msg, bool repla
 static bool js_stream_pending_zero(mb_js_stream *stream, bool *out) {
     jsConsumerInfo *info = NULL;
     jsErrCode err = 0;
-    const natsStatus status = natsSubscription_GetConsumerInfo(&info, stream->sub, NULL, &err);
-    if (!set_status(stream, status, "get consumer info")) {
+    mb_nats_strings strings = {0};
+    char *stream_name = track_slice(&strings, stream->config->stream);
+    char *consumer_name = track_slice(&strings, stream->config->consumer);
+    bool ok = stream_name != NULL && consumer_name != NULL;
+    natsStatus status = NATS_OK;
+    if (ok) {
+        status = js_GetConsumerInfo(&info, stream->js, stream_name, consumer_name, NULL, &err);
+        ok = set_status(stream, status, "get consumer info");
+    }
+    if (!ok) {
         if (err != 0) {
             fprintf(stderr, "warn: jetstream import: consumer info server error code=%d\n", (int)err);
         }
+        mb_nats_strings_free(&strings);
         return false;
     }
     *out = info->NumPending == 0;
+    if (*out && info->AckFloor.Stream > stream->last_stream_seq) {
+        stream->last_stream_seq = info->AckFloor.Stream;
+    }
     jsConsumerInfo_Destroy(info);
+    mb_nats_strings_free(&strings);
     return true;
 }
 
@@ -353,8 +367,8 @@ static bool js_stream_catch_up(mb_js_stream *stream) {
         }
         if ((timed_out || stream->last_stream_seq < stream->catchup_to) &&
             js_stream_pending_zero(stream, &pending_zero) && pending_zero) {
-            fprintf(stderr, "info: jetstream import: stream=%.*s caught up at filtered sequence=%" PRIu64 "\n",
-                    (int)stream->config->stream.len, stream->config->stream.ptr, stream->last_stream_seq);
+            fprintf(stderr, "info: jetstream import: stream=%.*s filtered consumer caught up (ack-floor=%" PRIu64 ", stream high-water=%" PRIu64 ", pending=0)\n",
+                    (int)stream->config->stream.len, stream->config->stream.ptr, stream->last_stream_seq, stream->catchup_to);
             return true;
         }
     }

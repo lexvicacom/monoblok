@@ -929,6 +929,15 @@ bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload) {
 }
 
 bool mb_router_publish_with_reply(mb_router *router, mb_slice subject, mb_slice payload, mb_slice reply_to) {
+    return mb_router_publish_with_reply_and_options(router, subject, payload, reply_to, (mb_router_publish_options){0});
+}
+
+bool mb_router_publish_with_options(mb_router *router, mb_slice subject, mb_slice payload, mb_router_publish_options options) {
+    return mb_router_publish_with_reply_and_options(router, subject, payload, (mb_slice){0}, options);
+}
+
+bool mb_router_publish_with_reply_and_options(mb_router *router, mb_slice subject, mb_slice payload, mb_slice reply_to,
+                                              mb_router_publish_options options) {
     if (!mb_proto_subject_valid(subject, false)) {
         return false;
     }
@@ -982,7 +991,7 @@ bool mb_router_publish_with_reply(mb_router *router, mb_slice subject, mb_slice 
         }
     }
     if (ok && router->bridge_fn != NULL && router->bridge_ctx != NULL) {
-        router->bridge_fn(router->bridge_ctx, subject, payload);
+        router->bridge_fn(router->bridge_ctx, subject, payload, options);
     }
     return ok;
 }

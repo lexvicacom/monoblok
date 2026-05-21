@@ -198,6 +198,14 @@ import:
       consumer: monoblok-jetstream-example
       catch-up: true
 
+export:
+  servers:
+    - env: BRIDGE_URL
+  origin-header: true
+  replay-header: true
+  export:
+    - "js.>"
+
 on:
   - sub: js.sensors.temp
     form:
@@ -216,6 +224,19 @@ same durable consumers continue in live mode. `:catch-up false` skips the
 historical event-time loading phase and consumes any durable backlog as live
 processing-time work.
 
+For filtered stream entries, the startup high-water is a global stream sequence,
+not a count of messages monoblok must consume. Catch-up stops when a delivered
+matching message reaches that startup sequence, or when the durable consumer
+reports `pending=0` for the filter.
+
+Replay-derived output is ordinary patchbay output: if it matches `export`, it is
+bridged during catch-up. With `origin-header: true`, those bridged messages carry
+the same `x-monoblok` provenance header as live bridged messages. With
+`replay-header: true`, replay-derived bridged messages also carry
+`x-monoblok-replay: true` and `x-monoblok-assumed-ts: <unix-ms>`, where the
+timestamp is the wall timestamp used for patchbay evaluation. Live bridged
+messages do not carry these replay headers.
+
 During JetStream catch-up, rules see `replaying?` as true. After the listener
 opens, `replaying?` is false. Rules that do not mention `replaying?` produce
 the same subjects during replay and live operation; rules that want to suppress
@@ -224,9 +245,12 @@ or redirect historical output should gate that behavior explicitly. See
 [`examples/jetstream.sh`](../examples/jetstream.sh) for a runnable example that
 starts JetStream on `JS_PORT` (default `15889`), exports `JS_URL`, populates
 `COUNT=1000` historical events with a default pause halfway through population,
-and then runs monoblok through catch-up plus one live event. That pause gives
-the replay clock enough event-time gap to close the example `bar! :ms 1000`
-window during catch-up.
+starts a plain NATS bridge target on `BRIDGE_PORT` (default `15890`) and exports
+`BRIDGE_URL`, then runs monoblok through catch-up plus one live event. That
+pause gives the replay clock enough event-time gap to close the example
+`bar! :ms 1000` window during catch-up. The bridge subscriber is active during
+catch-up, so replay-derived `js.>` output is visible there while monoblok's
+local listener is still closed.
 
 When `(import ...)` is present, monoblok's local NATS socket remains open for
 `SUB`, `UNSUB`, `PING`, and LVC/stats reads, but client `PUB` commands are

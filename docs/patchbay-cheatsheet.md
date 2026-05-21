@@ -207,6 +207,7 @@ non-empty, and are not comma-split.
 | `:tls-cert` / `:tls-key` | strings | client cert + key (mTLS) |
 | `:tls-skip-verify` | bool | dev only, insecure |
 | `:origin-header` | bool | when true, forwarded messages include `x-monoblok: <hostname>` |
+| `:replay-header` | bool | when true, replay bridge output includes `x-monoblok-replay: true` and `x-monoblok-assumed-ts: <unix-ms>`; live output omits both |
 | `:connect-timeout-ms` / `:ping-interval-ms` | numbers | tuning |
 | `:max-reconnect` | number | -1 for unlimited |
 | `:reconnect-wait-ms` | number | tuning |

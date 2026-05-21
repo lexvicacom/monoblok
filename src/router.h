@@ -98,6 +98,13 @@ typedef struct mb_queue_delivery {
     bool is_lvc;
 } mb_queue_delivery;
 
+// Per-publish flags used for side effects such as bridge headers.
+typedef struct mb_router_publish_options {
+    bool replaying;
+    bool has_assumed_ts_ms;
+    int64_t assumed_ts_ms;
+} mb_router_publish_options;
+
 // Routing index: literals, first-token wildcards, and global wildcards.
 typedef struct mb_router {
     mb_literal_bucket *literal;
@@ -130,7 +137,7 @@ typedef struct mb_router {
     size_t lvc_filter_len;
     size_t lvc_filter_cap;
     void *bridge_ctx;
-    void (*bridge_fn)(void *ctx, mb_slice subject, mb_slice payload);
+    void (*bridge_fn)(void *ctx, mb_slice subject, mb_slice payload, mb_router_publish_options options);
     bool lvc_enabled;
 } mb_router;
 
@@ -144,6 +151,9 @@ void mb_router_unsubscribe(mb_router *router, mb_router_conn *conn, mb_slice sid
 void mb_router_remove_all_for(mb_router *router, mb_router_conn *conn);
 bool mb_router_publish(mb_router *router, mb_slice subject, mb_slice payload);
 bool mb_router_publish_with_reply(mb_router *router, mb_slice subject, mb_slice payload, mb_slice reply_to);
+bool mb_router_publish_with_options(mb_router *router, mb_slice subject, mb_slice payload, mb_router_publish_options options);
+bool mb_router_publish_with_reply_and_options(mb_router *router, mb_slice subject, mb_slice payload, mb_slice reply_to,
+                                              mb_router_publish_options options);
 bool mb_router_subject_has_lvc_prefix(mb_slice subject);
 bool mb_router_subject_has_stats_prefix(mb_slice subject);
 bool mb_router_subject_matches(mb_slice filter, mb_slice subject);

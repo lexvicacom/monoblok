@@ -245,10 +245,11 @@ Zero or one `(export ...)` form in the patchbay file configures it. The old
   :tls      true
   :name     "monoblok-prod-1"
   :origin-header true
+  :replay-header true
   :export   ["telemetry.>" "alerts.>"])
 ```
 
-A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. With `:origin-header true`, forwarded messages also carry `x-monoblok: <hostname>` for remote-side provenance. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.c.
+A local publish (from a NATS client or a patchbay rule) whose subject matches any `:export` filter is forwarded as-is. With `:origin-header true`, forwarded messages also carry `x-monoblok: <hostname>` for remote-side provenance, including replay-derived publishes bridged during JetStream catch-up. With `:replay-header true`, replay-derived bridge publishes carry `x-monoblok-replay: true` and `x-monoblok-assumed-ts: <unix-ms>`, the wall timestamp used for replay evaluation; after catch-up, live bridge publishes do not carry either replay header. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.c.
 
 Zero or one `(import ...)` form configures inbound tap mode. The flat import
 shape is a compatibility alias for one core NATS import:
@@ -289,10 +290,12 @@ loading phase, rules can branch on `replaying?` to warm LVC, suppress historical
 output, or publish replay output to a separate subject. See
 [`examples/jetstream.yml`](../examples/jetstream.yml) and
 [`examples/jetstream.sh`](../examples/jetstream.sh), which starts a JetStream
-server on `JS_PORT` (default `15889`), exports `JS_URL`, and populates it with
-`COUNT=1000` events by default. The example pauses once during population so
-JetStream replay has enough event-time gap to close a `bar! :ms` window during
-catch-up.
+server on `JS_PORT` (default `15889`), starts a plain NATS bridge target on
+`BRIDGE_PORT` (default `15890`), exports `JS_URL` / `BRIDGE_URL`, and populates
+the stream with `COUNT=1000` events by default. The example pauses once during
+population so JetStream replay has enough event-time gap to close a `bar! :ms`
+window during catch-up, and the bridge target shows replay-derived exports
+while monoblok's local listener is still closed.
 
 Full keyword reference (auth, timeouts, reconnect tuning) in [docs/patchbay-cheatsheet.md](./patchbay-cheatsheet.md).
 

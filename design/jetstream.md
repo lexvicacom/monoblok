@@ -301,6 +301,25 @@ catchup_to = stream.LastSeq
 
 It then creates or resumes the durable consumer using `ReplayInstant`.
 
+The v1 catch-up loop is:
+
+```text
+startup_stream_checkpoint = stream.LastSeq
+
+while true:
+  if last_delivered_stream_seq >= startup_stream_checkpoint:
+    caught up
+  fetch matching messages for this durable consumer
+  evaluate and ack each delivered message
+  if filtered_consumer_pending == 0:
+    caught up
+```
+
+The checkpoint is a global stream sequence, not a count of messages this
+filtered consumer must receive. A filtered consumer can therefore finish with
+`pending=0` even when its ack floor is below the stream checkpoint, because the
+remaining stream messages are outside its filter.
+
 For each delivered message:
 
 1. Read JetStream metadata.
@@ -451,6 +470,18 @@ writes the upstream `publish!` behind `(when (not replaying?) ...)`, or routes
 replay output to a subject the export config does not forward. No separate
 "export during replay" flag is required.
 
+If the export config enables `:origin-header true`, replay-derived bridged
+messages carry the existing `x-monoblok: <hostname>` provenance header, just
+like live bridged messages. That header says where the bridged publish came
+from; it is not a replay/live discriminator.
+
+If the export config enables `:replay-header true`, bridge publishes emitted
+while `replaying?` is true also carry `x-monoblok-replay: true` and
+`x-monoblok-assumed-ts: <unix-ms>`. The timestamp is the wall timestamp used by
+patchbay evaluation, which is the JetStream stored message timestamp during v1
+catch-up. This is scoped to export bridge output; it does not add headers to
+local monoblok delivery or to patchbay's `publish!` syntax.
+
 ### Note on headers
 
 A header on replay output — for example an `Mb-Replay` application header so a
@@ -523,9 +554,10 @@ The current implementation keeps JetStream separate from the core import path:
   replay through `replaying?`, live delivery after listener open, and source
   subject privacy.
 - `examples/jetstream.yml` is the runnable YAML patchbay. `examples/jetstream.sh`
-  starts a JetStream server, exports `JS_URL`, calls
-  `examples/jetstream-populate.sh` to write `COUNT=1000` historical events by
-  default, starts monoblok, and then publishes one live event.
+  starts a JetStream server and a plain NATS bridge target, exports `JS_URL`
+  and `BRIDGE_URL`, calls `examples/jetstream-populate.sh` to write
+  `COUNT=1000` historical events by default, starts monoblok, and then
+  publishes one live event.
 
 The important boundary is that patchbay already has the right shape: evaluation
 takes `now_ms` and `wall_ms`. JetStream ingress advances those values from

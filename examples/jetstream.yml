@@ -6,7 +6,9 @@
 #
 # Or manually:
 #   export JS_URL=nats://127.0.0.1:15889
+#   export BRIDGE_URL=nats://127.0.0.1:15890
 #   nats-server -js -sd /tmp/monoblok-js-store -p 15889
+#   nats-server -p 15890
 #   COUNT=1000 PAUSE_EVERY=500 PAUSE_MS=1100 examples/jetstream-populate.sh
 #   ./build/monoblok --port 14222 --patchbay examples/jetstream.yml
 #   nats -s nats://127.0.0.1:14222 sub '$LVC.js.>'
@@ -25,6 +27,14 @@ import:
       stream: SENSORS
       consumer: monoblok-jetstream-example
       catch-up: true
+
+export:
+  servers:
+    - env: BRIDGE_URL
+  origin-header: true
+  replay-header: true
+  export:
+    - "js.>"
 
 on:
   - sub: js.sensors.temp

@@ -318,6 +318,10 @@ static bool load_bridge_form(pb_program *program, pb_values items, const char *f
             if (!load_bridge_bool(value, form_name, "origin-header", &bridge.origin_header)) {
                 goto fail;
             }
+        } else if (pb_slice_eq_lit(key, "replay-header")) {
+            if (!load_bridge_bool(value, form_name, "replay-header", &bridge.replay_header)) {
+                goto fail;
+            }
         } else if (pb_slice_eq_lit(key, "connect-timeout-ms")) {
             if (!load_bridge_i64(value, form_name, "connect-timeout-ms", &bridge.connect_timeout_ms)) {
                 goto fail;
@@ -969,7 +973,7 @@ static bool load_source(pb_program *program, const char *label, const char *sour
             fprintf(stderr, "info: patchbay wallclock: enabled\n");
         }
         if (program->uses_clock_timer) {
-            fprintf(stderr, "info: patchbay clock: enabled (one-shot deadlines)\n");
+            fprintf(stderr, "info: patchbay timers: enabled (one-shot deadlines)\n");
         }
         if (print_calls != 0) {
             fprintf(stderr,
@@ -1044,8 +1048,12 @@ static bool publish_cb(void *ctx, pb_slice subject, pb_slice payload) {
     if (!mb_proto_subject_valid(mb_subject, false) ||
         mb_router_subject_has_lvc_prefix(mb_subject) ||
         mb_router_subject_has_stats_prefix(mb_subject) ||
-        !mb_router_publish(p->router, mb_subject,
-                           (mb_slice){.ptr = (const uint8_t *)payload.ptr, .len = payload.len})) {
+        !mb_router_publish_with_options(p->router, mb_subject,
+                                        (mb_slice){.ptr = (const uint8_t *)payload.ptr, .len = payload.len},
+                                        (mb_router_publish_options){
+                                            .replaying = p->replaying,
+                                            .has_assumed_ts_ms = p->wall_ms >= 0,
+                                            .assumed_ts_ms = p->wall_ms})) {
         return false;
     }
     if (p->program != NULL && p->rule_idx < p->program->len) {

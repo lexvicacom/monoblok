@@ -32,6 +32,7 @@ cat > "$valid_config" <<'EOF'
         :tls true
         :tls-skip-verify false
         :origin-header true
+        :replay-header true
         :connect-timeout-ms 100
         :ping-interval-ms 1000
         :reconnect-wait-ms 250

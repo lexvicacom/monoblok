@@ -257,7 +257,7 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
                     return false;
                 }
             } else if (pb_slice_eq_lit(key, "tls") || pb_slice_eq_lit(key, "tls-skip-verify") ||
-                       pb_slice_eq_lit(key, "origin-header")) {
+                       pb_slice_eq_lit(key, "origin-header") || pb_slice_eq_lit(key, "replay-header")) {
                 if (value.kind != PB_BOOL) {
                     fprintf(stderr, "validate: %s :%.*s expects boolean\n", form_name, (int)key.len, key.ptr);
                     return false;

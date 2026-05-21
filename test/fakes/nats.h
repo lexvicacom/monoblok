@@ -78,6 +78,9 @@ typedef struct fake_nats_state {
     int msg_data_calls;
     int msg_data_len_calls;
     int msg_header_get_calls;
+    int origin_header_set_calls;
+    int replay_header_set_calls;
+    int assumed_ts_header_set_calls;
 
     int last_set_servers_count;
     int last_publish_payload_len;
@@ -90,6 +93,9 @@ typedef struct fake_nats_state {
     char last_msg_payload[256];
     char last_header_name[64];
     char last_header_value[256];
+    char last_origin_header_value[256];
+    char last_replay_header_value[64];
+    char last_assumed_ts_header_value[64];
 } fake_nats_state;
 
 void fake_nats_reset(void);

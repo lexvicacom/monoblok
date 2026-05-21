@@ -421,7 +421,7 @@ int main(int argc, char **argv) {
             return 1;
         }
         server.router.bridge_ctx = &bridge;
-        server.router.bridge_fn = mb_bridge_publish;
+        server.router.bridge_fn = mb_bridge_publish_with_options;
         server.bridge_published = &bridge.published;
         server.bridge_dropped = &bridge.dropped;
         fprintf(stderr, "info: bridge: connected to NATS (%zu server%s, %zu export filter%s)\n", program.bridge.servers_len,
@@ -448,6 +448,7 @@ int main(int argc, char **argv) {
         mb_server_set_patchbay_clock_offset(&server, offset);
         (void)pb_program_tick_until(server.program, &server.router, (uint64_t)wall_now, wall_now,
                                     (pb_program_eval_options){.replaying = true});
+        fprintf(stderr, "info: patchbay clock: JetStream replay event-time complete; live timers now use wall-clock deadlines\n");
         if (!mb_server_listen(&server) || !mb_js_importer_start_live(&js_importer)) {
             mb_js_importer_close(&js_importer);
             mb_server_close(&server);

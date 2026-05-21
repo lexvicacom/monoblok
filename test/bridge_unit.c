@@ -103,6 +103,73 @@ static void test_bridge_origin_header_publish_destroys_message(void) {
     check_cstr(fake_nats_get()->last_msg_payload, "42");
     check_cstr(fake_nats_get()->last_header_name, "x-monoblok");
     CHECK(fake_nats_get()->last_header_value[0] != '\0');
+    CHECK(fake_nats_get()->origin_header_set_calls == 1);
+
+    mb_bridge_close(&bridge);
+}
+
+static void test_bridge_replay_header_only_on_replay_publish(void) {
+    fake_nats_reset();
+    pb_slice servers[] = {pbs("nats://127.0.0.1:4222")};
+    pb_slice exports[] = {pbs("telemetry.>")};
+    pb_bridge_config config = basic_config(servers, 1, exports, 1);
+    config.replay_header = true;
+    mb_bridge bridge = {0};
+
+    CHECK(mb_bridge_start(&bridge, &config));
+    CHECK(fake_nats_get()->header_support_calls == 1);
+
+    mb_bridge_publish(&bridge, mbs("telemetry.temp"), mbs("live"));
+    CHECK(fake_nats_get()->publish_calls == 1);
+    CHECK(fake_nats_get()->msg_create_calls == 0);
+    CHECK(fake_nats_get()->msg_header_set_calls == 0);
+    CHECK(fake_nats_get()->publish_msg_calls == 0);
+
+    mb_bridge_publish_with_options(&bridge, mbs("telemetry.temp"), mbs("replay"),
+                                   (mb_router_publish_options){
+                                       .replaying = true,
+                                       .has_assumed_ts_ms = true,
+                                       .assumed_ts_ms = 1712345678901});
+    CHECK(fake_nats_get()->msg_create_calls == 1);
+    CHECK(fake_nats_get()->msg_header_set_calls == 2);
+    CHECK(fake_nats_get()->replay_header_set_calls == 1);
+    CHECK(fake_nats_get()->assumed_ts_header_set_calls == 1);
+    CHECK(fake_nats_get()->publish_msg_calls == 1);
+    CHECK(fake_nats_get()->msg_destroy_calls == 1);
+    CHECK(bridge.published == 2);
+    CHECK(bridge.dropped == 0);
+    check_cstr(fake_nats_get()->last_msg_payload, "replay");
+    check_cstr(fake_nats_get()->last_replay_header_value, "true");
+    check_cstr(fake_nats_get()->last_assumed_ts_header_value, "1712345678901");
+
+    mb_bridge_close(&bridge);
+}
+
+static void test_bridge_origin_and_replay_headers_can_coexist(void) {
+    fake_nats_reset();
+    pb_slice servers[] = {pbs("nats://127.0.0.1:4222")};
+    pb_slice exports[] = {pbs("telemetry.>")};
+    pb_bridge_config config = basic_config(servers, 1, exports, 1);
+    config.origin_header = true;
+    config.replay_header = true;
+    mb_bridge bridge = {0};
+
+    CHECK(mb_bridge_start(&bridge, &config));
+    mb_bridge_publish_with_options(&bridge, mbs("telemetry.temp"), mbs("42"),
+                                   (mb_router_publish_options){
+                                       .replaying = true,
+                                       .has_assumed_ts_ms = true,
+                                       .assumed_ts_ms = 1712345678901});
+    CHECK(fake_nats_get()->msg_create_calls == 1);
+    CHECK(fake_nats_get()->msg_header_set_calls == 3);
+    CHECK(fake_nats_get()->origin_header_set_calls == 1);
+    CHECK(fake_nats_get()->replay_header_set_calls == 1);
+    CHECK(fake_nats_get()->assumed_ts_header_set_calls == 1);
+    CHECK(fake_nats_get()->publish_msg_calls == 1);
+    CHECK(bridge.published == 1);
+    CHECK(bridge.dropped == 0);
+    check_cstr(fake_nats_get()->last_replay_header_value, "true");
+    check_cstr(fake_nats_get()->last_assumed_ts_header_value, "1712345678901");
 
     mb_bridge_close(&bridge);
 }
@@ -230,6 +297,8 @@ TEST_MAIN(bridge,
           test_bridge_absent_config_is_noop,
           test_bridge_publish_filters_and_counts,
           test_bridge_origin_header_publish_destroys_message,
+          test_bridge_replay_header_only_on_replay_publish,
+          test_bridge_origin_and_replay_headers_can_coexist,
           test_bridge_publish_failures_are_counted,
           test_bridge_origin_header_failure_destroys_message,
           test_bridge_drops_oversized_payload_before_nats,
