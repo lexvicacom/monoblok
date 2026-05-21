@@ -7,6 +7,17 @@ if ! command -v nats-server >/dev/null; then
     exit 1
 fi
 
+if [ -n "${JS_URL:-}" ] && [ -z "${JS_PORT:-}" ]; then
+    JS_PORT="$(python3 - "$JS_URL" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+url = sys.argv[1]
+parsed = urlparse(url if "://" in url else f"nats://{url}")
+print(parsed.port or 4222)
+PY
+)"
+fi
 JS_PORT="${JS_PORT:-15889}"
 JS_URL="${JS_URL:-nats://127.0.0.1:$JS_PORT}"
 export JS_URL

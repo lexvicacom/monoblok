@@ -522,9 +522,10 @@ The current implementation keeps JetStream separate from the core import path:
 - `scripts/jetstream-smoke.sh` exercises a real JetStream server: historical
   replay through `replaying?`, live delivery after listener open, and source
   subject privacy.
-- `examples/jetstream.sh` is the runnable demo. It starts a JetStream server,
-  calls `examples/jetstream-populate.sh` to write `COUNT=1000` historical
-  events by default, starts monoblok, and then publishes one live event.
+- `examples/jetstream.yml` is the runnable YAML patchbay. `examples/jetstream.sh`
+  starts a JetStream server, exports `JS_URL`, calls
+  `examples/jetstream-populate.sh` to write `COUNT=1000` historical events by
+  default, starts monoblok, and then publishes one live event.
 
 The important boundary is that patchbay already has the right shape: evaluation
 takes `now_ms` and `wall_ms`. JetStream ingress advances those values from

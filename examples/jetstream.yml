@@ -2,11 +2,13 @@
 #
 # Run the full demo:
 #   examples/jetstream.sh
+#   JS_PORT=15999 COUNT=1000 examples/jetstream.sh
 #
 # Or manually:
+#   export JS_URL=nats://127.0.0.1:15889
 #   nats-server -js -sd /tmp/monoblok-js-store -p 15889
-#   JS_URL=nats://127.0.0.1:15889 COUNT=1000 examples/jetstream-populate.sh
-#   JS_URL=nats://127.0.0.1:15889 ./build/monoblok --port 14222 --patchbay examples/jetstream.yml
+#   COUNT=1000 examples/jetstream-populate.sh
+#   ./build/monoblok --port 14222 --patchbay examples/jetstream.yml
 #   nats -s nats://127.0.0.1:14222 sub '$LVC.js.>'
 #
 # monoblok is a JetStream consumer here, not a JetStream server. The source
