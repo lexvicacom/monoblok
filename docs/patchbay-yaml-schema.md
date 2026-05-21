@@ -206,6 +206,40 @@ sequence before monoblok opens its listener. During that loading phase, rule
 bodies can branch on `replaying?`. Multiple stream entries catch up serially in
 config order.
 
+Small JetStream replay example:
+
+```yaml
+lvc:
+  - "js.>"
+
+import:
+  streams:
+    - servers:
+        - env: JS_URL
+      subject: "js.sensors.temp"
+      stream: SENSORS
+      consumer: monoblok-jetstream-example
+      catch-up: true
+
+on:
+  - sub: js.sensors.temp
+    form:
+      - do
+      - [count!]
+      - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
+      - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
+
+  - sub: js.sensors.temp
+    when:
+      test: [not, replaying?]
+      then:
+        thread:
+          from: payload-float
+          steps:
+            - [deadband, 0.25]
+            - [publish!, "js.live.deadband"]
+```
+
 Connection fields match `export`: `servers`, `name`, `creds`, `user`,
 `password`, `token`, `tls`, `tls-ca`, `tls-cert`, `tls-key`,
 `tls-skip-verify`, `connect-timeout-ms`, `ping-interval-ms`,

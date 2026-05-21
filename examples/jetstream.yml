@@ -37,15 +37,15 @@ on:
   # A few simple variants to try:
   #
   # Publish only meaningful live movement:
-  # - sub: js.sensors.temp
-  #   when:
-  #     test: [not, replaying?]
-  #     then:
-  #       thread:
-  #         from: payload-float
-  #         steps:
-  #           - [deadband, 0.25]
-  #           - [publish!, "js.live.deadband"]
+  - sub: js.sensors.temp
+    when:
+      test: [not, replaying?]
+      then:
+        thread:
+          from: payload-float
+          steps:
+            - [deadband, 0.25]
+            - [publish!, "js.live.deadband"]
   #
   # Publish a rounded stable signal from both replay and live data:
   # - sub: js.sensors.temp
