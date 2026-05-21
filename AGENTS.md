@@ -5,13 +5,14 @@ Guidance for coding agents working in this C/libuv monoblok tree.
 ## Shape
 
 Monoblok is a compact C17 NATS-like daemon with a patchbay routing DSL,
-optional LVC, snapshots, JSON helpers, and NATS bridge/import integration
-through vendored `nats.c`.
+optional LVC, snapshots, JSON helpers, NATS bridge/core import, and
+consumer-only JetStream import through vendored `nats.c`.
 
 Keep the layout shallow:
 
 - `src/`: core daemon pieces (`array`, `buf`, `fs`, `proto`, `router`,
-  `slice`, `snapshot`, `bridge`, `importer`, `nats_common`, `main`).
+  `slice`, `snapshot`, `bridge`, `importer`, `jetstream`, `nats_common`,
+  `main`).
 - `src/server/`: libuv listener, connection lifetime, read/write callbacks.
 - `src/patchbay/`: arenas, S-expression/JSON/YAML adapters, program loading,
   evaluator dispatch, form fragments, validation, soundcheck, and dump tooling.
@@ -92,6 +93,7 @@ cmake --build build --target smoke
 cmake --build build --target soundcheck
 scripts/bridge-smoke.sh
 scripts/import-smoke.sh
+scripts/jetstream-smoke.sh
 ```
 
 Sanitizer pass:
@@ -131,6 +133,11 @@ cmake --build build --target pb-dump
   creation; reuse read/write buffers and per-publish scratch arenas. Import
   copies remote messages into a bounded cross-thread ring and reuses slot
   buffers after growth.
+- JetStream import is pull-based patchbay ingress. Startup catch-up runs before
+  the local listener opens, live fetch happens on worker threads, and evaluation
+  is handed back to the libuv loop one message at a time. Keep that handoff
+  backpressured; do not let JetStream worker threads mutate router or evaluator
+  state directly.
 - On Linux, libuv uses epoll for the event loop. The daemon disables libuv's
   optional io_uring paths by default for seccomp-friendly containers; use
   `--io-uring` or `UV_USE_IO_URING=1` to opt in before loop creation.
@@ -208,22 +215,37 @@ subjects to the remote NATS cluster through `nats.c`, which owns reconnects and
 outbound buffering.
 
 Import mode is optional inbound tap mode. It is configured by a top-level
-`(import ...)` form, subscribes to remote NATS subjects through `nats.c`, copies
-messages into a bounded ring, and wakes the libuv loop for patchbay evaluation.
+`(import ...)` form. `:core` entries subscribe to remote NATS subjects through
+`nats.c`, copy messages into a bounded ring, and wake the libuv loop for
+patchbay evaluation. `:streams` entries consume JetStream durable pull
+consumers and feed matching messages into patchbay only.
+
 Imported raw messages are private patchbay ingress and must not be routed to
 direct monoblok subscribers unless a rule republishes them explicitly. When
 `(import ...)` is configured, local socket clients may still subscribe but
 client `PUB` commands are rejected.
 
+JetStream import is consumer-only; monoblok is not a JetStream server. Each v1
+stream entry has one subject filter plus `:stream`, `:consumer`, and optional
+`:catch-up`. With `:catch-up true`, startup replay runs to the stream's
+startup high-water before the local listener opens, using JetStream message
+metadata as event time. During that phase rules see `replaying?` as true; after
+catch-up, the same durable consumers continue in live mode with `replaying?`
+false. Ack only after the patchbay handler and downstream publish path succeed;
+malformed subjects, oversized payloads, missing metadata, eval failure, or
+publish failure should leave the JetStream message unacked for redelivery.
+
 ## NATS protocol scope
 
-Core only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`, `PING`, `PONG`,
-`INFO`, `+OK`, `-ERR`.
+Core local server only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`,
+`PING`, `PONG`, `INFO`, `+OK`, `-ERR`.
 
-There is no auth on the server side, headers, JetStream, or `$SYS.*`
-service request-reply. The bridge remains export-only and does not route remote
-replies back. Import mode consumes remote NATS messages as patchbay input only.
-`CONNECT` bodies are accepted and ignored. `+OK` is never sent.
+There is no auth on the local server side, headers, JetStream service, or
+`$SYS.*` service request-reply. JetStream support is import-side only through
+configured `:streams` durable consumers. The bridge remains export-only and
+does not route remote replies back. Import mode consumes remote NATS and
+JetStream messages as patchbay input only. `CONNECT` bodies are accepted and
+ignored. `+OK` is never sent.
 
 ## C style
 
@@ -291,6 +313,7 @@ smoke test:
 cmake --build build --target smoke
 scripts/bridge-smoke.sh
 scripts/import-smoke.sh
+scripts/jetstream-smoke.sh
 ```
 
 Use a `Release` CMake build before reporting performance.
