@@ -35,7 +35,7 @@ monoblok is written in C with libuv and builds on Linux and macOS. It aims to be
 ### Read more
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation for microcontrollers relaying cleaned sensor data into NATS.
 
-See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
+See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. There's a [demo server](https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md). Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ![monoblok deployment modes](./docs/infographic.png)
 
