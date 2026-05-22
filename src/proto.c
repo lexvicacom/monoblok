@@ -299,9 +299,10 @@ mb_parse_result mb_parse_client_op(const uint8_t *buf, size_t len) {
         };
     }
     if (eq_upper(verb, "CONNECT")) {
+        rest = trim_spaces(rest);
         return (mb_parse_result){
             .status = MB_PARSE_OK,
-            .op = {.kind = MB_OP_CONNECT},
+            .op = {.kind = MB_OP_CONNECT, .connect = rest},
             .consumed = line_end,
         };
     }
@@ -400,6 +401,7 @@ bool mb_write_info(mb_buf *out, const mb_info *info) {
            APPEND_LIT(out, ",\"version\":") &&
            append_json_string(out, MB_VERSION) &&
            APPEND_LIT(out, ",\"proto\":1,\"headers\":false,\"max_payload\":1048576") &&
+           (info->auth_required ? APPEND_LIT(out, ",\"auth_required\":true") : true) &&
            (info->tls_required ? APPEND_LIT(out, ",\"tls_required\":true") : true) &&
            APPEND_LIT(out, ",\"host\":") &&
            append_json_string(out, info->host) &&

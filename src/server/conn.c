@@ -8,6 +8,7 @@
 
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <yyjson.h>
 
 static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
 static void write_cb(uv_write_t *req, int status);
@@ -144,8 +145,63 @@ static void write_err_or_close(mb_conn *conn, const char *msg) {
     }
 }
 
+static bool secret_matches(const char *expected, yyjson_val *value) {
+    if (expected == NULL || !yyjson_is_str(value)) {
+        return false;
+    }
+    const char *got = yyjson_get_str(value);
+    const size_t got_len = yyjson_get_len(value);
+    const size_t expected_len = strlen(expected);
+    size_t diff = expected_len ^ got_len;
+    const size_t common = expected_len < got_len ? expected_len : got_len;
+    for (size_t i = 0; i < common; i += 1) {
+        diff |= (size_t)((uint8_t)expected[i] ^ (uint8_t)got[i]);
+    }
+    return diff == 0;
+}
+
+static bool connect_auth_matches(mb_conn *conn, mb_slice json) {
+    if (conn->server->auth.mode == MB_AUTH_NONE) {
+        return true;
+    }
+    if (json.len == 0) {
+        return false;
+    }
+
+    yyjson_read_err err = {0};
+    yyjson_doc *doc = yyjson_read_opts((char *)(void *)json.ptr, json.len, YYJSON_READ_NOFLAG, NULL, &err);
+    if (doc == NULL) {
+        return false;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    bool ok = false;
+    if (yyjson_is_obj(root)) {
+        if (conn->server->auth.mode == MB_AUTH_TOKEN) {
+            ok = secret_matches(conn->server->auth.token, yyjson_obj_get(root, "auth_token"));
+        } else if (conn->server->auth.mode == MB_AUTH_USER_PASS) {
+            ok = secret_matches(conn->server->auth.user, yyjson_obj_get(root, "user")) &&
+                 secret_matches(conn->server->auth.pass, yyjson_obj_get(root, "pass"));
+        }
+    }
+    yyjson_doc_free(doc);
+    return ok;
+}
+
+static void auth_violation(mb_conn *conn) {
+    write_err_or_close(conn, "Authorization Violation");
+    mb_conn_begin_close(conn);
+}
+
 static void handle_op(mb_conn *conn, mb_op op) {
     trace_op(conn, op);
+    if (!conn->authorized) {
+        if (op.kind != MB_OP_CONNECT || !connect_auth_matches(conn, op.connect)) {
+            auth_violation(conn);
+            return;
+        }
+        conn->authorized = true;
+        return;
+    }
     if (conn->server->closing && op_mutates_server_state(op)) {
         write_err_or_close(conn, "Server Shutting Down");
         return;
@@ -558,6 +614,7 @@ bool mb_conn_create(mb_server *server, uv_stream_t *listener) {
     conn->router_conn.close_fn = close_conn_from_router;
     conn->router_conn.close_ctx = conn;
     conn->tls_state = server->tls_enabled ? MB_CONN_TLS_INFO : MB_CONN_TLS_OFF;
+    conn->authorized = server->auth.mode == MB_AUTH_NONE;
 
     if (uv_tcp_init(&server->loop, &conn->tcp) != 0) {
         free(conn);
@@ -575,6 +632,7 @@ bool mb_conn_create(mb_server *server, uv_stream_t *listener) {
         .client_ip = conn->client_ip,
         .port = server->port,
         .client_id = conn->client_id,
+        .auth_required = server->auth.mode != MB_AUTH_NONE,
         .tls_required = server->tls_enabled,
     };
     if (!mb_write_info(&conn->router_conn.out, &info)) {

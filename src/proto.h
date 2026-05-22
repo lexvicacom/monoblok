@@ -37,6 +37,7 @@ typedef enum mb_op_kind {
 
 typedef struct mb_op {
     mb_op_kind kind;
+    mb_slice connect;
     mb_slice subject;
     mb_slice reply_to;
     mb_slice queue;
@@ -58,6 +59,7 @@ typedef struct mb_info {
     const char *client_ip;
     unsigned int port;
     uint64_t client_id;
+    bool auth_required;
     bool tls_required;
 } mb_info;
 

@@ -27,6 +27,9 @@ static void usage(const char *argv0) {
            "  --port PORT          TCP listen port (default 4222).\n"
            "  --tls-cert FILE      Enable client TLS with this certificate chain PEM.\n"
            "  --tls-key FILE       Private key PEM for --tls-cert.\n"
+           "  --auth-token-env ENV Require CONNECT auth_token to match ENV.\n"
+           "  --auth-user-env ENV  Require CONNECT user to match ENV.\n"
+           "  --auth-pass-env ENV  Require CONNECT pass to match ENV.\n"
            "  --no-lvc             Disable $LVC.* last-value cache streams.\n"
            "  --snapshot FILE      Load/write LVC and patchbay state snapshot.\n"
            "  --snapshot-every S   Periodically write snapshot every S seconds.\n"
@@ -59,6 +62,40 @@ static void banner(void) {
            "\n\n",
            MB_VERSION);
     fflush(stdout);
+}
+
+static bool env_secret(const char *name, const char **out) {
+    const char *value = getenv(name);
+    if (value == NULL || value[0] == '\0') {
+        fprintf(stderr, "auth: environment variable %s is not set or is empty\n", name);
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
+static bool load_auth_config(const char *token_env, const char *user_env, const char *pass_env, mb_auth_config *out) {
+    *out = (mb_auth_config){0};
+    const bool has_token = token_env != NULL;
+    const bool has_user = user_env != NULL;
+    const bool has_pass = pass_env != NULL;
+    if (has_token && (has_user || has_pass)) {
+        fprintf(stderr, "auth: --auth-token-env cannot be combined with --auth-user-env/--auth-pass-env\n");
+        return false;
+    }
+    if (has_user != has_pass) {
+        fprintf(stderr, "auth: --auth-user-env and --auth-pass-env must be configured together\n");
+        return false;
+    }
+    if (has_token) {
+        out->mode = MB_AUTH_TOKEN;
+        return env_secret(token_env, &out->token);
+    }
+    if (has_user) {
+        out->mode = MB_AUTH_USER_PASS;
+        return env_secret(user_env, &out->user) && env_secret(pass_env, &out->pass);
+    }
+    return true;
 }
 
 static const char *backend_name(void) {
@@ -251,6 +288,9 @@ int main(int argc, char **argv) {
     const char *snapshot_path = NULL;
     const char *tls_cert_path = NULL;
     const char *tls_key_path = NULL;
+    const char *auth_token_env = NULL;
+    const char *auth_user_env = NULL;
+    const char *auth_pass_env = NULL;
     uint64_t snapshot_every_ms = 0;
     uint64_t stats_tick_ms = MB_DEFAULT_STATS_TICK_MS;
     uint64_t soundcheck_linger_ms = PB_SOUNDCHECK_DEFAULT_LINGER_MS;
@@ -282,6 +322,12 @@ int main(int argc, char **argv) {
             tls_cert_path = argv[++i];
         } else if (strcmp(argv[i], "--tls-key") == 0 && i + 1 < argc) {
             tls_key_path = argv[++i];
+        } else if (strcmp(argv[i], "--auth-token-env") == 0 && i + 1 < argc) {
+            auth_token_env = argv[++i];
+        } else if (strcmp(argv[i], "--auth-user-env") == 0 && i + 1 < argc) {
+            auth_user_env = argv[++i];
+        } else if (strcmp(argv[i], "--auth-pass-env") == 0 && i + 1 < argc) {
+            auth_pass_env = argv[++i];
         } else if (strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc) {
             snapshot_path = argv[++i];
         } else if (strcmp(argv[i], "--snapshot-every") == 0 && i + 1 < argc) {
@@ -361,6 +407,11 @@ int main(int argc, char **argv) {
                                                   .label = soundcheck_label});
     }
 
+    mb_auth_config auth = {0};
+    if (!load_auth_config(auth_token_env, auth_user_env, auth_pass_env, &auth)) {
+        return 2;
+    }
+
     const char *io_uring_status = configure_libuv_io_uring(io_uring);
 
     banner();
@@ -400,6 +451,13 @@ int main(int argc, char **argv) {
     if (tls_cert_path == NULL) {
         fprintf(stderr, "info: tls: disabled\n");
     }
+    if (auth.mode == MB_AUTH_TOKEN) {
+        fprintf(stderr, "info: auth: token env=%s\n", auth_token_env);
+    } else if (auth.mode == MB_AUTH_USER_PASS) {
+        fprintf(stderr, "info: auth: user/pass env=%s/%s\n", auth_user_env, auth_pass_env);
+    } else {
+        fprintf(stderr, "info: auth: disabled\n");
+    }
 
     mb_bridge bridge = {0};
     import_group imports = {0};
@@ -411,7 +469,7 @@ int main(int argc, char **argv) {
     const bool listen_immediately = program.importer.streams_len == 0;
     if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_runtime_enabled, snapshot_path,
                         snapshot_every_ms, stats_tick_ms, client_pubs_enabled, trace,
-                        tls_cert_path, tls_key_path, listen_immediately)) {
+                        &auth, tls_cert_path, tls_key_path, listen_immediately)) {
         pb_program_free(&program);
         return 1;
     }

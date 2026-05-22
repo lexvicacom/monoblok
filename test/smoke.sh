@@ -4,6 +4,8 @@ set -eu
 bin="${1:?usage: smoke.sh /path/to/monoblok}"
 port="${MONOBLOK_PORT:-42424}"
 tls_port="${MONOBLOK_TLS_PORT:-42425}"
+auth_port="${MONOBLOK_AUTH_PORT:-42426}"
+auth_user_port="${MONOBLOK_AUTH_USER_PORT:-42427}"
 tmp="${TMPDIR:-/tmp}/monoblok-smoke-$$"
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 sub_in="$tmp/sub.in"
@@ -12,6 +14,7 @@ pub_in="$tmp/pub.in"
 pub_out="$tmp/pub.out"
 srv_out="$tmp/server.out"
 tls_srv_out="$tmp/tls-server.out"
+auth_srv_out="$tmp/auth-server.out"
 patchbay="$tmp/patchbay.edn"
 tls_cert="$tmp/cert.pem"
 tls_key="$tmp/key.pem"
@@ -32,6 +35,7 @@ cleanup() {
     [ "${pub_pid:-}" ] && kill "$pub_pid" 2>/dev/null
     [ "${srv_pid:-}" ] && kill "$srv_pid" 2>/dev/null
     [ "${tls_srv_pid:-}" ] && kill "$tls_srv_pid" 2>/dev/null
+    [ "${auth_pid:-}" ] && kill "$auth_pid" 2>/dev/null
     rm -rf "$tmp"
 }
 trap cleanup EXIT INT TERM
@@ -100,5 +104,88 @@ PY
 kill "$tls_srv_pid" 2>/dev/null || true
 wait "$tls_srv_pid" 2>/dev/null || true
 unset tls_srv_pid
+
+MB_SMOKE_AUTH_TOKEN='sekret' "$bin" --host 127.0.0.1 --port "$auth_port" --auth-token-env MB_SMOKE_AUTH_TOKEN --stats-tick-ms 100000 >"$auth_srv_out" 2>&1 &
+auth_pid=$!
+sleep 0.2
+python3 - "$auth_port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+
+def read_line(sock):
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = sock.recv(1)
+        if not chunk:
+            raise RuntimeError("eof before line")
+        data += chunk
+    return data
+
+def connect():
+    sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+    info = read_line(sock)
+    if b'"auth_required":true' not in info:
+        raise RuntimeError(f"INFO did not advertise auth: {info!r}")
+    return sock
+
+sock = connect()
+sock.sendall(b"PING\r\n")
+data = sock.recv(4096)
+if b"PONG\r\n" in data:
+    raise RuntimeError("unauthenticated PING got PONG")
+sock.close()
+
+sock = connect()
+sock.sendall(b'CONNECT {"auth_token":"wrong"}\r\nPING\r\n')
+data = sock.recv(4096)
+if b"PONG\r\n" in data:
+    raise RuntimeError("bad token got PONG")
+sock.close()
+
+sock = connect()
+sock.sendall(b'CONNECT {"auth_token":"sekret"}\r\nPING\r\n')
+data = b""
+while b"PONG\r\n" not in data:
+    chunk = sock.recv(4096)
+    if not chunk:
+        raise RuntimeError("eof before authenticated PONG")
+    data += chunk
+sock.close()
+PY
+kill "$auth_pid" 2>/dev/null || true
+wait "$auth_pid" 2>/dev/null || true
+unset auth_pid
+
+MB_SMOKE_AUTH_USER='alice' MB_SMOKE_AUTH_PASS='wonder' "$bin" --host 127.0.0.1 --port "$auth_user_port" --auth-user-env MB_SMOKE_AUTH_USER --auth-pass-env MB_SMOKE_AUTH_PASS --stats-tick-ms 100000 >"$auth_srv_out" 2>&1 &
+auth_pid=$!
+sleep 0.2
+python3 - "$auth_user_port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+info = b""
+while not info.endswith(b"\n"):
+    chunk = sock.recv(1)
+    if not chunk:
+        raise RuntimeError("eof before INFO")
+    info += chunk
+if b'"auth_required":true' not in info:
+    raise RuntimeError(f"INFO did not advertise auth: {info!r}")
+sock.sendall(b'CONNECT {"user":"alice","pass":"wonder"}\r\nPING\r\n')
+data = b""
+while b"PONG\r\n" not in data:
+    chunk = sock.recv(4096)
+    if not chunk:
+        raise RuntimeError("eof before authenticated PONG")
+    data += chunk
+sock.close()
+PY
+kill "$auth_pid" 2>/dev/null || true
+wait "$auth_pid" 2>/dev/null || true
+unset auth_pid
 
 printf 'smoke passed\n'

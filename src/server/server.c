@@ -327,11 +327,13 @@ static void make_server_id(char out[35]) {
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
                     uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,
+                    const mb_auth_config *auth,
                     const char *tls_cert_path, const char *tls_key_path, bool listen_immediately) {
     *server = (mb_server){
         .host = host,
         .port = port,
         .program = program,
+        .auth = auth == NULL ? (mb_auth_config){0} : *auth,
         .lvc_enabled = lvc_enabled,
         .snapshot_path = snapshot_path,
         .snapshot_every_ms = snapshot_every_ms,

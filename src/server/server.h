@@ -21,6 +21,20 @@ typedef struct mb_conn mb_conn;
 typedef struct mb_snapshot_job mb_snapshot_job;
 typedef void (*mb_server_stats_refresh_fn)(void *ctx);
 
+typedef enum mb_auth_mode {
+    MB_AUTH_NONE,
+    MB_AUTH_TOKEN,
+    MB_AUTH_USER_PASS,
+} mb_auth_mode;
+
+// Client auth settings copied from startup config; secret values borrow getenv storage.
+typedef struct mb_auth_config {
+    mb_auth_mode mode;
+    const char *token;
+    const char *user;
+    const char *pass;
+} mb_auth_config;
+
 // Process-local server state owned by one uv loop thread.
 typedef struct mb_server {
     uv_loop_t loop;
@@ -31,6 +45,7 @@ typedef struct mb_server {
     uv_timer_t snapshot_timer;
     uv_timer_t stats_timer;
     mb_router router;
+    mb_auth_config auth;
     pb_program *program;
     mb_conn *conns;
     mb_snapshot_job *snapshot_job;
@@ -71,6 +86,7 @@ typedef struct mb_server {
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
                     uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,
+                    const mb_auth_config *auth,
                     const char *tls_cert_path, const char *tls_key_path, bool listen_immediately);
 bool mb_server_listen(mb_server *server);
 int mb_server_run(mb_server *server);

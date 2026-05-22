@@ -199,9 +199,36 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | import from real NATS | yes, as private patchbay ingress |
 | JetStream import | yes, as consumer-only patchbay ingress |
 | TLS on the local server | yes, optional server cert/key |
-| auth on the local server | no; terminate in front of monoblok or bridge to real NATS |
+| auth on the local server | yes, optional global token or user/pass from environment |
 | JetStream service for local clients | no |
 | clustering | no |
+
+### Simple auth for local NATS clients
+
+Local client auth is optional and global. Configure either a token or a single
+username/password pair by naming the environment variables that hold the
+expected secret values:
+
+```sh
+MONOBLOK_AUTH_TOKEN='sekret' \
+  monoblok --port 4222 --patchbay patchbay.edn \
+    --auth-token-env MONOBLOK_AUTH_TOKEN
+
+MONOBLOK_AUTH_USER='alice' MONOBLOK_AUTH_PASS='wonder' \
+  monoblok --port 4222 --patchbay patchbay.edn \
+    --auth-user-env MONOBLOK_AUTH_USER \
+    --auth-pass-env MONOBLOK_AUTH_PASS
+```
+
+With auth enabled, `INFO` advertises `"auth_required":true`. Clients must send
+the normal NATS `CONNECT` fields: `auth_token` for token auth, or `user` and
+`pass` for username/password auth. Missing or wrong credentials receive
+`-ERR 'Authorization Violation'` and the socket is closed.
+
+This is intentionally only simple CONNECT-time authentication. It does not add
+per-subject authorization, accounts, bcrypt hashes, JWTs, NKEYs, or reloadable
+user maps. Use TLS, a trusted network, or a fronting proxy if credentials cross
+anything outside your control.
 
 ### TLS for local NATS clients
 

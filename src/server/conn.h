@@ -37,6 +37,7 @@ struct mb_conn {
     uint64_t client_id;
     mb_conn_tls_state tls_state;
     bool write_pending;
+    bool authorized;
     bool closing;
     bool counted;
     mb_conn *prev;
