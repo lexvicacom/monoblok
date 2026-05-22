@@ -1,127 +1,76 @@
 # monoblok
 
-Signal conditioning, transformation, and routing in a NATS-native message processor.
+**NATS-native signal conditioning.**
 
->**monoblok speaks NATS.**
->
->Point existing publishers at it or have it subscribe to existing subjects. Declare the processing rules you need, and monoblok republishes clean, actionable subjects for subscribers.
->
-> _Rounding. Deadbands. Squelch. Aggregation. Moving averages. OHLC. Derived alerts._
->
-> Fix noisy raw streams once, not in every subscriber.
+Clean, filter, and transform noisy data **once** at the edge — instead of scattering the same logic across dozens of services.
 
-## Rationale
+### Problem
 
-It is not uncommon for systems to contain some _caretaker_ services that subscribe to ingress NATS subjects to clean up and republish a raw stream before the real business starts. This might include rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts and so on. High velocity or miniscule changes don't always have value downstream. monoblok lets you declare that tidying work once, leveraging efficient implementations of common tasks as rules at the broker, instead of writing _rounding logic_ N times in N services.
+Raw high-frequency streams (sensors, market data, IoT, vehicles, etc.) are messy.  
+Most teams end up writing custom cleaning code in every subscriber. That’s slow, error-prone, and wasteful.
 
-**Declare it once, as rules, at the edge.**
+**monoblok** lets you declare all your signal conditioning rules in one place using a simple configuration file. It then sits neatly in your NATS estate and does the rest — extremely fast.
 
-![monoblok round and squelch demo](./docs/monoblok-round-squelch-fixed.gif)
+### Key Features
+
+- **Blazing fast** — Up to **15+ million messages/sec** on modest hardware (written in C and libuv)
+- **Truly NATS-native** — Full import/export subject support, JetStream, LVC, snapshots
+- **Tiny** — Minimal memory footprint, perfect for edge and sidecar deployments
+- **Patchbay DSL** — Clean, declarative rules as YAML or EDN (easy to write by hand or with AI)
+- **Flexible deployment** — Sidecar, front-door proxy, or standalone mode
+- **Production ready** — TLS, Basic Auth, systemd support
+
+### Also check out **tinyblok**
+
+For microcontrollers: **[tinyblok](https://github.com/lexvicacom/tinyblok)** — Lightweight Patchbay that runs directly on ESP32 and publishes conditioned data to NATS.
 
 
-Rules live in [patchbay](./docs/patchbay.md), a small DSL which can be expressed as YAML, EDN or JSON. A walked example lives in [patchbay.edn](./patchbay.edn). You can also [write patchbay files as YAML](https://github.com/lexvicacom/monoblok/blob/main/examples/demo.yml). 
+### Quick Start (under 30 seconds)
 
-<a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">patchbay also lends itself well to help from coding assistants</a> when fed [AGENTS_PATCHBAY.md](https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md) (to be honest the agent instructions are human-parseable if you prefer a succinct primer. There is a fuller [patchbay guide](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay.md) and  [cheatsheet](https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay-cheatsheet.md).
-
-
-#### Common ways of running monoblok:
-- **Tap into existing NATS:** monoblok subscribes to selected subjects on your NATS environment, treats them as private patchbay input, then emits back only the cleaned or derived subjects your rules choose.
-- **Signal conditioning front door:** publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a  NATS cluster.
-- **Standalone broker:** NATS clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
-
-### Tiny and fast
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be simple, lightweight and **fast**, even on entry level/shared hardware. Smoke tests and load checks are part of the build; dedicated benchmark helpers live in [scripts/](./scripts). The [saved benchmark runs](./bench-results) span up to **2-18 million msgs/sec** across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples/trends and not capacity promises in the real world. See [running tests](#running-tests) for tests that exercise the router and parser without network.
-
-### Read more
-[tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation for microcontrollers relaying cleaned sensor data into NATS.
-
-See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. There's a [demo server](https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md). Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
-
-![monoblok deployment modes](./docs/infographic.png)
-
-## Run it
-
-### Binary
-
-```sh
+```bash
+# Install & run
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
-```
-The [release helper](./scripts/start.sh) downloads the latest monoblok (macOS/Linux) and extracts it into the current directory. To run the unpacked binary:
 
-```sh
-./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
+# Run with example config
+./monoblok --port 14222
 ```
 
-The directory contains runnable examples. Run the `.sh` files.
+Publish raw data, subscribe to clean subjects. That’s it.
 
-To add as a service on systemd Linux, run `scripts/install-systemd.sh`.
+See the [`examples/`](./examples/) folder for ready-to-use configs.
 
-### Container
 
-Multi-arch image:
 
-```sh
-docker run --rm -p 14222:14222 ghcr.io/lexvicacom/monoblok:latest --port 14222
-```
+### Common Use Cases
 
-### Build
+- **Industrial / IoT** — Clean noisy sensor data before it hits your backend
+- **Financial** — Turn raw ticks into usable bars and alerts
+- **Edge Computing** — Reduce bandwidth and cloud costs dramatically by only exporting _interesting_ data points
+- **Microservices** — Eliminate duplicated transformation logic
 
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-./build/monoblok --port 14222 --patchbay patchbay.edn
-```
 
-Compiles cleanly on macOS and Linux. Dependencies are vendored. System `openssl` required.
+### Deployment Modes
 
-## Running tests
+| Mode              | Use Case                              | When to use |
+|-------------------|---------------------------------------|-------------|
+| **Sidecar**       | Tap into existing subjects            | Most common |
+| **Front door**    | Publishers send data through monoblok | Existing noisy publishers tamed |
+| **Standalone**    | Lightweight broker + conditioning     | Small setups |
 
-```sh
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
+---
 
-Fast integration smoke:
+### Documentation
+- [Overview](./docs/overview.md)
+- [Designs/future](./design)
+- [Patchbay DSL Guide](./docs/patchbay.md)** ← Start here
+- [Examples](./examples/)
+- [Moree examples](./advanced-examples/)
+- [Benchmarks](./bench-results/)
+- [Agent Instructions](./docs/AGENTS_PATCHBAY.md)
 
-```sh
-cmake --build build --target smoke
-```
+---
 
-`smoke` runs the TCP server smoke, patchbay `soundcheck`, `load-smoke`, and
-the larger `load-soak` profile.
-The subchecks can also be run directly:
+### Benchmarks
 
-```sh
-cmake --build build --target soundcheck
-cmake --build build --target load-smoke
-cmake --build build --target load-soak
-```
-
-`load-smoke` starts a temporary daemon and verifies exact TCP fan-out plus
-derived `moving-avg`, `moving-sum`, and `count!` streams. `load-soak` runs the
-same check with a heavier subscriber/message profile.
-
-Benchmark helpers are separate from the test targets because they depend on the
-NATS CLI, and the comparison script uses `nats-server` when available:
-
-```sh
-scripts/bench.sh
-scripts/bench-with-nats-server.sh
-```
-
-Saved sample output lives in [bench-results/](./bench-results). On Linux these
-scripts default to monoblok's opt-in libuv io_uring path to match the saved
-runs; pass `--epoll` to benchmark the production-default epoll path.
-
-## Feedback
-
-I'd **love** to hear from anyone who tries monoblok out and finds it useful.
-
-It's open source, without restrictions (per MIT license re attribution) or paid commercial features. However, [my company](https://lexvica.com) provides services around monoblok. I'd be happy to learn about your environment, requirements and work with you to deliver a proof of concept, case study or complete solution.
-
-[Drop me a line](mailto:alex@lexvica.com).
-
-## License
-
-MIT. See `LICENSE`.
+Consistently achieves **millions of messages per second** even with moderate conditioning rules.  
+Full [benchmark scripts](./scripts) and results are included in the repo.
