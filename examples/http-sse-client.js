@@ -61,14 +61,27 @@ async function* sseEvents(stream) {
   }
 }
 
+async function responseError(prefix, res) {
+  let detail = "";
+  try {
+    const text = await res.text();
+    if (text.trim().length !== 0) {
+      detail = `: ${text.trim()}`;
+    }
+  } catch (_err) {
+    detail = "";
+  }
+  return new Error(`${prefix}: HTTP ${res.status} ${res.statusText}${detail}`);
+}
+
 class MonoblokHttpClient {
   constructor({ baseUrl = "http://127.0.0.1:8080", token, user, pass, fetchImpl = globalThis.fetch } = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.auth = { token, user, pass };
-    this.fetch = fetchImpl;
-    if (typeof this.fetch !== "function") {
+    if (typeof fetchImpl !== "function") {
       throw new Error("fetch is not available");
     }
+    this.fetch = (input, init) => fetchImpl.call(globalThis, input, init);
   }
 
   headers(extra = {}) {
@@ -88,7 +101,7 @@ class MonoblokHttpClient {
       body: payload,
     });
     if (!res.ok) {
-      throw new Error(`monoblok publish failed: HTTP ${res.status} ${res.statusText}`);
+      throw await responseError("monoblok publish failed", res);
     }
   }
 
@@ -99,7 +112,7 @@ class MonoblokHttpClient {
       signal,
     });
     if (!res.ok || !res.body) {
-      throw new Error(`monoblok subscribe failed: HTTP ${res.status} ${res.statusText}`);
+      throw await responseError("monoblok subscribe failed", res);
     }
     for await (const event of sseEvents(res.body)) {
       if (event.event !== "msg") continue;

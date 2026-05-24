@@ -291,7 +291,15 @@ When local auth is configured, HTTP uses `Authorization: Bearer <token>` for
 token mode or `Authorization: Basic ...` for user/pass mode. The HTTP listener
 is plain HTTP only; put Caddy, nginx, or another proxy in front for HTTPS. A
 tiny fetch-based JavaScript helper lives at
-[`examples/http-sse-client.js`](../examples/http-sse-client.js).
+[`examples/http-sse-client.js`](../examples/http-sse-client.js), with a browser
+page at [`examples/http-sse-client.html`](../examples/http-sse-client.html).
+Use the Node demo server to serve the page and proxy `/sub` and `/pub` from the
+same origin, which avoids browser CORS. It can also start a local monoblok
+process for the demo:
+
+```sh
+node examples/http-sse-demo.js --start-monoblok --port 8090 --open
+```
 
 ### As a bridging/importing client to a NATS server
 

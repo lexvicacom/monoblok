@@ -53,6 +53,23 @@ path, not a second application model.
 
 ---
 
+## Browser Example
+
+Keep the reusable client as a tiny dependency-free JavaScript file. A static
+HTML page can exercise subscribe and publish in a browser, but it should not
+force monoblok to become a static file server. The example run script can serve
+the page and proxy `/sub/...` plus `/pub/...` to monoblok from the same origin.
+For a self-contained demo it can also start `build/monoblok`:
+
+```sh
+node examples/http-sse-demo.js --start-monoblok --port 8090 --open
+```
+
+That avoids CORS for the example while leaving production CORS and HTTPS policy
+to the fronting proxy.
+
+---
+
 ## Listener
 
 The HTTP listener should be separate from the NATS listener:
