@@ -293,6 +293,69 @@ is plain HTTP only; put Caddy, nginx, or another proxy in front for HTTPS. A
 tiny fetch-based JavaScript helper lives at
 [`examples/http-sse-client.js`](../examples/http-sse-client.js), with a browser
 page at [`examples/http-sse-client.html`](../examples/http-sse-client.html).
+
+#### nginx reverse proxy for SSE
+
+Run monoblok's HTTP listener on loopback and let nginx terminate public TLS:
+
+```sh
+monoblok --port 4222 --patchbay patchbay.edn \
+  --http-host 127.0.0.1 \
+  --http-port 8080
+```
+
+Use a `proxy_pass` without a URI suffix so encoded subject tokens such as
+`%3E` stay intact. SSE subscriptions also need buffering and compression
+disabled, with a read timeout longer than the longest expected quiet period:
+
+```nginx
+upstream monoblok_http {
+    server 127.0.0.1:8080;
+}
+
+server {
+    listen 443 ssl;
+    server_name events.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/events.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/events.example.com/privkey.pem;
+
+    location /sub/ {
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    location /pub/ {
+        client_max_body_size 1m;
+
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+    }
+}
+```
+
+Serve browser clients from the same nginx origin when possible. monoblok does
+not add CORS headers itself, and same-origin `/sub/...` and `/pub/...` requests
+avoid needing browser-specific CORS handling. If monoblok auth is enabled, make
+sure nginx forwards the `Authorization` header; the default proxy behavior does
+unless you override it.
+
 Use the Node demo server to serve the page and proxy `/sub` and `/pub` from the
 same origin, which avoids browser CORS. It can also start a local monoblok
 process for the demo:
