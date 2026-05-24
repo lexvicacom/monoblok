@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>monoblok HTTP/SSE client</title>
+  <title>monoblok HTTP/SSE example</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -176,12 +176,6 @@
       gap: 10px;
     }
 
-    .auth-fields {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-
     .log {
       min-height: 260px;
       max-height: 420px;
@@ -207,8 +201,7 @@
 
       header,
       .grid,
-      .row,
-      .auth-fields {
+      .row {
         grid-template-columns: 1fr;
       }
 
@@ -235,38 +228,6 @@
     </header>
 
     <div class="grid">
-      <section class="full">
-        <h2>Connection</h2>
-        <label>
-          Base URL
-          <input id="base-url" autocomplete="off" spellcheck="false">
-        </label>
-        <label>
-          Auth
-          <select id="auth-mode">
-            <option value="none">none</option>
-            <option value="token">bearer token</option>
-            <option value="basic">basic user/pass</option>
-          </select>
-        </label>
-        <div id="token-fields" hidden>
-          <label>
-            Token
-            <input id="token" type="password" autocomplete="off" spellcheck="false">
-          </label>
-        </div>
-        <div id="basic-fields" class="auth-fields" hidden>
-          <label>
-            User
-            <input id="user" autocomplete="off" spellcheck="false">
-          </label>
-          <label>
-            Pass
-            <input id="pass" type="password" autocomplete="off" spellcheck="false">
-          </label>
-        </div>
-      </section>
-
       <section>
         <h2>Subscribe</h2>
         <form id="sub-form">
@@ -305,7 +266,7 @@
 
       <section class="full">
         <div class="row">
-          <h2>Events</h2>
+          <h2>Output</h2>
           <button id="clear-log" class="secondary" type="button">Clear</button>
         </div>
         <pre id="log" class="log" aria-live="polite"></pre>
@@ -342,28 +303,10 @@
       logEl.scrollTop = logEl.scrollHeight;
     }
 
-    function authOptions() {
-      const mode = $("auth-mode").value;
-      if (mode === "token") {
-        return { token: $("token").value };
-      }
-      if (mode === "basic") {
-        return { user: $("user").value, pass: $("pass").value };
-      }
-      return {};
-    }
-
     function client() {
       return new MonoblokHttpClient({
-        baseUrl: $("base-url").value.trim() || defaultBaseUrl(),
-        ...authOptions(),
+        baseUrl: defaultBaseUrl(),
       });
-    }
-
-    function updateAuthFields() {
-      const mode = $("auth-mode").value;
-      $("token-fields").hidden = mode !== "token";
-      $("basic-fields").hidden = mode !== "basic";
     }
 
     function stopSub() {
@@ -376,13 +319,10 @@
       setStatus("stopped");
     }
 
-    $("base-url").value = defaultBaseUrl();
-    updateAuthFields();
     if (location.protocol === "file:") {
       setStatus("run the demo server to avoid browser CORS", "bad");
     }
 
-    $("auth-mode").addEventListener("change", updateAuthFields);
     $("clear-log").addEventListener("click", () => {
       logEl.textContent = "";
     });
