@@ -241,6 +241,7 @@ function proxyToMonoblok(req, res, upstreamBase, reqUrl) {
   }, (proxyRes) => {
     upstreamRes = proxyRes;
     res.writeHead(proxyRes.statusCode || 502, proxyRes.statusMessage, cleanHeaders(proxyRes.headers));
+    res.flushHeaders();
     proxyRes.pipe(res);
   });
 
