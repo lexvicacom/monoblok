@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "bridge.h"
+#include "http.h"
 #include "importer.h"
 #include "jetstream.h"
 #include "server.h"
@@ -25,6 +26,8 @@ static void usage(const char *argv0) {
            "  --patchbay FILE      Explicit patchbay path.\n"
            "  --host HOST          TCP listen host (default 127.0.0.1).\n"
            "  --port PORT          TCP listen port (default 4222).\n"
+           "  --http-host HOST     HTTP/SSE listen host (default 127.0.0.1).\n"
+           "  --http-port PORT     Enable HTTP/SSE listener on this port.\n"
            "  --tls-cert FILE      Enable client TLS with this certificate chain PEM.\n"
            "  --tls-key FILE       Private key PEM for --tls-cert.\n"
            "  --auth-token-env ENV Require CONNECT auth_token to match ENV.\n"
@@ -282,7 +285,9 @@ static const char *configure_libuv_io_uring(io_uring_mode mode) {
 
 int main(int argc, char **argv) {
     const char *host = "127.0.0.1";
+    const char *http_host = "127.0.0.1";
     unsigned long port = 4222;
+    unsigned long http_port = 0;
     const char *soundcheck_path = NULL;
     const char *patchbay_path = NULL;
     const char *snapshot_path = NULL;
@@ -309,6 +314,16 @@ int main(int argc, char **argv) {
             char *end = NULL;
             port = strtoul(argv[++i], &end, 10);
             if (errno != 0 || end == argv[i] || *end != '\0' || port > 65535) {
+                usage(argv[0]);
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--http-host") == 0 && i + 1 < argc) {
+            http_host = argv[++i];
+        } else if (strcmp(argv[i], "--http-port") == 0 && i + 1 < argc) {
+            errno = 0;
+            char *end = NULL;
+            http_port = strtoul(argv[++i], &end, 10);
+            if (errno != 0 || end == argv[i] || *end != '\0' || http_port > 65535 || http_port == 0) {
                 usage(argv[0]);
                 return 2;
             }
@@ -451,6 +466,9 @@ int main(int argc, char **argv) {
     if (tls_cert_path == NULL) {
         fprintf(stderr, "info: tls: disabled\n");
     }
+    if (http_port == 0) {
+        fprintf(stderr, "info: http: disabled\n");
+    }
     if (auth.mode == MB_AUTH_TOKEN) {
         fprintf(stderr, "info: auth: token env=%s\n", auth_token_env);
     } else if (auth.mode == MB_AUTH_USER_PASS) {
@@ -548,6 +566,15 @@ int main(int argc, char **argv) {
         server.stats_refresh_ctx = &import_stats;
     } else {
         fprintf(stderr, "info: import: disabled\n");
+    }
+    if (http_port != 0 &&
+        !mb_http_listen(&server, http_host, (unsigned int)http_port)) {
+        import_group_close(&imports);
+        mb_js_importer_close(&js_importer);
+        mb_server_close(&server);
+        mb_bridge_close(&bridge);
+        pb_program_free(&program);
+        return 1;
     }
 
     // block

@@ -129,27 +129,24 @@ Each publish is emitted as one SSE event:
 
 ```text
 event: msg
-subject: sensors.temp
-data: 31.2
+data: {"subject":"sensors.temp","payload":"31.2"}
 
 ```
 
-The `subject:` field carries the actual published subject, which matters for
-wildcard subscriptions and `$LVC.>` replay. The payload is text. If the payload
-contains newlines, emit one `data:` line per line:
+The JSON data envelope carries the actual published subject, which matters for
+wildcard subscriptions and `$LVC.>` replay. The payload is a JSON-escaped text
+string:
 
 ```text
 event: msg
-subject: logs.app
-data: first line
-data: second line
+data: {"subject":"logs.app","payload":"first line\nsecond line"}
 
 ```
 
 Payload constraints:
 
 - reject or drop SSE delivery for payloads containing NUL
-- normalize `\r\n` and bare `\r` to `\n` while writing `data:` lines
+- JSON-escape control characters, quotes, and backslashes
 - do not base64-encode in v1
 - optionally validate UTF-8 later if real clients need stricter behavior
 
@@ -203,6 +200,7 @@ Request body rules:
 
 - require `Content-Length`
 - cap at `MB_MAX_PAYLOAD`
+- require `Content-Type: text/plain` or `Content-Type: application/json`
 - reject NUL if the HTTP surface remains text-only
 - do not support chunked bodies in v1
 - do not infer subject or options from query parameters
@@ -216,6 +214,7 @@ Suggested statuses:
 403 Forbidden                 client publishes disabled in import mode
 409 Conflict                  $LVC or $STATS read-only subject
 413 Payload Too Large         body exceeds cap
+415 Unsupported Media Type    POST content type is not text/plain or application/json
 500 Internal Server Error     router or patchbay failure
 ```
 

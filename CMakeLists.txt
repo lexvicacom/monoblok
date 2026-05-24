@@ -221,6 +221,7 @@ add_executable(monoblok
   src/nats_common.c
   src/snapshot.c
   src/server/conn.c
+  src/server/http.c
   src/main.c
   src/server/server.c
 )

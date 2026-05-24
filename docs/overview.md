@@ -200,6 +200,7 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | JetStream import | yes, as consumer-only patchbay ingress |
 | TLS on the local server | yes, optional server cert/key |
 | auth on the local server | yes, optional global token or user/pass from environment |
+| HTTP/SSE adapter | yes, optional plain HTTP listener |
 | JetStream service for local clients | no |
 | clustering | no |
 
@@ -251,6 +252,46 @@ certificates, configure clients with the CA certificate where possible. Test
 clients can disable verification, but that is insecure and should stay out of
 production. With `nats.c`, the development-only equivalent is
 `natsOptions_SkipServerVerification(opts, true)`.
+
+### HTTP/SSE adapter
+
+The optional HTTP listener is a small browser-friendly adapter over the same
+local client publish and subscribe paths. It is disabled by default:
+
+```sh
+monoblok --port 4222 --patchbay patchbay.edn \
+  --http-host 127.0.0.1 \
+  --http-port 8080
+```
+
+Routes use path segments as NATS subject tokens:
+
+```text
+GET  /sub/sensors/temp       -> SSE subscription to sensors.temp
+GET  /sub/sensors/%3E        -> SSE subscription to sensors.>
+GET  /sub/$LVC/sensors/temp  -> SSE subscription to $LVC.sensors.temp
+POST /pub/sensors/temp       -> client publish to sensors.temp
+```
+
+`POST` requires `Content-Length` plus `Content-Type: text/plain` or
+`Content-Type: application/json`, and rejects NUL bytes. It is intentionally a
+text adapter, not a binary payload API. Successful POSTs fan out exactly like a
+local NATS `PUB`: normal subscribers, SSE subscribers, LVC, bridge, and
+patchbay all see the same publish.
+
+SSE messages are JSON data envelopes:
+
+```text
+event: msg
+data: {"subject":"sensors.temp","payload":"31.2"}
+
+```
+
+When local auth is configured, HTTP uses `Authorization: Bearer <token>` for
+token mode or `Authorization: Basic ...` for user/pass mode. The HTTP listener
+is plain HTTP only; put Caddy, nginx, or another proxy in front for HTTPS. A
+tiny fetch-based JavaScript helper lives at
+[`examples/http-sse-client.js`](../examples/http-sse-client.js).
 
 ### As a bridging/importing client to a NATS server
 

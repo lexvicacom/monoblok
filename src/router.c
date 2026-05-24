@@ -858,17 +858,25 @@ static bool deliver_to_sub(mb_router *router, mb_subscription *sub, mb_slice sub
                            mb_router_conn **kicked, size_t *kicked_len,
                            mb_router_conn **closed, size_t *closed_len) {
     const mb_slice sid = {.ptr = sub->sid, .len = sub->sid_len};
+    const char *prefix = sub->is_lvc ? MB_LVC_PREFIX : "";
     const size_t prefix_len = sub->is_lvc ? sizeof(MB_LVC_PREFIX) - 1 : 0;
     size_t frame_len = 0;
-    if (!mb_msg_frame_len_prefixed_with_reply(&frame_len, prefix_len, subject, sid, reply_to, payload)) {
+    const bool measured = sub->conn->msg_len_fn != NULL
+                              ? sub->conn->msg_len_fn(sub->conn->write_msg_ctx, &frame_len, prefix, prefix_len, subject, sid, reply_to, payload)
+                              : mb_msg_frame_len_prefixed_with_reply(&frame_len, prefix_len, subject, sid, reply_to, payload);
+    if (!measured) {
         return false;
+    }
+    if (frame_len == 0) {
+        sub->delivered += 1;
+        return true;
     }
     if (sub->conn->out.len > MB_MAX_PENDING || frame_len > MB_MAX_PENDING - sub->conn->out.len) {
         return queue_conn_close(router, sub->conn, closed, closed_len);
     }
-    const bool wrote = sub->is_lvc
-                           ? mb_write_msg_prefixed_with_reply(&sub->conn->out, MB_LVC_PREFIX, sizeof(MB_LVC_PREFIX) - 1, subject, sid, reply_to, payload)
-                           : mb_write_msg_with_reply(&sub->conn->out, subject, sid, reply_to, payload);
+    const bool wrote = sub->conn->write_msg_fn != NULL
+                           ? sub->conn->write_msg_fn(sub->conn->write_msg_ctx, &sub->conn->out, prefix, prefix_len, subject, sid, reply_to, payload)
+                           : mb_write_msg_prefixed_with_reply(&sub->conn->out, prefix, prefix_len, subject, sid, reply_to, payload);
     if (!wrote) {
         return false;
     }

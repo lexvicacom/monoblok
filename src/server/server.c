@@ -1,6 +1,7 @@
 #include "server.h"
 
 #include "conn.h"
+#include "http.h"
 #include "snapshot.h"
 
 #include <inttypes.h>
@@ -68,6 +69,32 @@ static SSL_CTX *tls_ctx_create(const char *cert_path, const char *key_path) {
     }
     fprintf(stderr, "info: tls: enabled cert=%s key=%s\n", cert_path, key_path);
     return ctx;
+}
+
+static bool secret_matches_slice(const char *expected, mb_slice got) {
+    if (expected == NULL) {
+        return false;
+    }
+    const size_t expected_len = strlen(expected);
+    if (expected_len != got.len) {
+        return false;
+    }
+    size_t diff = 0;
+    for (size_t i = 0; i < got.len; i += 1) {
+        diff |= (size_t)((uint8_t)expected[i] ^ got.ptr[i]);
+    }
+    return diff == 0;
+}
+
+bool mb_auth_token_matches(const mb_auth_config *auth, mb_slice token) {
+    return auth != NULL && auth->mode == MB_AUTH_TOKEN &&
+           secret_matches_slice(auth->token, token);
+}
+
+bool mb_auth_user_pass_matches(const mb_auth_config *auth, mb_slice user, mb_slice pass) {
+    return auth != NULL && auth->mode == MB_AUTH_USER_PASS &&
+           secret_matches_slice(auth->user, user) &&
+           secret_matches_slice(auth->pass, pass);
 }
 
 int64_t mb_wall_clock_ms(void) {
@@ -152,6 +179,29 @@ bool mb_server_emit_stats(mb_server *server) {
         ok = publish_stat(server, "$STATS.import.failed", *server->import_failed) && ok;
     }
     return ok;
+}
+
+mb_client_publish_status mb_server_client_publish(mb_server *server, mb_slice subject, mb_slice payload, mb_slice reply_to) {
+    if (!server->client_pubs_enabled) {
+        return MB_CLIENT_PUBLISH_DISABLED;
+    }
+    if (mb_router_subject_has_lvc_prefix(subject)) {
+        return MB_CLIENT_PUBLISH_LVC_READ_ONLY;
+    }
+    if (mb_router_subject_has_stats_prefix(subject)) {
+        return MB_CLIENT_PUBLISH_STATS_READ_ONLY;
+    }
+    if (!mb_router_publish_with_reply(&server->router, subject, payload, reply_to)) {
+        return MB_CLIENT_PUBLISH_ROUTER_FAILED;
+    }
+    server->total_pubs += 1;
+    uv_update_time(&server->loop);
+    if (!pb_program_eval_publish(server->program, &server->router, subject, payload,
+                                 mb_server_patchbay_now_ms(server), mb_wall_clock_ms())) {
+        return MB_CLIENT_PUBLISH_PATCHBAY_FAILED;
+    }
+    mb_server_reschedule_patchbay_clock(server);
+    return MB_CLIENT_PUBLISH_OK;
 }
 
 static void on_stats_timer(uv_timer_t *timer) {
@@ -457,12 +507,17 @@ int mb_server_run(mb_server *server) {
         printf("monoblok listening on %s:%u\n", server->host, server->port);
         fflush(stdout);
     }
+    if (server->http_listener_started) {
+        printf("monoblok http listening on %s:%u\n", server->http_host, server->http_port);
+        fflush(stdout);
+    }
     return uv_run(&server->loop, UV_RUN_DEFAULT);
 }
 
 void mb_server_close(mb_server *server) {
     server->closing = true;
     server->snapshot_write_again = false;
+    mb_http_close(server);
     while (server->conns != NULL) {
         mb_conn_begin_close(server->conns);
     }
