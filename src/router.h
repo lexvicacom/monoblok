@@ -27,6 +27,13 @@ typedef struct mb_router_conn {
     uint64_t close_seen_epoch;
     size_t sub_count;
     bool closed;
+    bool (*msg_len_fn)(void *ctx, size_t *out,
+                       const char *prefix, size_t prefix_len,
+                       mb_slice subject, mb_slice sid, mb_slice reply_to, mb_slice payload);
+    bool (*write_msg_fn)(void *ctx, mb_buf *out,
+                         const char *prefix, size_t prefix_len,
+                         mb_slice subject, mb_slice sid, mb_slice reply_to, mb_slice payload);
+    void *write_msg_ctx;
     void (*kick_fn)(void *ctx);
     void *kick_ctx;
     void (*close_fn)(void *ctx);

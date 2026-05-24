@@ -200,6 +200,7 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | JetStream import | yes, as consumer-only patchbay ingress |
 | TLS on the local server | yes, optional server cert/key |
 | auth on the local server | yes, optional global token or user/pass from environment |
+| HTTP/SSE adapter | yes, optional plain HTTP listener |
 | JetStream service for local clients | no |
 | clustering | no |
 
@@ -251,6 +252,117 @@ certificates, configure clients with the CA certificate where possible. Test
 clients can disable verification, but that is insecure and should stay out of
 production. With `nats.c`, the development-only equivalent is
 `natsOptions_SkipServerVerification(opts, true)`.
+
+### HTTP/SSE adapter
+
+The optional HTTP listener is a small browser-friendly adapter over the same
+local client publish and subscribe paths. It is disabled by default:
+
+```sh
+monoblok --port 4222 --patchbay patchbay.edn \
+  --http-host 127.0.0.1 \
+  --http-port 8080
+```
+
+Routes use path segments as NATS subject tokens:
+
+```text
+GET  /sub/sensors/temp       -> SSE subscription to sensors.temp
+GET  /sub/sensors/%3E        -> SSE subscription to sensors.>
+GET  /sub/$LVC/sensors/temp  -> SSE subscription to $LVC.sensors.temp
+POST /pub/sensors/temp       -> client publish to sensors.temp
+```
+
+`POST` requires `Content-Length` plus `Content-Type: text/plain` or
+`Content-Type: application/json`, and rejects NUL bytes. It is intentionally a
+text adapter, not a binary payload API. Successful POSTs fan out exactly like a
+local NATS `PUB`: normal subscribers, SSE subscribers, LVC, bridge, and
+patchbay all see the same publish.
+
+SSE messages are JSON data envelopes:
+
+```text
+event: msg
+data: {"subject":"sensors.temp","payload":"31.2"}
+
+```
+
+When local auth is configured, HTTP uses `Authorization: Bearer <token>` for
+token mode or `Authorization: Basic ...` for user/pass mode. The HTTP listener
+is plain HTTP only; put Caddy, nginx, or another proxy in front for HTTPS. A
+tiny fetch-based JavaScript helper lives at
+[`examples/http-sse-client.js`](../examples/http-sse-client.js), with a browser
+page at [`examples/http-sse-client.html`](../examples/http-sse-client.html).
+
+#### nginx reverse proxy for SSE
+
+Run monoblok's HTTP listener on loopback and let nginx terminate public TLS:
+
+```sh
+monoblok --port 4222 --patchbay patchbay.edn \
+  --http-host 127.0.0.1 \
+  --http-port 8080
+```
+
+Use a `proxy_pass` without a URI suffix so encoded subject tokens such as
+`%3E` stay intact. SSE subscriptions also need buffering and compression
+disabled, with a read timeout longer than the longest expected quiet period:
+
+```nginx
+upstream monoblok_http {
+    server 127.0.0.1:8080;
+}
+
+server {
+    listen 443 ssl;
+    server_name events.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/events.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/events.example.com/privkey.pem;
+
+    location /sub/ {
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    location /pub/ {
+        client_max_body_size 1m;
+
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+    }
+}
+```
+
+Serve browser clients from the same nginx origin when possible. monoblok does
+not add CORS headers itself, and same-origin `/sub/...` and `/pub/...` requests
+avoid needing browser-specific CORS handling. If monoblok auth is enabled, make
+sure nginx forwards the `Authorization` header; the default proxy behavior does
+unless you override it.
+
+Use the Node demo server to serve the page and proxy `/sub` and `/pub` from the
+same origin, which avoids browser CORS. It can also start a local monoblok
+process for the demo:
+
+```sh
+node examples/http-sse-demo.js --start-monoblok --port 8090 --open
+```
 
 ### As a bridging/importing client to a NATS server
 

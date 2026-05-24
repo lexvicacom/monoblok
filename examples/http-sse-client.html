@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>monoblok HTTP/SSE example</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7f4;
+      --fg: #1e2622;
+      --muted: #68736d;
+      --panel: #ffffff;
+      --line: #d7ded7;
+      --accent: #1d7458;
+      --accent-strong: #155641;
+      --danger: #a13d3d;
+      --log-bg: #111816;
+      --log-fg: #d8efe5;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121614;
+        --fg: #edf2ed;
+        --muted: #a9b5ad;
+        --panel: #1b211e;
+        --line: #354039;
+        --accent: #4bb48c;
+        --accent-strong: #76d1aa;
+        --danger: #e06d6d;
+        --log-bg: #080c0a;
+        --log-fg: #cfe8dc;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font: 15px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(100%, 980px);
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 680;
+      letter-spacing: 0;
+    }
+
+    .status {
+      min-width: 150px;
+      max-width: 360px;
+      color: var(--muted);
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .status[data-kind="ok"] {
+      color: var(--accent-strong);
+    }
+
+    .status[data-kind="bad"] {
+      color: var(--danger);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    section.full {
+      grid-column: 1 / -1;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--fg);
+      font: inherit;
+    }
+
+    input,
+    select,
+    textarea {
+      min-height: 38px;
+      background: transparent;
+      padding: 8px 10px;
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    button {
+      min-height: 38px;
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+      cursor: pointer;
+      font-weight: 650;
+    }
+
+    button.secondary {
+      background: transparent;
+      color: var(--accent-strong);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .row button {
+      min-width: 120px;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .log {
+      min-height: 260px;
+      max-height: 420px;
+      margin: 0;
+      overflow: auto;
+      background: var(--log-bg);
+      border-radius: 6px;
+      color: var(--log-fg);
+      padding: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    @media (max-width: 760px) {
+      main {
+        padding: 16px;
+      }
+
+      header,
+      .grid,
+      .row {
+        grid-template-columns: 1fr;
+      }
+
+      header {
+        display: grid;
+        align-items: start;
+      }
+
+      .status {
+        text-align: left;
+      }
+
+      .row button {
+        min-width: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>monoblok HTTP/SSE client</h1>
+      <div id="status" class="status">ready</div>
+    </header>
+
+    <div class="grid">
+      <section>
+        <h2>Subscribe</h2>
+        <form id="sub-form">
+          <label>
+            Subject
+            <input id="sub-subject" value="sensors.>" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="actions">
+            <button id="sub-button" type="submit">Subscribe</button>
+            <button id="stop-button" class="secondary" type="button" disabled>Stop</button>
+          </div>
+        </form>
+      </section>
+
+      <section>
+        <h2>Publish</h2>
+        <form id="pub-form">
+          <label>
+            Subject
+            <input id="pub-subject" value="sensors.temp" autocomplete="off" spellcheck="false">
+          </label>
+          <label>
+            Content-Type
+            <select id="content-type">
+              <option value="text/plain">text/plain</option>
+              <option value="application/json">application/json</option>
+            </select>
+          </label>
+          <label>
+            Payload
+            <textarea id="payload" spellcheck="false">31.2</textarea>
+          </label>
+          <button id="pub-button" type="submit">Publish</button>
+        </form>
+      </section>
+
+      <section class="full">
+        <div class="row">
+          <h2>Output</h2>
+          <button id="clear-log" class="secondary" type="button">Clear</button>
+        </div>
+        <pre id="log" class="log" aria-live="polite"></pre>
+      </section>
+    </div>
+  </main>
+
+  <script src="./http-sse-client.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    const logEl = $("log");
+    let cancelSub = null;
+
+    function defaultBaseUrl() {
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        return location.origin;
+      }
+      return "http://127.0.0.1:8080";
+    }
+
+    function setStatus(text, kind = "") {
+      statusEl.textContent = text;
+      statusEl.dataset.kind = kind;
+    }
+
+    function appendLog(kind, value) {
+      const stamp = new Date().toLocaleTimeString();
+      const body = typeof value === "string" ? value : JSON.stringify(value);
+      logEl.textContent += `[${stamp}] ${kind} ${body}\n`;
+      if (logEl.textContent.length > 24000) {
+        logEl.textContent = logEl.textContent.slice(-20000);
+      }
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function client() {
+      return new MonoblokHttpClient({
+        baseUrl: defaultBaseUrl(),
+      });
+    }
+
+    function stopSub() {
+      if (cancelSub) {
+        cancelSub();
+        cancelSub = null;
+      }
+      $("sub-button").disabled = false;
+      $("stop-button").disabled = true;
+      setStatus("stopped");
+    }
+
+    if (location.protocol === "file:") {
+      setStatus("run the demo server to avoid browser CORS", "bad");
+    }
+
+    $("clear-log").addEventListener("click", () => {
+      logEl.textContent = "";
+    });
+    $("stop-button").addEventListener("click", stopSub);
+
+    $("sub-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      stopSub();
+      const subject = $("sub-subject").value.trim();
+      try {
+        cancelSub = client().subscribe(subject, (msg) => {
+          appendLog("msg", msg);
+        }, {
+          onError: (err) => {
+            appendLog("error", err.message);
+            cancelSub = null;
+            $("sub-button").disabled = false;
+            $("stop-button").disabled = true;
+            setStatus(err.message, "bad");
+          },
+        });
+        $("sub-button").disabled = true;
+        $("stop-button").disabled = false;
+        setStatus(`subscribed to ${subject}`, "ok");
+      } catch (err) {
+        appendLog("error", err.message);
+        setStatus(err.message, "bad");
+      }
+    });
+
+    $("pub-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const subject = $("pub-subject").value.trim();
+      const payload = $("payload").value;
+      const contentType = $("content-type").value;
+      $("pub-button").disabled = true;
+      try {
+        await client().publish(subject, payload, { contentType });
+        appendLog("pub", { subject, payload });
+        setStatus(`published to ${subject}`, "ok");
+      } catch (err) {
+        appendLog("error", err.message);
+        setStatus(err.message, "bad");
+      } finally {
+        $("pub-button").disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -145,21 +145,6 @@ static void write_err_or_close(mb_conn *conn, const char *msg) {
     }
 }
 
-static bool secret_matches(const char *expected, yyjson_val *value) {
-    if (expected == NULL || !yyjson_is_str(value)) {
-        return false;
-    }
-    const char *got = yyjson_get_str(value);
-    const size_t got_len = yyjson_get_len(value);
-    const size_t expected_len = strlen(expected);
-    size_t diff = expected_len ^ got_len;
-    const size_t common = expected_len < got_len ? expected_len : got_len;
-    for (size_t i = 0; i < common; i += 1) {
-        diff |= (size_t)((uint8_t)expected[i] ^ (uint8_t)got[i]);
-    }
-    return diff == 0;
-}
-
 static bool connect_auth_matches(mb_conn *conn, mb_slice json) {
     if (conn->server->auth.mode == MB_AUTH_NONE) {
         return true;
@@ -177,10 +162,17 @@ static bool connect_auth_matches(mb_conn *conn, mb_slice json) {
     bool ok = false;
     if (yyjson_is_obj(root)) {
         if (conn->server->auth.mode == MB_AUTH_TOKEN) {
-            ok = secret_matches(conn->server->auth.token, yyjson_obj_get(root, "auth_token"));
+            yyjson_val *token = yyjson_obj_get(root, "auth_token");
+            ok = yyjson_is_str(token) &&
+                 mb_auth_token_matches(&conn->server->auth,
+                                       (mb_slice){.ptr = (const uint8_t *)yyjson_get_str(token), .len = yyjson_get_len(token)});
         } else if (conn->server->auth.mode == MB_AUTH_USER_PASS) {
-            ok = secret_matches(conn->server->auth.user, yyjson_obj_get(root, "user")) &&
-                 secret_matches(conn->server->auth.pass, yyjson_obj_get(root, "pass"));
+            yyjson_val *user = yyjson_obj_get(root, "user");
+            yyjson_val *pass = yyjson_obj_get(root, "pass");
+            ok = yyjson_is_str(user) && yyjson_is_str(pass) &&
+                 mb_auth_user_pass_matches(&conn->server->auth,
+                                           (mb_slice){.ptr = (const uint8_t *)yyjson_get_str(user), .len = yyjson_get_len(user)},
+                                           (mb_slice){.ptr = (const uint8_t *)yyjson_get_str(pass), .len = yyjson_get_len(pass)});
         }
     }
     yyjson_doc_free(doc);
@@ -226,28 +218,18 @@ static void handle_op(mb_conn *conn, mb_op op) {
                               op.max_msgs, op.has_max_msgs);
         break;
     case MB_OP_PUB: {
-        bool published = false;
-        if (!conn->server->client_pubs_enabled) {
+        const mb_client_publish_status status = mb_server_client_publish(conn->server, op.subject, op.payload, op.reply_to);
+        if (status == MB_CLIENT_PUBLISH_DISABLED) {
             write_err_or_close(conn, "Client Publish Disabled");
-        } else if (mb_router_subject_has_lvc_prefix(op.subject)) {
+        } else if (status == MB_CLIENT_PUBLISH_LVC_READ_ONLY) {
             write_err_or_close(conn, "$LVC is read-only");
-        } else if (mb_router_subject_has_stats_prefix(op.subject)) {
+        } else if (status == MB_CLIENT_PUBLISH_STATS_READ_ONLY) {
             write_err_or_close(conn, "$STATS is read-only");
-        } else if (!mb_router_publish_with_reply(&conn->server->router, op.subject, op.payload, op.reply_to)) {
+        } else if (status == MB_CLIENT_PUBLISH_ROUTER_FAILED) {
             write_err_or_close(conn, "Publish Failed");
-        } else {
-            published = true;
-        }
-        if (!published) {
-            break;
-        }
-        conn->server->total_pubs += 1;
-        uv_update_time(&conn->server->loop);
-        if (!pb_program_eval_publish(conn->server->program, &conn->server->router, op.subject, op.payload,
-                                     mb_server_patchbay_now_ms(conn->server), mb_wall_clock_ms())) {
+        } else if (status == MB_CLIENT_PUBLISH_PATCHBAY_FAILED) {
             write_err_or_close(conn, "Patchbay Failed");
         }
-        mb_server_reschedule_patchbay_clock(conn->server);
         break;
     }
     }

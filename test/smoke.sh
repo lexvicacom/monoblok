@@ -6,6 +6,8 @@ port="${MONOBLOK_PORT:-42424}"
 tls_port="${MONOBLOK_TLS_PORT:-42425}"
 auth_port="${MONOBLOK_AUTH_PORT:-42426}"
 auth_user_port="${MONOBLOK_AUTH_USER_PORT:-42427}"
+http_port="${MONOBLOK_HTTP_PORT:-42428}"
+auth_http_port="${MONOBLOK_AUTH_HTTP_PORT:-42429}"
 tmp="${TMPDIR:-/tmp}/monoblok-smoke-$$"
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 sub_in="$tmp/sub.in"
@@ -40,7 +42,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-"$bin" "$patchbay" --host 127.0.0.1 --port "$port" --stats-tick-ms 50 >"$srv_out" 2>&1 &
+"$bin" "$patchbay" --host 127.0.0.1 --port "$port" --http-port "$http_port" --stats-tick-ms 50 >"$srv_out" 2>&1 &
 srv_pid=$!
 sleep 0.2
 
@@ -67,6 +69,61 @@ grep 'MSG $STATS.rules.0.emitted 3 1' "$sub_out" >/dev/null
 grep 'MSG $STATS.rules.0.suppressed 3 1' "$sub_out" >/dev/null
 grep '\$STATS is read-only' "$pub_out" >/dev/null
 grep 'info: loaded 1 patchbay form(s)' "$srv_out" >/dev/null
+
+python3 - "$http_port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+
+def recv_until(sock, needle):
+    data = b""
+    while needle not in data:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError(f"eof before {needle!r}: {data!r}")
+        data += chunk
+    return data
+
+sse = socket.create_connection(("127.0.0.1", port), timeout=5)
+sse.sendall(b"GET /sub/sensors/temp/seen HTTP/1.1\r\nHost: localhost\r\n\r\n")
+headers = recv_until(sse, b"\r\n\r\n")
+if b"200 OK" not in headers or b"text/event-stream" not in headers or b"Server: monoblok" not in headers:
+    raise RuntimeError(f"bad SSE headers: {headers!r}")
+
+pub = socket.create_connection(("127.0.0.1", port), timeout=5)
+pub.sendall(
+    b"POST /pub/sensors/temp HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Type: text/plain\r\n"
+    b"Content-Length: 2\r\n"
+    b"\r\n"
+    b"44"
+)
+resp = recv_until(pub, b"\r\n\r\n")
+if b"202 Accepted" not in resp or b"Server: monoblok" not in resp:
+    raise RuntimeError(f"bad POST response: {resp!r}")
+pub.close()
+
+event = recv_until(sse, b"\n\n")
+if b'event: msg\n' not in event or b'"subject":"sensors.temp.seen"' not in event or b'"payload":"44"' not in event:
+    raise RuntimeError(f"bad SSE event: {event!r}")
+sse.close()
+
+bad = socket.create_connection(("127.0.0.1", port), timeout=5)
+bad.sendall(
+    b"POST /pub/sensors/temp HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Type: application/octet-stream\r\n"
+    b"Content-Length: 1\r\n"
+    b"\r\n"
+    b"x"
+)
+resp = recv_until(bad, b"\r\n\r\n")
+if b"415 Unsupported Media Type" not in resp:
+    raise RuntimeError(f"bad binary content-type response: {resp!r}")
+bad.close()
+PY
 
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$tls_key" -out "$tls_cert" -subj /CN=localhost -days 1 >/dev/null 2>&1
 "$bin" --host 127.0.0.1 --port "$tls_port" --tls-cert "$tls_cert" --tls-key "$tls_key" --stats-tick-ms 100000 >"$tls_srv_out" 2>&1 &
@@ -105,14 +162,15 @@ kill "$tls_srv_pid" 2>/dev/null || true
 wait "$tls_srv_pid" 2>/dev/null || true
 unset tls_srv_pid
 
-MB_SMOKE_AUTH_TOKEN='sekret' "$bin" --host 127.0.0.1 --port "$auth_port" --auth-token-env MB_SMOKE_AUTH_TOKEN --stats-tick-ms 100000 >"$auth_srv_out" 2>&1 &
+MB_SMOKE_AUTH_TOKEN='sekret' "$bin" --host 127.0.0.1 --port "$auth_port" --http-port "$auth_http_port" --auth-token-env MB_SMOKE_AUTH_TOKEN --stats-tick-ms 100000 >"$auth_srv_out" 2>&1 &
 auth_pid=$!
 sleep 0.2
-python3 - "$auth_port" <<'PY'
+python3 - "$auth_port" "$auth_http_port" <<'PY'
 import socket
 import sys
 
 port = int(sys.argv[1])
+http_port = int(sys.argv[2])
 
 def read_line(sock):
     data = b""
@@ -153,19 +211,49 @@ while b"PONG\r\n" not in data:
         raise RuntimeError("eof before authenticated PONG")
     data += chunk
 sock.close()
+
+http = socket.create_connection(("127.0.0.1", http_port), timeout=5)
+http.sendall(
+    b"POST /pub/http/auth HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Type: text/plain\r\n"
+    b"Content-Length: 2\r\n"
+    b"\r\n"
+    b"ok"
+)
+data = read_line(http)
+if b"401 Unauthorized" not in data:
+    raise RuntimeError(f"unauthenticated HTTP POST did not get 401: {data!r}")
+http.close()
+
+http = socket.create_connection(("127.0.0.1", http_port), timeout=5)
+http.sendall(
+    b"POST /pub/http/auth HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Authorization: Bearer sekret\r\n"
+    b"Content-Type: text/plain\r\n"
+    b"Content-Length: 2\r\n"
+    b"\r\n"
+    b"ok"
+)
+data = read_line(http)
+if b"202 Accepted" not in data:
+    raise RuntimeError(f"authenticated HTTP POST did not get 202: {data!r}")
+http.close()
 PY
 kill "$auth_pid" 2>/dev/null || true
 wait "$auth_pid" 2>/dev/null || true
 unset auth_pid
 
-MB_SMOKE_AUTH_USER='alice' MB_SMOKE_AUTH_PASS='wonder' "$bin" --host 127.0.0.1 --port "$auth_user_port" --auth-user-env MB_SMOKE_AUTH_USER --auth-pass-env MB_SMOKE_AUTH_PASS --stats-tick-ms 100000 >"$auth_srv_out" 2>&1 &
+MB_SMOKE_AUTH_USER='alice' MB_SMOKE_AUTH_PASS='wonder' "$bin" --host 127.0.0.1 --port "$auth_user_port" --http-port "$auth_http_port" --auth-user-env MB_SMOKE_AUTH_USER --auth-pass-env MB_SMOKE_AUTH_PASS --stats-tick-ms 100000 >"$auth_srv_out" 2>&1 &
 auth_pid=$!
 sleep 0.2
-python3 - "$auth_user_port" <<'PY'
+python3 - "$auth_user_port" "$auth_http_port" <<'PY'
 import socket
 import sys
 
 port = int(sys.argv[1])
+http_port = int(sys.argv[2])
 sock = socket.create_connection(("127.0.0.1", port), timeout=5)
 info = b""
 while not info.endswith(b"\n"):
@@ -183,6 +271,26 @@ while b"PONG\r\n" not in data:
         raise RuntimeError("eof before authenticated PONG")
     data += chunk
 sock.close()
+
+http = socket.create_connection(("127.0.0.1", http_port), timeout=5)
+http.sendall(
+    b"POST /pub/http/basic HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Authorization: Basic YWxpY2U6d29uZGVy\r\n"
+    b"Content-Type: text/plain\r\n"
+    b"Content-Length: 2\r\n"
+    b"\r\n"
+    b"ok"
+)
+status = b""
+while not status.endswith(b"\n"):
+    chunk = http.recv(1)
+    if not chunk:
+        raise RuntimeError("eof before HTTP basic response")
+    status += chunk
+if b"202 Accepted" not in status:
+    raise RuntimeError(f"authenticated HTTP basic POST did not get 202: {status!r}")
+http.close()
 PY
 kill "$auth_pid" 2>/dev/null || true
 wait "$auth_pid" 2>/dev/null || true
