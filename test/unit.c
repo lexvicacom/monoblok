@@ -412,6 +412,23 @@ static void test_router_lvc_replay(void) {
     mb_router_free(&router);
 }
 
+static void test_router_lvc_latest(void) {
+    mb_router router;
+    mb_router_init(&router);
+    mb_slice filters[] = {lit("sensors.*")};
+    CHECK(mb_router_configure_lvc(&router, filters, 1));
+    CHECK(mb_router_publish(&router, lit("sensors.temp"), lit("31")));
+    CHECK(mb_router_publish(&router, lit("other.temp"), lit("cold")));
+
+    mb_slice payload = {0};
+    CHECK(mb_router_lvc_latest(&router, lit("sensors.temp"), &payload));
+    CHECK(payload.len == 2);
+    CHECK(memcmp(payload.ptr, "31", 2) == 0);
+    CHECK(!mb_router_lvc_latest(&router, lit("other.temp"), &payload));
+    CHECK(!mb_router_lvc_latest(&router, lit("sensors.*"), &payload));
+    mb_router_free(&router);
+}
+
 static void test_router_lvc_live_wildcard(void) {
     mb_router router;
     mb_router_init(&router);
@@ -638,6 +655,7 @@ TEST_MAIN(unit,
           test_router_non_match,
           test_router_wildcards,
           test_router_lvc_replay,
+          test_router_lvc_latest,
           test_router_lvc_live_wildcard,
           test_router_lvc_live_reply_to,
           test_router_lvc_rejects_writes,

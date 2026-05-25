@@ -167,5 +167,6 @@ bool mb_router_subject_matches(mb_slice filter, mb_slice subject);
 bool mb_router_store_lvc(mb_router *router, mb_slice subject, mb_slice payload);
 size_t mb_router_lvc_count(const mb_router *router);
 bool mb_router_lvc_entry(const mb_router *router, size_t index, mb_slice *subject, mb_slice *payload);
+bool mb_router_lvc_latest(const mb_router *router, mb_slice subject, mb_slice *payload);
 
 #endif

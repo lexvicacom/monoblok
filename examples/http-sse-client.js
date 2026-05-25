@@ -105,6 +105,17 @@ class MonoblokHttpClient {
     }
   }
 
+  async latest(subject) {
+    const res = await this.fetch(`${this.baseUrl}/latest/${subjectPath(subject)}`, {
+      method: "GET",
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      throw await responseError("monoblok latest failed", res);
+    }
+    return res.text();
+  }
+
   async *messages(subject, { signal } = {}) {
     const res = await this.fetch(`${this.baseUrl}/sub/${subjectPath(subject)}`, {
       method: "GET",

@@ -270,8 +270,14 @@ Routes use path segments as NATS subject tokens:
 GET  /sub/sensors/temp       -> SSE subscription to sensors.temp
 GET  /sub/sensors/%3E        -> SSE subscription to sensors.>
 GET  /sub/$LVC/sensors/temp  -> SSE subscription to $LVC.sensors.temp
+GET  /latest/sensors/temp    -> one-shot LVC lookup for sensors.temp
 POST /pub/sensors/temp       -> client publish to sensors.temp
 ```
+
+`GET /latest/<subject>` returns the raw cached payload bytes for that exact,
+unprefixed subject. It returns `404` when LVC has no value for the subject and
+`409` when LVC is disabled. Use `/sub/$LVC/...` for wildcard replay or for a
+stream that stays open for future updates.
 
 `POST` requires `Content-Length` plus `Content-Type: text/plain` or
 `Content-Type: application/json`, and rejects NUL bytes. It is intentionally a
@@ -347,17 +353,27 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Connection "";
     }
+
+    location /latest/ {
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+    }
 }
 ```
 
 Serve browser clients from the same nginx origin when possible. monoblok does
-not add CORS headers itself, and same-origin `/sub/...` and `/pub/...` requests
-avoid needing browser-specific CORS handling. If monoblok auth is enabled, make
-sure nginx forwards the `Authorization` header; the default proxy behavior does
-unless you override it.
+not add CORS headers itself, and same-origin `/sub/...`, `/pub/...`, and
+`/latest/...` requests avoid needing browser-specific CORS handling. If monoblok
+auth is enabled, make sure nginx forwards the `Authorization` header; the
+default proxy behavior does unless you override it.
 
-Use the Node demo server to serve the page and proxy `/sub` and `/pub` from the
-same origin, which avoids browser CORS. It can also start a local monoblok
+Use the Node demo server to serve the page and proxy `/sub`, `/pub`, and
+`/latest` from the same origin, which avoids browser CORS. It can also start a local monoblok
 process for the demo:
 
 ```sh
