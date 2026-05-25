@@ -25,7 +25,7 @@ function usage() {
   return [
     "usage: node examples/http-sse-demo.js [--host HOST] [--port PORT] [--monoblok URL] [--open] [--start-monoblok]",
     "",
-    "Serves examples/http-sse-client.html and proxies /sub and /pub to monoblok.",
+    "Serves examples/http-sse-client.html and proxies /sub, /pub, and /latest to monoblok.",
     "Without --start-monoblok, monoblok must already be running with --http-port.",
     "",
     "Defaults:",
@@ -298,6 +298,14 @@ function route(req, res, upstream) {
     proxyToMonoblok(req, res, upstream, reqUrl);
     return;
   }
+  if (pathname.startsWith("/latest/")) {
+    if (req.method !== "GET") {
+      sendText(res, 405, "use GET for /latest\n");
+      return;
+    }
+    proxyToMonoblok(req, res, upstream, reqUrl);
+    return;
+  }
 
   sendText(res, 404, "not found\n");
 }
@@ -352,7 +360,7 @@ function main() {
   server.listen(opts.port, opts.host, async () => {
     const url = browserUrl(opts.host, opts.port);
     console.log(`monoblok HTTP/SSE demo: ${url}`);
-    console.log(`proxying /sub and /pub to ${opts.upstream.href.replace(/\/$/, "")}`);
+    console.log(`proxying /sub, /pub, and /latest to ${opts.upstream.href.replace(/\/$/, "")}`);
     if (opts.startMonoblok) {
       try {
         await waitForUpstream(opts.upstream, 4000);

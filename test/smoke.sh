@@ -71,6 +71,7 @@ grep '\$STATS is read-only' "$pub_out" >/dev/null
 grep 'info: loaded 1 patchbay form(s)' "$srv_out" >/dev/null
 
 python3 - "$http_port" <<'PY'
+import http.client
 import socket
 import sys
 
@@ -84,6 +85,18 @@ def recv_until(sock, needle):
             raise RuntimeError(f"eof before {needle!r}: {data!r}")
         data += chunk
     return data
+
+def latest_request(path):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", path)
+    res = conn.getresponse()
+    out = {
+        "status": res.status,
+        "content_type": res.getheader("Content-Type"),
+        "body": res.read(),
+    }
+    conn.close()
+    return out
 
 sse = socket.create_connection(("127.0.0.1", port), timeout=5)
 sse.sendall(b"GET /sub/sensors/temp/seen HTTP/1.1\r\nHost: localhost\r\n\r\n")
@@ -109,6 +122,14 @@ event = recv_until(sse, b"\n\n")
 if b'event: msg\n' not in event or b'"subject":"sensors.temp.seen"' not in event or b'"payload":"44"' not in event:
     raise RuntimeError(f"bad SSE event: {event!r}")
 sse.close()
+
+latest = latest_request("/latest/sensors/temp")
+if latest["status"] != 200 or latest["content_type"] != "application/octet-stream" or latest["body"] != b"44":
+    raise RuntimeError(f"bad latest response: {latest!r}")
+
+missing = latest_request("/latest/missing/value")
+if missing["status"] != 404 or missing["body"] != b"not cached\n":
+    raise RuntimeError(f"bad missing latest response: {missing!r}")
 
 bad = socket.create_connection(("127.0.0.1", port), timeout=5)
 bad.sendall(

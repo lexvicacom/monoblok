@@ -578,6 +578,29 @@ bool mb_router_lvc_entry(const mb_router *router, size_t index, mb_slice *subjec
     return true;
 }
 
+bool mb_router_lvc_latest(const mb_router *router, mb_slice subject, mb_slice *payload) {
+    if (payload == NULL || !mb_proto_subject_valid(subject, false) || !lvc_subject_enabled(router, subject)) {
+        return false;
+    }
+    const uint64_t hash = mb_slice_hash(subject);
+    const size_t found = lvc_index_find(router, subject, hash);
+    if (found != SIZE_MAX) {
+        const mb_lvc_entry *entry = &router->lvc[found];
+        *payload = (mb_slice){.ptr = entry->payload.ptr, .len = entry->payload.len};
+        return true;
+    }
+    if (router->lvc_index_cap == 0) {
+        for (size_t i = 0; i < router->lvc_len; i += 1) {
+            const mb_lvc_entry *entry = &router->lvc[i];
+            if (mb_slice_eq((mb_slice){.ptr = entry->subject, .len = entry->subject_len}, subject)) {
+                *payload = (mb_slice){.ptr = entry->payload.ptr, .len = entry->payload.len};
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static bool emit_cached(mb_router *router, mb_router_conn *conn, mb_slice filter, mb_slice sid) {
     if (!router->lvc_enabled) {
         return false;

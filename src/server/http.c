@@ -88,6 +88,11 @@ static bool slice_eq_lit(mb_slice s, const char *lit) {
     return s.len == n && memcmp(s.ptr, lit, n) == 0;
 }
 
+static bool slice_starts_lit(mb_slice s, const char *lit) {
+    const size_t n = strlen(lit);
+    return s.len >= n && memcmp(s.ptr, lit, n) == 0;
+}
+
 static bool slice_eq_ci_lit(mb_slice s, const char *lit) {
     const size_t n = strlen(lit);
     if (s.len != n) {
@@ -270,29 +275,47 @@ static void write_cb(uv_write_t *req, int status) {
     kick_write(conn);
 }
 
-static bool write_response(mb_http_conn *conn, int code, const char *reason,
-                           const char *extra_header, const char *body) {
-    const char *payload = body == NULL ? "" : body;
-    const size_t payload_len = strlen(payload);
+static bool write_response_bytes(mb_http_conn *conn, int code, const char *reason,
+                                 const char *extra_header, const char *content_type, mb_slice body) {
+    const char *type = content_type == NULL ? "text/plain; charset=utf-8" : content_type;
     if (!append_lit(&conn->router_conn.out, "HTTP/1.1 ") ||
         !append_usize(&conn->router_conn.out, (size_t)code) ||
         !mb_buf_append_byte(&conn->router_conn.out, ' ') ||
         !append_lit(&conn->router_conn.out, reason) ||
         !append_lit(&conn->router_conn.out, "\r\nServer: monoblok\r\nConnection: close\r\nContent-Length: ") ||
-        !append_usize(&conn->router_conn.out, payload_len) ||
-        !append_lit(&conn->router_conn.out, "\r\nContent-Type: text/plain; charset=utf-8\r\n")) {
+        !append_usize(&conn->router_conn.out, body.len) ||
+        !append_lit(&conn->router_conn.out, "\r\nContent-Type: ") ||
+        !append_lit(&conn->router_conn.out, type) ||
+        !append_lit(&conn->router_conn.out, "\r\n")) {
         return false;
     }
     if (extra_header != NULL && !append_lit(&conn->router_conn.out, extra_header)) {
         return false;
     }
     return append_lit(&conn->router_conn.out, "\r\n") &&
-           mb_buf_append(&conn->router_conn.out, payload, payload_len);
+           mb_buf_append(&conn->router_conn.out, body.ptr, body.len);
+}
+
+static bool write_response(mb_http_conn *conn, int code, const char *reason,
+                           const char *extra_header, const char *body) {
+    const char *payload = body == NULL ? "" : body;
+    return write_response_bytes(conn, code, reason, extra_header, NULL,
+                                (mb_slice){.ptr = (const uint8_t *)payload, .len = strlen(payload)});
 }
 
 static void respond_and_close(mb_http_conn *conn, int code, const char *reason,
                               const char *extra_header, const char *body) {
     if (!write_response(conn, code, reason, extra_header, body)) {
+        http_conn_begin_close(conn);
+        return;
+    }
+    conn->close_after_write = true;
+    kick_write(conn);
+}
+
+static void respond_bytes_and_close(mb_http_conn *conn, int code, const char *reason,
+                                    const char *extra_header, const char *content_type, mb_slice body) {
+    if (!write_response_bytes(conn, code, reason, extra_header, content_type, body)) {
         http_conn_begin_close(conn);
         return;
     }
@@ -662,6 +685,28 @@ static const char *auth_header(const mb_server *server) {
     return NULL;
 }
 
+static void handle_latest(mb_http_conn *conn, const mb_http_request *req) {
+    if (!decode_subject_path(req->target, "/latest/", false, &conn->subject)) {
+        respond_and_close(conn, 400, "Bad Request", NULL, "invalid latest path\n");
+        return;
+    }
+    const mb_slice subject = {.ptr = conn->subject.ptr, .len = conn->subject.len};
+    if (mb_router_subject_has_lvc_prefix(subject)) {
+        respond_and_close(conn, 400, "Bad Request", NULL, "use the unprefixed subject\n");
+        return;
+    }
+    if (!conn->server->lvc_enabled) {
+        respond_and_close(conn, 409, "Conflict", NULL, "$LVC is disabled\n");
+        return;
+    }
+    mb_slice payload = {0};
+    if (!mb_router_lvc_latest(&conn->server->router, subject, &payload)) {
+        respond_and_close(conn, 404, "Not Found", NULL, "not cached\n");
+        return;
+    }
+    respond_bytes_and_close(conn, 200, "OK", "Cache-Control: no-cache\r\n", "application/octet-stream", payload);
+}
+
 static void handle_get(mb_http_conn *conn, const mb_http_request *req) {
     if (req->has_content_length && req->content_length != 0) {
         respond_and_close(conn, 400, "Bad Request", NULL, "GET body is not supported\n");
@@ -669,6 +714,14 @@ static void handle_get(mb_http_conn *conn, const mb_http_request *req) {
     }
     if (!request_authorized(conn, req)) {
         respond_and_close(conn, 401, "Unauthorized", auth_header(conn->server), "unauthorized\n");
+        return;
+    }
+    if (slice_starts_lit(req->target, "/latest/")) {
+        handle_latest(conn, req);
+        return;
+    }
+    if (!slice_starts_lit(req->target, "/sub/")) {
+        respond_and_close(conn, 400, "Bad Request", NULL, "invalid GET path\n");
         return;
     }
     if (!decode_subject_path(req->target, "/sub/", true, &conn->subject)) {
