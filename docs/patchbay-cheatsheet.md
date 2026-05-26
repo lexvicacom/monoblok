@@ -27,7 +27,7 @@ arrays are calls, the first array item is always the operator symbol,
 object arguments become keyword options, and
 `"subject"` / `"payload"` / `"payload-float"` / `"payload-int"` /
 `"replaying?"` become symbols in rule expressions.
-In top-level config string positions, YAML `env: NAME` lowers to
+In top-level config string positions, YAML `env: "NAME"` lowers to
 EDN `(env "NAME")`.
 
 | EDN | JSON |
@@ -62,7 +62,7 @@ EDN `(env "NAME")`.
 
 ## Side effects
 
-Trailing `!` marks forms that emit (terminal effect, return nil). Scan a rule and the bangs are the lines that put bytes on the wire; everything else is pure. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) still work as aliases for now. `publish!` and `publish-to!` are now identical (the args-flipped distinction is gone): both take `SUBJECT VALUE`, both coerce numbers, both no-op on nil VALUE.
+Trailing `!` marks forms that emit (terminal effect, return nil). Scan a rule and the bangs are the lines that put bytes on the wire; everything else is pure. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) still work as aliases for now. `publish!` and `publish-to!` are now identical (the args-flipped distinction is gone): both take `SUBJECT VALUE`, both coerce numbers, both no-op on nil VALUE. Add `:dp N` to format a numeric publish payload with 0-15 fixed decimal places.
 
 Use `(do ...)` when one rule body should run multiple effects, for
 example `(do (publish! (subject-append "raw") payload) (bar! 60 payload-float))`.
@@ -74,8 +74,10 @@ window.
 | form | effect |
 |------|--------|
 | `(publish! SUBJECT VALUE)` | emit a publish; no-op if VALUE is nil; numbers coerced canonically |
+| `(publish! SUBJECT :dp N VALUE)` | emit a numeric payload formatted with exactly N decimal places, 0-15 |
 | `(json-demux! KEY... PAYLOAD)` | break JSON fields or dotted object paths out onto `<subject>.<suffix>` |
 | `(count!)` / `(count! COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
+| `(count! :subject SUBJECT COND?)` | same counter, but publish to an explicit subject |
 | `(bar! WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
 | `(on-silence :ms N BODY...)` | reset a per-subject timer on each match; evaluate BODY if no match arrives for N ms |
 | `(dropout :ms N :lost LOST :found FOUND)` | first match arms quietly; silence runs LOST once; next match runs FOUND once |
@@ -192,7 +194,7 @@ a compatibility alias. Counters remain `$STATS.bridge.published` /
 `.dropped` on the normal stats tick.
 
 String-valued config fields can use `(env "NAME")`; YAML uses
-`env: NAME`. Env values are read once at patchbay load time, must be
+`env: "NAME"`. Env values are read once at patchbay load time, must be
 non-empty, and are not comma-split.
 
 | keyword | type | meaning |

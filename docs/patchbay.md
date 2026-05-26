@@ -73,17 +73,17 @@ YAML never evaluates and no EDN/JSON text is generated internally.
 Supported shapes are block maps/lists, flow arrays for call forms,
 quoted or unquoted scalars, numbers, booleans, nulls, top-level `on`,
 `lvc`, `export`, `bridge`, and `import`. In top-level config string
-positions, `env: NAME` lowers to `(env "NAME")`.
+positions, `env: "NAME"` lowers to `(env "NAME")`.
 
 ```yaml
 on:
-  - sub: car.*.rpm
+  - sub: "car.*.rpm"
     thread:
       from: payload-float
       steps:
         - [quantize, 50]
         - [squelch]
-        - [publish!, [subject-append, "stable"]]
+        - [publish!, [subject-append, "stable"], :dp, 1]
 ```
 
 That lowers to the same AST as:
@@ -93,13 +93,15 @@ That lowers to the same AST as:
   (-> payload-float
       (quantize 50)
       (squelch)
-      (publish! (subject-append "stable"))))
+      (publish! (subject-append "stable") :dp 1)))
 ```
 
 Within expression arrays, the first item is a form symbol; bound names
 such as `payload`, `payload-float`, `payload-int`, `subject`, and
 `replaying?` lower as symbols; other scalar arguments lower as strings
-unless they are numbers, booleans, nulls, or keywords like `:ms`. See
+unless they are numbers, booleans, nulls, or keywords like `:ms`.
+Examples quote those literal strings so they are easy to distinguish
+from symbols and operators. See
 [`examples/rental-car.yml`](../examples/rental-car.yml) for the fuller
 shape and [`patchbay-yaml-schema.md`](./patchbay-yaml-schema.md) for the
 YAML shape reference.
@@ -192,22 +194,22 @@ lvc:
 import:
   streams:
     - servers:
-        - env: JS_URL
+        - env: "JS_URL"
       subject: "js.sensors.temp"
-      stream: SENSORS
-      consumer: monoblok-jetstream-example
+      stream: "SENSORS"
+      consumer: "monoblok-jetstream-example"
       catch-up: true
 
 export:
   servers:
-    - env: BRIDGE_URL
+    - env: "BRIDGE_URL"
   origin-header: true
   replay-header: true
   export:
     - "js.>"
 
 on:
-  - sub: js.sensors.temp
+  - sub: "js.sensors.temp"
     form:
       - do
       - [count!]
@@ -285,15 +287,15 @@ same non-empty validation as `""`; values are not split on commas:
   :export  ["sensors.>"])
 ```
 
-In YAML config, write the same value as `env: NAME`:
+In YAML config, write the same value as `env: "NAME"`:
 
 ```yaml
 export:
   servers:
-    env: NATS_SERVERS
+    env: "NATS_SERVERS"
   token:
-    env: NATS_TOKEN
-  export: [sensors.>]
+    env: "NATS_TOKEN"
+  export: ["sensors.>"]
 ```
 
 ## Values
@@ -409,12 +411,27 @@ same inbound message should trigger several side effects:
 ```
 
 `(publish! SUBJECT VALUE)` validates `SUBJECT` as a publishable
-subject (no wildcards, no `$LVC.*`), coerces `VALUE` to its canonical
-string form (numbers stringified, booleans → `"true"` / `"false"`,
-strings passed through), and enqueues a fan-out. Returns `nil`.
-Publishes from rules participate in normal delivery + configured LVC caching. By
-default they are not fed back through rule evaluation; opt in per rule
-with `:reentrant true` (see "Re-entry" below).
+subject (no wildcards, no `$LVC.*` or `$STATS.*`), coerces `VALUE` to
+its canonical string form (numbers stringified, booleans → `"true"` /
+`"false"`, strings passed through), and enqueues a fan-out. Returns
+`nil`.
+Use `(publish! SUBJECT :dp N VALUE)` when a numeric payload should be
+formatted with exactly `N` decimal places at the output boundary. `N`
+must be an integer from 0 to 15.
+
+```edn
+(-> payload-float
+    (moving-avg 10)
+    (publish! "sensors.temp.avg" :dp 1))
+```
+
+The moving average keeps raw numeric state, and only the emitted text is
+rounded. Direct calls may also put the option after the value:
+`(publish! SUBJECT VALUE :dp N)`.
+
+Publishes from rules participate in normal delivery + configured LVC
+caching. By default they are not fed back through rule evaluation; opt in
+per rule with `:reentrant true` (see "Re-entry" below).
 
 If `VALUE` is `nil` (which is what a gate returns when it suppresses),
 `publish!` is a no-op. That nil short-circuit is what makes the
@@ -980,6 +997,10 @@ With one optional argument, `(count! COND)` only increments when `COND`
 is truthy (any value type, same rules as `if` / `when`). The predicate
 itself is fully general, so it composes with everything the dialect
 already has (`contains?`, comparisons, `changed?`, `rising-edge`, ...).
+Use `(count! :subject SUBJECT)` or `(count! :subject SUBJECT COND)` to
+publish the counter somewhere other than `<subject>.count`. The counter
+identity remains per source `(rule, subject)`; the option only changes
+the output subject.
 
 ```edn
 ; Total tick count per symbol, live on MARKET.AAPL.count etc.
@@ -993,6 +1014,11 @@ already has (`contains?`, comparisons, `changed?`, `rising-edge`, ...).
 ; Threshold breaches.
 (on "sensors.>"
   (count! (> payload-float 100)))
+
+; Publish edge counts to a fixed rollup subject instead of per-source .count.
+(on "sensors.>"
+  (count! :subject "metrics.sensor.hot_edges"
+          (rising-edge (> payload-float 100))))
 ```
 
 State is a single number, snapshot-persisted, so a restart resumes from

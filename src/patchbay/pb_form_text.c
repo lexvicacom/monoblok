@@ -7,6 +7,45 @@
 
 #include "router.h"
 
+static bool keyword_eq(pb_value v, const char *lit) {
+    return v.kind == PB_KEYWORD && text_eq(v.text, lit);
+}
+
+static bool publish_subject_valid(pb_slice subject) {
+    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject.ptr, .len = subject.len};
+    return mb_proto_subject_valid(mb_subject, false) &&
+           !mb_router_subject_has_lvc_prefix(mb_subject) &&
+           !mb_router_subject_has_stats_prefix(mb_subject);
+}
+
+static bool parse_decimal_places(pb_value v, int *out) {
+    double places = 0;
+    if (!as_number(v, &places) ||
+        places < 0 ||
+        places > 15 ||
+        floor(places) != places) {
+        return false;
+    }
+    *out = (int)places;
+    return true;
+}
+
+static bool format_number_dp(pb_eval_ctx *ctx, double number, int places, pb_slice *out) {
+    const int n = snprintf(NULL, 0, "%.*f", places, number);
+    if (n < 0 || (size_t)n == SIZE_MAX) {
+        return false;
+    }
+    char *owned = pb_arena_alloc(ctx->arena, (size_t)n + 1, 1);
+    if (owned == NULL) {
+        return false;
+    }
+    if (snprintf(owned, (size_t)n + 1, "%.*f", places, number) != n) {
+        return false;
+    }
+    *out = (pb_slice){.ptr = owned, .len = (size_t)n};
+    return true;
+}
+
 static pb_eval_result call_str_concat(pb_eval_ctx *ctx, pb_values args) {
     size_t total = 0;
     for (size_t i = 0; i < args.len; i += 1) {
@@ -159,10 +198,7 @@ static pb_eval_result call_subject_with(pb_eval_ctx *ctx, pb_values args) {
         memcpy(out + off, parts[i].ptr, parts[i].len);
         off += parts[i].len;
     }
-    const mb_slice mb_subject = {.ptr = (const uint8_t *)out, .len = total};
-    if (!mb_proto_subject_valid(mb_subject, false) ||
-        mb_router_subject_has_lvc_prefix(mb_subject) ||
-        mb_router_subject_has_stats_prefix(mb_subject)) {
+    if (!publish_subject_valid((pb_slice){.ptr = out, .len = total})) {
         return fail(PB_EVAL_INVALID_SUBJECT);
     }
     return ok((pb_value){.kind = PB_STRING, .text = {.ptr = out, .len = total}});
@@ -230,22 +266,46 @@ static pb_eval_result call_print(pb_eval_ctx *ctx, pb_values args) {
 }
 
 static pb_eval_result call_publish(pb_eval_ctx *ctx, pb_values args) {
-    if (args.len != 2) {
+    if (args.len != 2 && args.len != 4) {
         return fail(PB_EVAL_ARITY);
     }
-    if (args.items[1].kind == PB_NIL) {
+
+    size_t value_idx = 1;
+    int places = -1;
+    if (args.len == 4) {
+        if (keyword_eq(args.items[1], "dp")) {
+            value_idx = 3;
+            if (!parse_decimal_places(args.items[2], &places)) {
+                return fail(PB_EVAL_TYPE);
+            }
+        } else if (keyword_eq(args.items[2], "dp")) {
+            value_idx = 1;
+            if (!parse_decimal_places(args.items[3], &places)) {
+                return fail(PB_EVAL_TYPE);
+            }
+        } else {
+            return fail(PB_EVAL_ARITY);
+        }
+    }
+
+    if (args.items[value_idx].kind == PB_NIL) {
         return nil();
     }
 
     pb_slice subject = {0};
     pb_slice payload = {0};
-    if (!as_string(args.items[0], &subject) || !coerce_payload(ctx, args.items[1], &payload)) {
+    if (!as_string(args.items[0], &subject)) {
         return fail(PB_EVAL_TYPE);
     }
-    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject.ptr, .len = subject.len};
-    if (!mb_proto_subject_valid(mb_subject, false) ||
-        mb_router_subject_has_lvc_prefix(mb_subject) ||
-        mb_router_subject_has_stats_prefix(mb_subject)) {
+    if (places >= 0) {
+        if (args.items[value_idx].kind != PB_NUMBER ||
+            !format_number_dp(ctx, args.items[value_idx].number, places, &payload)) {
+            return fail(PB_EVAL_TYPE);
+        }
+    } else if (!coerce_payload(ctx, args.items[value_idx], &payload)) {
+        return fail(PB_EVAL_TYPE);
+    }
+    if (!publish_subject_valid(subject)) {
         return fail(PB_EVAL_INVALID_SUBJECT);
     }
     if (ctx->publish == NULL || !ctx->publish(ctx->publish_ctx, subject, payload)) {

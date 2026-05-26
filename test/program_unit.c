@@ -348,16 +348,16 @@ static void test_yaml_config_env_values_load(void) {
     const char *src =
         "export:\n"
         "  servers:\n"
-        "    env: MB_TEST_PB_YAML_SERVER\n"
+        "    env: \"MB_TEST_PB_YAML_SERVER\"\n"
         "  export:\n"
-        "    - env: MB_TEST_PB_YAML_EXPORT\n"
+        "    - env: \"MB_TEST_PB_YAML_EXPORT\"\n"
         "  name:\n"
-        "    env: MB_TEST_PB_YAML_NAME\n"
+        "    env: \"MB_TEST_PB_YAML_NAME\"\n"
         "import:\n"
         "  servers:\n"
-        "    - env: MB_TEST_PB_YAML_SERVER\n"
+        "    - env: \"MB_TEST_PB_YAML_SERVER\"\n"
         "  subject:\n"
-        "    env: MB_TEST_PB_YAML_SUBJECT\n";
+        "    env: \"MB_TEST_PB_YAML_SUBJECT\"\n";
     CHECK(pb_program_load_source(&program, "env.yml", src, strlen(src)));
     CHECK(program.bridge.present);
     CHECK(slice_is(program.bridge.servers[0], "nats://yaml:4222"));
@@ -473,8 +473,8 @@ static void test_yaml_nested_import_config_loads(void) {
         "  streams:\n"
         "    - servers: [\"nats://js-yaml:4222\"]\n"
         "      subject: [\"sensors.yaml.>\"]\n"
-        "      stream: SENSORS_YAML\n"
-        "      consumer: monoblok-sensors-yaml\n"
+        "      stream: \"SENSORS_YAML\"\n"
+        "      consumer: \"monoblok-sensors-yaml\"\n"
         "      catch-up: true\n";
     CHECK(pb_program_load_source(&program, "nested-import.yml", src, strlen(src)));
     CHECK(program.importer.present);

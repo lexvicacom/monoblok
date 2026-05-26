@@ -165,7 +165,7 @@ comparison. The compact schema is:
   aliases, tags, or multiline strings.
 - The root document is a map. Supported top-level keys are `on`, `lvc`,
   `export`, deprecated `bridge`, and `import`.
-- `lvc` accepts one string-like value, one `env: NAME` value, or a list of
+- `lvc` accepts one string-like value, one `env: "NAME"` value, or a list of
   those values.
 - `export` is a config map with fields such as `servers`, `name`, `creds`,
   `user`, `password`, `token`, `tls`, `tls-ca`, `tls-cert`, `tls-key`,
@@ -174,24 +174,25 @@ comparison. The compact schema is:
   `bridge` has the same shape but is deprecated.
 - `import` is a config map with the connection fields above plus `subject` /
   `subjects`, `origin-header`, and `max-pending`.
-- In top-level config string positions, `env: NAME` lowers to `(env "NAME")`.
+- In top-level config string positions, `env: "NAME"` lowers to `(env "NAME")`.
   Do not use it inside rule bodies.
 - `on` is a list of rule maps. Each rule requires `sub`, may include
   `reentrant: true`, and must include exactly one body shape: `thread`, `when`,
   `do`, `form`, or `body`.
 - `thread` lowers to `->`. It can be a list (`[payload-float, [round, 1],
-  [publish!, clean.temp]]`) or a map with `from` and `steps`.
+  [publish!, "clean.temp"]]`) or a map with `from` and `steps`.
 - `when` lowers to `(when TEST BODY)` and has `test` plus `then`.
 - `do` is a list of bodies and lowers to `(do BODY...)`.
 - `form` and `body` are direct expressions for cases such as `transition`,
   `count!`, or `bar!`.
 - Flow arrays in expression positions are call forms, with the operator as the
-  first element: `[publish!, [subject-append, stable]]`.
+  first element: `[publish!, [subject-append, "stable"]]`.
 - In expression positions only `subject`, `payload`, `payload-float`, and
   `payload-int` become bound symbols; other string-like scalars become strings
-  unless they are numbers, booleans, nulls, or keywords such as `:ms`. Quote
-  subjects, URLs, and payload strings when it improves clarity or avoids YAML
-  punctuation traps.
+  unless they are numbers, booleans, nulls, or keywords such as `:ms`, `:dp`,
+  or `:subject`. In examples and ports, leave operators/bound symbols/keywords
+  bare, but quote actual string literals such as subjects, URLs, env names, and
+  payload strings.
 
 Validate YAML ports with `monoblok --validate file.yml`. When behavior matters,
 compare the original and ported files with `--soundcheck` using the same input
@@ -235,7 +236,7 @@ Side effects:
 
 Forms whose entire purpose is to emit (terminal effect, return nil) carry a trailing `!`. Scanning a rule, the bangs are the lines that put bytes on the wire; everything else is pure or value-returning. Un-banged spellings (`publish`, `publish-to`, `publish-to!`, `json-demux`, `count`, `bar`) are still accepted as aliases. `publish` and `publish-to` were once distinct (args flipped); they collapsed to one form when the distinction stopped mattering. Use `publish!`.
 
-- `(publish! SUBJECT VALUE)` validates SUBJECT, coerces VALUE (numbers stringified canonically, booleans -> "true"/"false"), enqueues. No-op if VALUE is nil so a suppressed gate upstream self-terminates the chain. Returns nil.
+- `(publish! SUBJECT VALUE)` validates SUBJECT, coerces VALUE (numbers stringified canonically, booleans -> "true"/"false"), enqueues. `(publish! SUBJECT :dp N VALUE)` formats numeric VALUE with exactly N decimal places at the output boundary, with N in 0-15; in a thread use `(-> payload-float (moving-avg 10) (publish! "out.avg" :dp 1))`. No-op if VALUE is nil so a suppressed gate upstream self-terminates the chain. Returns nil.
 
 Idempotent filters (per-rule, per-subject state; first sight always passes / is treated as "no prior"):
 
@@ -279,7 +280,7 @@ Bars (side-effecting, per (rule, subject, window-kind)):
 
 Running counters (side-effecting, per (rule, subject)):
 
-- `(count!)` and `(count! COND)` increment a running total and publish it to `<subject>.count`. With no args, fires every call; with one arg, only when COND is truthy (same rules as `if` / `when`, so any predicate composes: `(count! (contains? payload "ERROR"))`, `(count! (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
+- `(count!)` and `(count! COND)` increment a running total and publish it to `<subject>.count`. Use `(count! :subject SUBJECT)` or `(count! :subject SUBJECT COND)` to publish that counter to an explicit subject; the state remains per source `(rule, subject)`. With no condition, fires every call; with COND, only when COND is truthy (same rules as `if` / `when`, so any predicate composes: `(count! (contains? payload "ERROR"))`, `(count! (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
 
 - `(print! X)` and `(print! LABEL X)` are debug aids: write one line to stderr (`print! [SUBJECT] LABEL = VALUE`) and return `X` unchanged, so they sit cleanly inside `(-> ... (print! "raw") (round 1) (print! "rounded") ...)` without changing the value path. `print!` is not a publish (no `$STATS` bump, not gated by `--trace`). The loader walks every rule body and counts `print!` calls; if any are present the server logs a single warning at startup so a left-in `print!` is visible in the boot log. Use it during debugging, take it out when you ship.
 

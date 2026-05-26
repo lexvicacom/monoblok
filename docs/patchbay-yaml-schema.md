@@ -32,18 +32,18 @@ Example:
 
 ```yaml
 lvc:
-  - sensors.>
+  - "sensors.>"
 
 export:
   servers: ["nats://127.0.0.1:4223"]
   export: ["clean.>"]
 
 on:
-  - sub: sensors.temp
+  - sub: "sensors.temp"
     thread:
       - payload-float
       - [round, 1]
-      - [publish!, clean.temp]
+      - [publish!, "clean.temp", :dp, 1]
 ```
 
 ## Scalars
@@ -60,6 +60,8 @@ In expression positions:
 | `subject` | bound symbol |
 | `replaying?` | bound symbol |
 | `:ms` | keyword `:ms` |
+| `:dp` | keyword `:dp` |
+| `:subject` | keyword `:subject` |
 | `true` / `false` | boolean |
 | `null` / `nil` / `~` | nil |
 | `123`, `12.5`, `-5` | number |
@@ -67,8 +69,8 @@ In expression positions:
 
 In top-level config positions, string-like scalars are strings, not symbols.
 
-Use quotes when a scalar could be misread by YAML's scalar rules, or when the
-string contains characters that are clearer quoted:
+Examples quote literal strings to keep them visually distinct from operators,
+bound symbols, keywords, booleans, nulls, and numbers:
 
 ```yaml
 export:
@@ -80,18 +82,18 @@ export:
 
 ## Environment Values
 
-In top-level config string positions, a one-entry map of `env: NAME` lowers to
+In top-level config string positions, a one-entry map of `env: "NAME"` lowers to
 `(env "NAME")`. The environment variable is read once at patchbay load time.
 The value must be present and non-empty, and is not split on commas.
 
 ```yaml
 export:
   servers:
-    env: NATS_SERVERS
+    env: "NATS_SERVERS"
   token:
-    env: NATS_TOKEN
+    env: "NATS_TOKEN"
   export:
-    - sensors.>
+    - "sensors.>"
 ```
 
 Environment values are for config fields only. They are not a rule-body form.
@@ -102,18 +104,18 @@ Environment values are for config fields only. They are not a rule-body form.
 list of string-like values:
 
 ```yaml
-lvc: demo.>
+lvc: "demo.>"
 ```
 
 ```yaml
 lvc:
-  - demo.>
-  - alerts.>
+  - "demo.>"
+  - "alerts.>"
 ```
 
 ```yaml
 lvc:
-  - env: LVC_FILTER
+  - env: "LVC_FILTER"
 ```
 
 ## `export`
@@ -199,8 +201,8 @@ import:
   streams:
     - servers: ["nats://127.0.0.1:4222"]
       subject: ["sensors.>"]
-      stream: SENSORS
-      consumer: monoblok-sensors
+      stream: "SENSORS"
+      consumer: "monoblok-sensors"
       catch-up: true
 ```
 
@@ -218,22 +220,22 @@ lvc:
 import:
   streams:
     - servers:
-        - env: JS_URL
+        - env: "JS_URL"
       subject: "js.sensors.temp"
-      stream: SENSORS
-      consumer: monoblok-jetstream-example
+      stream: "SENSORS"
+      consumer: "monoblok-jetstream-example"
       catch-up: true
 
 export:
   servers:
-    - env: BRIDGE_URL
+    - env: "BRIDGE_URL"
   origin-header: true
   replay-header: true
   export:
     - "js.>"
 
 on:
-  - sub: js.sensors.temp
+  - sub: "js.sensors.temp"
     form:
       - do
       - [count!]
@@ -241,7 +243,7 @@ on:
       - [bar!, :ms, 1000, payload-float]
       - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
 
-  - sub: js.sensors.temp
+  - sub: "js.sensors.temp"
     when:
       test: [not, replaying?]
       then:
@@ -277,12 +279,12 @@ shape.
 
 ```yaml
 on:
-  - sub: raw.temp
+  - sub: "raw.temp"
     thread:
       - payload-float
       - [round, 1]
       - [squelch]
-      - [publish!, clean.temp]
+      - [publish!, "clean.temp"]
 ```
 
 Rule fields:
@@ -311,7 +313,7 @@ thread:
   - payload-float
   - [round, 1]
   - [squelch]
-  - [publish!, clean.temp]
+  - [publish!, "clean.temp"]
 ```
 
 Equivalent map form:
@@ -322,7 +324,7 @@ thread:
   steps:
     - [round, 1]
     - [squelch]
-    - [publish!, clean.temp]
+    - [publish!, "clean.temp"]
 ```
 
 Both lower to:
@@ -340,14 +342,14 @@ Both lower to:
 
 ```yaml
 on:
-  - sub: sensors.temp
+  - sub: "sensors.temp"
     when:
       test: [>, payload-float, 80.0]
       then:
         thread:
           - payload
           - [hold-off, 5000]
-          - [publish!, alerts.temp]
+          - [publish!, "alerts.temp"]
 ```
 
 This lowers to:
@@ -366,13 +368,13 @@ Use `do` when one rule should run multiple effects.
 
 ```yaml
 on:
-  - sub: sensors.temp
+  - sub: "sensors.temp"
     do:
-      - [publish!, sensors.temp.raw, payload]
+      - [publish!, "sensors.temp.raw", payload]
       - thread:
           - payload-float
           - [round, 1]
-          - [publish!, sensors.temp.clean]
+          - [publish!, "sensors.temp.clean"]
 ```
 
 ## Direct Forms
@@ -381,8 +383,8 @@ Use `form` or `body` when the rule body is already one expression.
 
 ```yaml
 on:
-  - sub: logs.*
-    form: [when, [contains?, payload, alert], [publish!, alerts.log, payload]]
+  - sub: "logs.*"
+    form: [when, [contains?, payload, "alert"], [publish!, "alerts.log", payload]]
 ```
 
 `form` and `body` lower the supplied expression directly.
@@ -395,15 +397,20 @@ remaining items are arguments.
 ```yaml
 [round, 1]
 [moving-avg, :ms, 5000, payload-float]
-[publish!, [subject-append, stable]]
+[publish!, [subject-append, "stable"], :dp, 1]
+[count!, :subject, "metrics.temp.count", [>, payload-float, 100]]
 ```
+
+For `publish!`, `:dp N` formats a numeric payload with exactly `N`
+decimal places, where `N` is an integer from 0 to 15.
 
 These lower to:
 
 ```edn
 (round 1)
 (moving-avg :ms 5000 payload-float)
-(publish! (subject-append "stable"))
+(publish! (subject-append "stable") :dp 1)
+(count! :subject "metrics.temp.count" (> payload-float 100))
 ```
 
 Nested arrays are nested calls. There is no YAML syntax for a literal vector
@@ -430,13 +437,13 @@ export:
     - "clean.>"
 
 on:
-  - sub: raw.temp
+  - sub: "raw.temp"
     thread:
       from: payload-float
       steps:
         - [round, 1]
         - [squelch]
-        - [publish!, clean.temp]
+        - [publish!, "clean.temp"]
 ```
 
 Validate YAML patchbays with the daemon before using them:

@@ -202,6 +202,32 @@ static void test_publish(void) {
     check_text(pub.subjects[0], "alias");
     check_text(pub.payloads[0], "42");
     pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload(&arena, "(publish! \"rounded\" :dp 2 payload-float)", "42.1234", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.subjects[0], "rounded");
+    check_text(pub.payloads[0], "42.12");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload(&arena, "(publish! \"rounded\" payload-float :dp 1)", "42.16", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.payloads[0], "42.2");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload(&arena, "(-> payload-float (publish! \"threaded\" :dp 1))", "42.16", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.subjects[0], "threaded");
+    check_text(pub.payloads[0], "42.2");
+    pb_arena_free(&arena);
 }
 
 static void test_thread_and_numeric_helpers(void) {
@@ -293,6 +319,47 @@ static void test_stateful_helpers(void) {
     CHECK(pub.count == 1);
     check_text(pub.subjects[0], "sensors.temp.count");
     check_text(pub.payloads[0], "1");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(count! :subject \"metrics.temp.total\")", "15", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.subjects[0], "metrics.temp.total");
+    check_text(pub.payloads[0], "2");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(-> true (count! :subject \"metrics.temp.edges\"))", "15", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.subjects[0], "metrics.temp.edges");
+    check_text(pub.payloads[0], "3");
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(count! false :subject \"metrics.temp.quiet\")", "15", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 0);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(count! :subject)", "15", &pub);
+    CHECK(r.err == PB_EVAL_ARITY);
+    CHECK(pub.count == 0);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    pub = (published){0};
+    r = eval_src_with_payload_and_state(&arena, &state, "(count! :subject \"metrics.temp.after-bad\")", "15", &pub);
+    CHECK(r.err == PB_EVAL_OK);
+    CHECK(pub.count == 1);
+    check_text(pub.subjects[0], "metrics.temp.after-bad");
+    check_text(pub.payloads[0], "4");
     pb_arena_free(&arena);
 
     arena = (pb_arena){0};

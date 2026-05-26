@@ -162,30 +162,73 @@ static pb_eval_result call_delta(pb_eval_ctx *ctx, pb_values args) {
 }
 
 static pb_eval_result call_count(pb_eval_ctx *ctx, pb_values args) {
-    if (args.len > 1) {
+    if (args.len > 3) {
         return fail(PB_EVAL_ARITY);
     }
-    const bool inc = args.len == 0 || truthy(args.items[0]);
-    pb_eval_state_entry *slot = state_slot(ctx, "count");
-    if (slot == NULL) {
-        return fail(PB_EVAL_OOM);
+
+    bool has_cond = false;
+    pb_value cond = {0};
+    bool has_subject = false;
+    pb_slice subject = {0};
+
+    if (args.len == 1) {
+        if (keyword_eq(args.items[0], "subject")) {
+            return fail(PB_EVAL_ARITY);
+        }
+        has_cond = true;
+        cond = args.items[0];
+    } else if (args.len == 2) {
+        if (!keyword_eq(args.items[0], "subject") || !as_string(args.items[1], &subject)) {
+            return fail(PB_EVAL_TYPE);
+        }
+        has_subject = true;
+    } else if (args.len == 3) {
+        if (keyword_eq(args.items[0], "subject")) {
+            if (!as_string(args.items[1], &subject)) {
+                return fail(PB_EVAL_TYPE);
+            }
+            has_subject = true;
+            has_cond = true;
+            cond = args.items[2];
+        } else if (keyword_eq(args.items[1], "subject")) {
+            has_cond = true;
+            cond = args.items[0];
+            if (!as_string(args.items[2], &subject)) {
+                return fail(PB_EVAL_TYPE);
+            }
+            has_subject = true;
+        } else {
+            return fail(PB_EVAL_TYPE);
+        }
     }
+
+    const bool inc = !has_cond || truthy(cond);
     if (!inc) {
         note_suppressed(ctx);
         return nil();
     }
 
+    if (!has_subject) {
+        const size_t subject_len = ctx->subject.len + 6;
+        char *subject_ptr = pb_arena_alloc(ctx->arena, subject_len, 1);
+        if (subject_ptr == NULL) {
+            return fail(PB_EVAL_OOM);
+        }
+        memcpy(subject_ptr, ctx->subject.ptr, ctx->subject.len);
+        memcpy(subject_ptr + ctx->subject.len, ".count", 6);
+        subject = (pb_slice){.ptr = subject_ptr, .len = subject_len};
+    }
+    if (!publish_subject_valid(subject)) {
+        return fail(PB_EVAL_INVALID_SUBJECT);
+    }
+
+    pb_eval_state_entry *slot = state_slot(ctx, "count");
+    if (slot == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
     const double next = (slot->kind == PB_EVAL_STATE_NUMBER ? slot->number : 0) + 1;
     slot->kind = PB_EVAL_STATE_NUMBER;
     slot->number = next;
-
-    const size_t subject_len = ctx->subject.len + 6;
-    char *subject_ptr = pb_arena_alloc(ctx->arena, subject_len, 1);
-    if (subject_ptr == NULL) {
-        return fail(PB_EVAL_OOM);
-    }
-    memcpy(subject_ptr, ctx->subject.ptr, ctx->subject.len);
-    memcpy(subject_ptr + ctx->subject.len, ".count", 6);
 
     char tmp[32];
     const int n = snprintf(tmp, sizeof tmp, "%.0f", next);
@@ -197,8 +240,7 @@ static pb_eval_result call_count(pb_eval_ctx *ctx, pb_values args) {
         return fail(PB_EVAL_OOM);
     }
     if (ctx->publish == NULL ||
-        !ctx->publish(ctx->publish_ctx, (pb_slice){.ptr = subject_ptr, .len = subject_len},
-                      (pb_slice){.ptr = payload_ptr, .len = (size_t)n})) {
+        !ctx->publish(ctx->publish_ctx, subject, (pb_slice){.ptr = payload_ptr, .len = (size_t)n})) {
         return fail(PB_EVAL_PUBLISH_FAILED);
     }
     return nil();

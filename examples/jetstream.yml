@@ -22,22 +22,22 @@ lvc:
 import:
   streams:
     - servers:
-        - env: JS_URL
+        - env: "JS_URL"
       subject: "js.sensors.temp"
-      stream: SENSORS
-      consumer: monoblok-jetstream-example
+      stream: "SENSORS"
+      consumer: "monoblok-jetstream-example"
       catch-up: true
 
 export:
   servers:
-    - env: BRIDGE_URL
+    - env: "BRIDGE_URL"
   origin-header: true
   replay-header: true
   export:
     - "js.>"
 
 on:
-  - sub: js.sensors.temp
+  - sub: "js.sensors.temp"
     form:
       - do
       - [count!]
@@ -48,7 +48,7 @@ on:
   # A few simple variants to try:
   #
   # Publish only meaningful live movement:
-  - sub: js.sensors.temp
+  - sub: "js.sensors.temp"
     when:
       test: [not, replaying?]
       then:
@@ -59,7 +59,7 @@ on:
             - [publish!, "js.live.deadband"]
   #
   # Publish a rounded stable signal from both replay and live data:
-  # - sub: js.sensors.temp
+  # - sub: "js.sensors.temp"
   #   thread:
   #     from: payload-float
   #     steps:

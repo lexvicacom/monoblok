@@ -100,21 +100,21 @@ static void test_yaml_patchbay_sugar(void) {
         "  servers: [\"nats://127.0.0.1:4223\"]\n"
         "  export: [\"car.>\"]\n"
         "on:\n"
-        "  - sub: car.*.rpm\n"
+        "  - sub: \"car.*.rpm\"\n"
         "    thread:\n"
         "      from: payload-float\n"
         "      steps:\n"
         "        - [quantize, 50]\n"
         "        - [squelch]\n"
-        "        - [publish!, [subject-append, stable]]\n"
-        "  - sub: car.*.rpm\n"
+        "        - [publish!, [subject-append, \"stable\"], :dp, 1]\n"
+        "  - sub: \"car.*.rpm\"\n"
         "    when:\n"
         "      test: [>, [moving-avg, 20, payload-float], 7500.0]\n"
         "      then:\n"
         "        thread:\n"
         "          - payload\n"
         "          - [hold-off, 5000]\n"
-        "          - [publish!, [subject-append, alert]]\n";
+        "          - [publish!, [subject-append, \"alert\"]]\n";
 
     pb_arena arena = {0};
     pb_parse_result r = pb_parse_patchbay_source(&arena, "rental-car.yml", src, strlen(src));
@@ -143,6 +143,9 @@ static void test_yaml_patchbay_sugar(void) {
     check_text(first.items[2].seq.items[2].seq.items[0].text, "quantize");
     CHECK(first.items[2].seq.items[2].seq.items[1].kind == PB_NUMBER);
     check_text(first.items[2].seq.items[4].seq.items[1].seq.items[1].text, "stable");
+    CHECK(first.items[2].seq.items[4].seq.items[2].kind == PB_KEYWORD);
+    check_text(first.items[2].seq.items[4].seq.items[2].text, "dp");
+    CHECK(first.items[2].seq.items[4].seq.items[3].kind == PB_NUMBER);
 
     CHECK(r.forms.items[3].kind == PB_LIST);
     pb_values second = r.forms.items[3].seq;
@@ -156,9 +159,9 @@ static void test_yaml_config_env_sugar(void) {
     const char *src =
         "export:\n"
         "  servers:\n"
-        "    env: MB_TEST_NATS_SERVERS\n"
+        "    env: \"MB_TEST_NATS_SERVERS\"\n"
         "  export:\n"
-        "    - env: MB_TEST_EXPORT_FILTER\n";
+        "    - env: \"MB_TEST_EXPORT_FILTER\"\n";
 
     pb_arena arena = {0};
     pb_parse_result r = pb_parse_patchbay_source(&arena, "env.yml", src, strlen(src));
@@ -182,8 +185,8 @@ static void test_yaml_config_env_sugar(void) {
 static void test_yaml_replaying_symbol(void) {
     const char *src =
         "on:\n"
-        "  - sub: foo\n"
-        "    form: [publish!, out, replaying?]\n";
+        "  - sub: \"foo\"\n"
+        "    form: [publish!, \"out\", replaying?]\n";
 
     pb_arena arena = {0};
     pb_parse_result r = pb_parse_patchbay_source(&arena, "replay.yml", src, strlen(src));
@@ -200,12 +203,12 @@ static void test_yaml_nested_import_config_sugar(void) {
         "import:\n"
         "  core:\n"
         "    - servers: [\"nats://core:4222\"]\n"
-        "      subject: [raw.>]\n"
+        "      subject: [\"raw.>\"]\n"
         "  streams:\n"
         "    - servers: [\"nats://js:4222\"]\n"
-        "      subject: [sensors.>]\n"
-        "      stream: SENSORS\n"
-        "      consumer: monoblok-sensors\n"
+        "      subject: [\"sensors.>\"]\n"
+        "      stream: \"SENSORS\"\n"
+        "      consumer: \"monoblok-sensors\"\n"
         "      catch-up: true\n";
 
     pb_arena arena = {0};
@@ -228,7 +231,7 @@ static void test_yaml_nested_import_config_sugar(void) {
 }
 
 static void test_yaml_invalid_inputs(void) {
-    const char *src = "on:\n  - sub: car.*.rpm\n    thread:\n      from: payload-float\n";
+    const char *src = "on:\n  - sub: \"car.*.rpm\"\n    thread:\n      from: payload-float\n";
     pb_arena arena = {0};
     pb_parse_result r = pb_parse_patchbay_source(&arena, "bad.yml", src, strlen(src));
     CHECK(r.err == PB_PARSE_INVALID_YAML);

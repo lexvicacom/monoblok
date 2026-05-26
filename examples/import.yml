@@ -11,7 +11,7 @@ export:
     - "clean.>"
 
 on:
-  - sub: raw.temp
+  - sub: "raw.temp"
     thread:
       from: payload-float
       steps:
