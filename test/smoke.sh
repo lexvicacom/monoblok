@@ -124,7 +124,7 @@ if b'event: msg\n' not in event or b'"subject":"sensors.temp.seen"' not in event
 sse.close()
 
 latest = latest_request("/latest/sensors/temp")
-if latest["status"] != 200 or latest["content_type"] != "application/octet-stream" or latest["body"] != b"44":
+if latest["status"] != 200 or latest["content_type"] != "text/plain; charset=utf-8" or latest["body"] != b"44":
     raise RuntimeError(f"bad latest response: {latest!r}")
 
 missing = latest_request("/latest/missing/value")

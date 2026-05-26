@@ -704,7 +704,7 @@ static void handle_latest(mb_http_conn *conn, const mb_http_request *req) {
         respond_and_close(conn, 404, "Not Found", NULL, "not cached\n");
         return;
     }
-    respond_bytes_and_close(conn, 200, "OK", "Cache-Control: no-cache\r\n", "application/octet-stream", payload);
+    respond_bytes_and_close(conn, 200, "OK", "Cache-Control: no-cache\r\n", "text/plain; charset=utf-8", payload);
 }
 
 static void handle_get(mb_http_conn *conn, const mb_http_request *req) {

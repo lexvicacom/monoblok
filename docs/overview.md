@@ -274,10 +274,11 @@ GET  /latest/sensors/temp    -> one-shot LVC lookup for sensors.temp
 POST /pub/sensors/temp       -> client publish to sensors.temp
 ```
 
-`GET /latest/<subject>` returns the raw cached payload bytes for that exact,
-unprefixed subject. It returns `404` when LVC has no value for the subject and
-`409` when LVC is disabled. Use `/sub/$LVC/...` for wildcard replay or for a
-stream that stays open for future updates.
+`GET /latest/<subject>` returns the cached payload for that exact, unprefixed
+subject as `Content-Type: text/plain; charset=utf-8`, with no JSON wrapper. It
+returns `404` when LVC has no value for the subject and `409` when LVC is
+disabled. Use `/sub/$LVC/...` for wildcard replay or for a stream that stays
+open for future updates.
 
 `POST` requires `Content-Length` plus `Content-Type: text/plain` or
 `Content-Type: application/json`, and rejects NUL bytes. It is intentionally a
