@@ -1,6 +1,4 @@
-FROM cgr.dev/chainguard/wolfi-base:latest
-
-RUN apk add --no-cache openssl
+FROM gcr.io/distroless/base-debian12:nonroot
 
 ARG MONOBLOK_BIN=build-package/monoblok
 
