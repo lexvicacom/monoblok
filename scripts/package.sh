@@ -20,7 +20,11 @@ esac
 name="monoblok-${VERSION}-${PLATFORM}"
 
 rm -rf build-package
-cmake -S . -B build-package -DCMAKE_BUILD_TYPE=Release -DMONOBLOK_VERSION="${CMAKE_VERSION}"
+cmake_args=(-DCMAKE_BUILD_TYPE=Release -DMONOBLOK_VERSION="${CMAKE_VERSION}")
+case "$PLATFORM" in
+    macos-*) cmake_args+=(-DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)") ;;
+esac
+cmake -S . -B build-package "${cmake_args[@]}"
 cmake --build build-package --target monoblok
 
 mkdir -p "dist/${name}"

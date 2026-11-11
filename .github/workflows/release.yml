@@ -48,6 +48,10 @@ jobs:
           esac
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
+      - name: Install macOS OpenSSL 3
+        if: runner.os == 'macOS'
+        run: brew install openssl@3
+
       - name: Build + package
         run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
 
@@ -76,6 +80,12 @@ jobs:
       - name: Check runtime dependencies
         if: startsWith(matrix.platform, 'linux-')
         run: ldd build-package/monoblok
+
+      - name: Check macOS runtime dependencies
+        if: runner.os == 'macOS'
+        run: |
+          otool -L build-package/monoblok
+          build-package/monoblok --version
 
       - name: Set up Docker Buildx
         if: startsWith(matrix.platform, 'linux-')

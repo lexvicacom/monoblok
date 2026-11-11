@@ -48,6 +48,10 @@ The [release helper](./scripts/start.sh) downloads the latest monoblok (macOS/Li
 ./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
 ```
 
+Release binaries require the OpenSSL 3 runtime libraries. On macOS, install them
+with `brew install openssl@3` before running monoblok. On Linux, install your
+distribution's OpenSSL 3 runtime package. Container images include these libraries.
+
 The directory contains runnable examples. Run the `.sh` files.
 
 To add as a service on systemd Linux, run `scripts/install-systemd.sh`.
@@ -69,7 +73,8 @@ cmake --build build
 ```
 
 Requires CMake 3.22+, a compiler with C23 mode (GCC 11+ or current Apple Clang),
-and system OpenSSL. Vendored dependencies keep their own language settings.
+and system OpenSSL (1.1.1 or 3.x; 4.x is not supported). macOS release packaging
+uses Homebrew's `openssl@3`. Vendored dependencies keep their own language settings.
 
 ## Running tests
 

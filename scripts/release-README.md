@@ -3,6 +3,16 @@
 This archive contains a prebuilt `monoblok` binary, runnable patchbay examples,
 and the benchmark helpers.
 
+## Runtime requirements
+
+The binary requires OpenSSL 3 runtime libraries. On macOS, install them first:
+
+```sh
+brew install openssl@3
+```
+
+On Linux, install your distribution's OpenSSL 3 runtime package.
+
 ## Quick start
 
 Run the bundled tour patchbay:
