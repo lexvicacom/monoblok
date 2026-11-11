@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sensors and telemetry | monoblok docs</title>
+<meta name="description" content="Sensor and telemetry patchbays: office temperature alerts, rental car telemetry, JSON gateways, joins, latency stats and clock forms.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Sensors and telemetry</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html" aria-current="page">Sensors and telemetry</a><ul class="toc"><li><a href="#office-temperature">Office temperature</a></li><li><a href="#rental-car-telemetry">Rental car telemetry</a></li><li><a href="#json-frames-from-a-gateway">JSON frames from a gateway</a></li><li><a href="#joins-and-request-reply">Joins and request-reply</a></li><li><a href="#latency-statistics">Latency statistics</a></li><li><a href="#clock-forms-and-a-funnel">Clock forms and a funnel</a></li></ul></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Examples</p>
+<h1>Sensors and telemetry</h1>
+<p class="lede">Patchbays for readings that arrive often and mostly say nothing new: room sensors, vehicle telemetry, JSON gateways and service latency samples.</p>
+<h2 id="office-temperature">Office temperature<a class="anchor" href="#office-temperature" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> Three rules over <code>temp.&lt;floor&gt;.&lt;room&gt;</code>: a stable mirror for dashboards, a sustained-heat alert with an all-clear, and a tally of heat events.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/office-temp.edn" target="_blank" rel="noopener noreferrer">examples/office-temp.edn</a></span></figcaption><pre><code><span class="tok-com">;; Round to 1dp, ignore wobbles under 0.3°C, republish for dashboards</span>
+(<span class="tok-op">on</span> <span class="tok-str">"temp.*.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">0.3</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">;; Sustained heat alert + all-clear in one rule: fire "alert" once when</span>
+<span class="tok-com">;; the 60-sample moving average reaches 28°C, "ok" once when it falls back</span>
+<span class="tok-com">;; to 26°C. A single 28°C threshold chatters: an average that hovers around</span>
+<span class="tok-com">;; 28 crosses it back and forth and floods subscribers with alert/ok pairs.</span>
+<span class="tok-com">;; (hysteresis LO HI X) is true from X &gt;= HI until X &lt;= LO and holds its</span>
+<span class="tok-com">;; answer in between, so the average has to drop 2°C before the all-clear.</span>
+<span class="tok-com">;; One predicate, one ring buffer, one prev slot.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"temp.*.*"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">hysteresis</span> <span class="tok-num">26.0</span> <span class="tok-num">28.0</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">60</span> payload-float))
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"hot"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>)    <span class="tok-str">"cool"</span>)))
+
+<span class="tok-com">;; Daily heat-event tally: increment a per-sensor counter once on each</span>
+<span class="tok-com">;; false-&gt;true crossing of the same band, ignoring all the in-between</span>
+<span class="tok-com">;; samples. Subscribe to `temp.&lt;floor&gt;.&lt;room&gt;.count` for the running</span>
+<span class="tok-com">;; total. (rising-edge fires once per transition, so this is a counter</span>
+<span class="tok-com">;; of *crossings*, not samples.) Its moving-avg is its own call site, so</span>
+<span class="tok-com">;; it keeps its own ring and does not share state with the rule above.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"temp.*.*"</span>
+  (<span class="tok-op">count!</span> (<span class="tok-op">rising-edge</span> (<span class="tok-op">hysteresis</span> <span class="tok-num">26.0</span> <span class="tok-num">28.0</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">60</span> payload-float)))))</code></pre></figure>
+<p>What to notice:</p>
+<ul><li><strong><code>deadband</code> instead of <code>squelch</code>.</strong> <code>squelch</code> passes any change; <a href="forms.html#idempotent-filters"><code>deadband 0.3</code></a> passes only when the value has moved 0.3 from the last one it let through, so a reading wobbling between 21.0 and 21.1 stays quiet.</li><li><strong><code>transition</code> covers both edges.</strong> One rule, one predicate: the first branch runs once when the condition becomes true, the second once when it becomes false. Nothing is published in between.</li><li><strong><code>hysteresis</code> stops chatter.</strong> A single 28°C threshold flips back and forth when the average hovers around it. <a href="forms.html#hysteresis"><code>(hysteresis 26.0 28.0 X)</code></a> turns on at 28 and off only at 26.</li><li><strong>Call-site state.</strong> The second and third rules both contain <code>(moving-avg 60 payload-float)</code>. Each is its own call site with its own ring, so they do not interfere.</li></ul>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/office-temp.edn" target="_blank" rel="noopener noreferrer">examples/office-temp.edn</a></span></figcaption><pre><code><span class="sc-in">in   temp.2.kitchen  21.04</span>
+<span class="sc-out">out  temp.2.kitchen.stable  21</span>
+<span class="sc-in">in   temp.2.kitchen  21.11</span>
+<span class="sc-in">in   temp.2.kitchen  21.42</span>
+<span class="sc-out">out  temp.2.kitchen.stable  21.4</span></code></pre></figure>
+<p>Run <code>examples/office-temp.sh</code> to drive enough samples to trip the alert and the all-clear.</p>
+<h2 id="rental-car-telemetry">Rental car telemetry<a class="anchor" href="#rental-car-telemetry" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> The worked example from the <a href="https://alexjreid.dev/posts/monoblok/" target="_blank" rel="noopener noreferrer">introductory blog post</a>: catching over-revs at Peter's Porsche Rentals.</p>
+<p>Peter runs a boutique rental outfit with a dozen 911s on the books. Customers pay a lot of money per day and in exchange may enjoy bouncing off the rev limiter for fun. Peter would like to know about that, ideally while the car is still out, so he can have a conversation at handover instead of discovering a trashed engine three services later.</p>
+<p>A £10 Bluetooth OBD2 dongle plugged into the diagnostic port exposes a firehose of PIDs: RPM, coolant temperature, throttle position, fuel trims, O2 sensor voltages, intake manifold pressure, the lot. A small script on a Raspberry Pi tucked behind the glovebox polls the dongle and publishes each reading to <code>car.&lt;vin&gt;.&lt;pid&gt;</code>. Because monoblok compiles for ARM, the broker itself runs on the same Pi. A 5G hat gives it an uplink, so conditioned streams go straight to Peter's reporting system without ever shipping raw PIDs over the cellular link. Conditioning at the edge, analysis in the cloud.</p>
+<p>What Peter wants:</p>
+<ul><li>A clean per-car telemetry stream for the fleet dashboard. RPM, coolant, speed, the usual.</li><li>An over-rev alert when a car holds the engine above 7500rpm. One brief blip past redline on a downshift is forgivable; ten seconds in the limiter is a phone call.</li><li>When he opens the dashboard in the morning, the current state of every car on hire, immediately. No "waiting for first reading" spinner.</li></ul>
+<p>RPM updates many times a second and wobbles constantly at a steady throttle. Coolant barely moves once the engine is warm. Publishing all of this unconditioned over a metered 5G connection is wasteful.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/rental-car.edn" target="_blank" rel="noopener noreferrer">examples/rental-car.edn</a></span></figcaption><pre><code><span class="tok-com">;; RPM: quantize to 50rpm buckets, drop duplicates, republish</span>
+(<span class="tok-op">on</span> <span class="tok-str">"car.*.rpm"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">quantize</span> <span class="tok-num">50</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">;; Coolant temp: 1°C deadband is plenty</span>
+(<span class="tok-op">on</span> <span class="tok-str">"car.*.coolant"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">0</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">1.0</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">;; Over-rev alert: sustained above 7500rpm across a 20-sample window.</span>
+<span class="tok-com">;; Hold off for 5s between alerts so one long stretch of redline doesn't</span>
+<span class="tok-com">;; spam the downstream log once per incoming sample.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"car.*.rpm"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">20</span> payload-float) <span class="tok-num">7500.0</span>)
+    (<span class="tok-op">-&gt;</span> payload
+        (<span class="tok-op">hold-off</span> <span class="tok-num">5000</span>)
+        (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>)))))</code></pre></figure>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/rental-car.edn" target="_blank" rel="noopener noreferrer">examples/rental-car.edn</a></span></figcaption><pre><code><span class="sc-in">in   car.wp0ab.rpm  3012</span>
+<span class="sc-out">out  car.wp0ab.rpm.stable  3000</span>
+<span class="sc-in">in   car.wp0ab.rpm  3020</span>
+<span class="sc-in">in   car.wp0ab.rpm  3049</span>
+<span class="sc-out">out  car.wp0ab.rpm.stable  3050</span>
+<span class="sc-in">in   car.wp0ab.rpm  3110</span>
+<span class="sc-out">out  car.wp0ab.rpm.stable  3100</span>
+<span class="sc-in">in   car.wp0ab.coolant  89.6</span>
+<span class="sc-out">out  car.wp0ab.coolant.stable  90</span>
+<span class="sc-in">in   car.wp0ab.coolant  90.2</span>
+<span class="sc-in">in   car.wp0ab.coolant  91.4</span>
+<span class="sc-out">out  car.wp0ab.coolant.stable  91</span></code></pre></figure>
+<p><a href="forms.html#idempotent-filters"><code>quantize 50</code></a> snaps RPM to 50rpm buckets, so the uplink only carries RPM when it moves into a new bucket, and coolant when it shifts by a degree. Deadband, incidentally, is exactly what most consumer cars already do to their own gauges: the coolant needle on a modern dash sits stubbornly in the middle across roughly 75-105°C of actual sensor reading, and only twitches if things get properly cold or hot.</p>
+<p>The over-rev rule is the one Peter cares about. A single sample over 7500 gets averaged with the surrounding values and ignored; twenty samples in a row up there and the rule fires. <a href="forms.html#time-based-gates"><code>hold-off 5000</code></a> then lets one alert through every five seconds, so a long stretch of redline does not publish once per incoming sample. State is per subject, so each car has its own ring buffer and its own hold-off timer.</p>
+<p>To get a single alert and a single all-clear instead of a repeating alert, swap the last rule for a <code>transition</code>, as the <a href="#office-temperature">office temperature</a> example does:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"car.*.rpm"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">20</span> payload-float) <span class="tok-num">7500.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) payload)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) payload)))</code></pre></figure>
+<p>Peter's backend subscribes to <code>car.*.*.stable</code> and <code>car.*.*.alert</code> and gets a tidy, low-volume feed it can log, graph or react to without doing its own conditioning. Add <code>(lvc ["car.&gt;"])</code> and a dashboard subscribing to <code>$LVC.car.*.*.stable</code> receives the last known value for every PID on every car without waiting for the next change. Add an <a href="bridge.html#export"><code>export</code></a> form listing <code>car.*.*.stable</code> and <code>car.*.*.alert</code> and only those subjects cross the 5G link to the office NATS cluster.</p>
+<p>Once the over-rev alert is sitting on a pub/sub subject instead of buried in a log file, it becomes a hook for anything else you want to hang off it. A subscriber on the Pi can poke the dashcam over the local network the instant the alert lands, with no uplink required. A notification service back at the office picks up the same alert through the export. These are plain subscribers to a clean, meaningful stream; you can add or remove them without touching the car, the Pi or the patchbay rules.</p>
+<h3 id="the-same-rules-in-yaml">The same rules in YAML<a class="anchor" href="#the-same-rules-in-yaml" aria-label="Link to this section">#</a></h3>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/rental-car.yml" target="_blank" rel="noopener noreferrer">examples/rental-car.yml</a></span></figcaption><pre><code><span class="tok-com"># YAML sugar for rental-car.edn. It lowers directly to patchbay AST forms.</span>
+<span class="tok-key">on:</span>
+<span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.rpm"</span>
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload-float</span>
+      - [quantize, <span class="tok-num">50</span>]
+      - [squelch]
+      - [publish!, [subject-append, <span class="tok-str">"stable"</span>]]
+
+<span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.coolant"</span>
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload-float</span>
+      - [round, <span class="tok-num">0</span>]
+      - [deadband, <span class="tok-num">1.0</span>]
+      - [publish!, [subject-append, <span class="tok-str">"stable"</span>]]
+
+<span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.rpm"</span>
+<span class="tok-key">    when:</span> [<span class="tok-str">"&gt;"</span>, [moving-avg, <span class="tok-num">20</span>, <span class="tok-bind">$payload-float</span>], <span class="tok-num">7500.0</span>]
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload</span>
+      - [hold-off, <span class="tok-num">5000</span>]
+      - [publish!, [subject-append, <span class="tok-str">"alert"</span>]]</code></pre></figure>
+<p><code>thread</code> is the <code>-&gt;</code> pipeline with the start value first, and <code>when</code> beside it is the rule-level guard. Bound values carry a <code>$</code>, and operators that are YAML indicators (<code>"&gt;"</code>) are quoted. See <a href="patchbay.html#yaml-sugar-files">YAML sugar files</a>.</p>
+<h2 id="json-frames-from-a-gateway">JSON frames from a gateway<a class="anchor" href="#json-frames-from-a-gateway" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> Most off-the-shelf sensors and gateways emit JSON frames, not bare scalars. The pattern is to break the frame out at the head, then treat every field as a normal scalar stream.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-frames.edn" target="_blank" rel="noopener noreferrer">examples/json-frames.edn</a></span></figcaption><pre><code><span class="tok-com">; JSON-emitting sensor: one off-the-shelf gateway publishes a flat</span>
+<span class="tok-com">; frame like {"temp":12.5,"hum":80,"batt":3.7} on devices.&lt;id&gt;, and</span>
+<span class="tok-com">; we want the rest of the patchbay to keep working in scalars.</span>
+
+<span class="tok-com">; Step 1: break the frame out at the head. json-demux is a</span>
+<span class="tok-com">; demultiplexer: one wire in, one sub-subject out per named field.</span>
+<span class="tok-com">; The publish is implicit (the form has no return value), so this</span>
+<span class="tok-com">; sits at the tail of the rule.</span>
+<span class="tok-com">;   devices.kitchen {"temp":12.5,"hum":80} -&gt; devices.kitchen.temp 12.5</span>
+<span class="tok-com">;                                             devices.kitchen.hum  80</span>
+<span class="tok-com">; Missing, null, array, and non-selected nested fields are skipped silently.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"devices.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"temp"</span> <span class="tok-str">"hum"</span> <span class="tok-str">"batt"</span> payload))
+
+<span class="tok-com">; Step 2: from here on, treat each fanned-out subject as a normal</span>
+<span class="tok-com">; scalar stream. Round, deadband, publish to a "stable" mirror.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"devices.*.temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">0.2</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"devices.*.hum"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">0</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">; Inline lookup: sometimes you only want one field from a frame and</span>
+<span class="tok-com">; don't need the demux. Pull it straight off the JSON and into a</span>
+<span class="tok-com">; threaded pipeline. json-get returns nil on missing/malformed/non-primitive,</span>
+<span class="tok-com">; and publish! is a no-op on nil, so the rule self-skips bad frames.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"devices.*"</span>
+  (<span class="tok-op">-&gt;</span> payload
+      (<span class="tok-op">json-get</span> <span class="tok-str">"batt"</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"battery"</span>))))</code></pre></figure>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-frames.edn" target="_blank" rel="noopener noreferrer">examples/json-frames.edn</a></span></figcaption><pre><code><span class="sc-in">in   devices.kitchen  {"temp":12.52,"hum":80.2,"batt":3.7}</span>
+<span class="sc-out">out  devices.kitchen.temp  12.52</span>
+<span class="sc-out">out  devices.kitchen.temp.stable  12.5</span>
+<span class="sc-out">out  devices.kitchen.hum  80.2</span>
+<span class="sc-out">out  devices.kitchen.hum.stable  80</span>
+<span class="sc-out">out  devices.kitchen.batt  3.7</span>
+<span class="sc-out">out  devices.kitchen.battery  3.7</span>
+<span class="sc-in">in   devices.kitchen  {"temp":12.58,"hum":80.4,"batt":3.7}</span>
+<span class="sc-out">out  devices.kitchen.temp  12.58</span>
+<span class="sc-out">out  devices.kitchen.hum  80.4</span>
+<span class="sc-out">out  devices.kitchen.batt  3.7</span>
+<span class="sc-out">out  devices.kitchen.battery  3.7</span>
+<span class="sc-in">in   devices.kitchen  {"temp":13.1,"hum":81,"batt":3.6}</span>
+<span class="sc-out">out  devices.kitchen.temp  13.1</span>
+<span class="sc-out">out  devices.kitchen.temp.stable  13.1</span>
+<span class="sc-out">out  devices.kitchen.hum  81</span>
+<span class="sc-out">out  devices.kitchen.hum.stable  81</span>
+<span class="sc-out">out  devices.kitchen.batt  3.6</span>
+<span class="sc-out">out  devices.kitchen.battery  3.6</span></code></pre></figure>
+<p>The first rule is marked <code>:reentrant true</code>, so the subjects it emits (<code>devices.kitchen.temp</code> and friends) are matched against the rules below it. Without that option they would reach subscribers but not the cleanup rules. The second frame shows the gates working: temperature moved 0.06 and humidity rounds to the same 80, so neither <code>.stable</code> subject repeats.</p>
+<p><a href="forms.html#json-payloads"><code>json-get</code></a> is the inline alternative when you want one field and no fan-out. Both forms accept dotted paths up to four levels deep, such as <code>"sensor.thermal.temp"</code>.</p>
+<h2 id="joins-and-request-reply">Joins and request-reply<a class="anchor" href="#joins-and-request-reply" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> State is per subject, so a rule handling <code>temp.inside</code> cannot see <code>temp.outside</code> directly. <a href="forms.html#last-values"><code>(last SUBJECT)</code></a> reads another subject's value from the last-value cache, which makes a join; <a href="forms.html#request-reply"><code>reply!</code></a> answers NATS requests from the same cache.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/ask.edn" target="_blank" rel="noopener noreferrer">examples/ask.edn</a></span></figcaption><pre><code><span class="tok-com">;; Join two subjects with (last SUBJECT), and answer requests with reply!.</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; (last SUBJECT) returns the latest payload on a literal subject, read from</span>
+<span class="tok-com">;; the last-value cache, so the subject must match an (lvc ...) filter. It is</span>
+<span class="tok-com">;; nil until that subject has published.</span>
+(<span class="tok-op">lvc</span> [<span class="tok-str">"temp.&gt;"</span>])
+
+<span class="tok-com">;; A join. When temp.inside arrives, subtract the last temp.outside from it.</span>
+<span class="tok-com">;; A threaded step that gets nil stops the thread, so nothing is published</span>
+<span class="tok-com">;; until both subjects have a value. (Arithmetic on a bare nil is a type</span>
+<span class="tok-com">;; error; the thread is the nil-safe shape.) Thread-last puts the cached</span>
+<span class="tok-com">;; value last: (- payload-float outside) is inside minus outside.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"temp.inside"</span>
+  (<span class="tok-op">-&gt;</span> (<span class="tok-op">last</span> <span class="tok-str">"temp.outside"</span>)
+      (<span class="tok-op">-</span> payload-float)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"temp.difference"</span> <span class="tok-kw">:dp</span> <span class="tok-num">1</span>)))
+
+<span class="tok-com">;; Request-reply. `nats req ask.outside ""` is answered with the cached</span>
+<span class="tok-com">;; outside temperature. reply! publishes to the request's reply subject</span>
+<span class="tok-com">;; (reply-to); it does nothing when the message had no reply subject or the</span>
+<span class="tok-com">;; value is nil, so asking before the first reading gets no answer.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"ask.outside"</span>
+  (<span class="tok-op">reply!</span> (<span class="tok-op">last</span> <span class="tok-str">"temp.outside"</span>)))
+
+<span class="tok-com">;; The derived temp.difference is cached too (a rule's own publish updates</span>
+<span class="tok-com">;; the LVC), so it can be asked for the same way.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"ask.difference"</span>
+  (<span class="tok-op">reply!</span> (<span class="tok-op">last</span> <span class="tok-str">"temp.difference"</span>)))</code></pre></figure>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/ask.edn" target="_blank" rel="noopener noreferrer">examples/ask.edn</a></span></figcaption><pre><code><span class="sc-in">in   temp.inside  21.5</span>
+<span class="sc-in">in   temp.outside  18</span>
+<span class="sc-in">in   temp.inside  21.5</span>
+<span class="sc-out">out  temp.difference  3.5</span>
+<span class="sc-in">in   temp.inside  22</span>
+<span class="sc-out">out  temp.difference  4.0</span></code></pre></figure>
+<p>The first inside reading publishes nothing, because <code>temp.outside</code> has no value yet and a thread stops on nil. After that, each inside reading publishes the difference. Request-reply needs a real client, since <code>reply-to</code> is always nil under <code>--soundcheck</code>:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok examples/ask.edn
+nats pub temp.outside 18
+nats req ask.outside <span class="tok-str">""</span></code></pre></figure>
+<h2 id="latency-statistics">Latency statistics<a class="anchor" href="#latency-statistics" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> Five rules read one stream of per-request latency samples and each publishes a different statistic, so dashboards subscribe to whichever shape they care about without every consumer re-implementing the maths.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/latency-stats.edn" target="_blank" rel="noopener noreferrer">examples/latency-stats.edn</a></span></figcaption><pre><code><span class="tok-com">;; Live latency distribution from a stream of per-request samples.</span>
+<span class="tok-com">;; Each rule reads the same 50-sample window and emits a different</span>
+<span class="tok-com">;; statistic on a sub-subject, so dashboards can subscribe to whichever</span>
+<span class="tok-com">;; shape they care about without each consumer re-implementing the math.</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; Tick windows (50 samples) here for a deterministic demo; swap any</span>
+<span class="tok-com">;; `50` for `:ms 30000` to get a 30-second sliding window instead.</span>
+
+(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">median</span> <span class="tok-num">50</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"rpc.latency.p50"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">percentile</span> <span class="tok-num">50</span> <span class="tok-num">0.95</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"rpc.latency.p95"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">percentile</span> <span class="tok-num">50</span> <span class="tok-num">0.99</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"rpc.latency.p99"</span>)))
+
+<span class="tok-com">;; Spread of the same window. Pairs nicely with p99: stddev climbing</span>
+<span class="tok-com">;; while p99 stays flat means the body is widening even if the tail is</span>
+<span class="tok-com">;; the same shape.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">stddev</span> <span class="tok-num">50</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"rpc.latency.stddev"</span>)))
+
+<span class="tok-com">;; Cheap trend line beside the windowed stats. (ewma ALPHA X) keeps one</span>
+<span class="tok-com">;; number of state instead of a 50-slot ring: each sample moves the</span>
+<span class="tok-com">;; average 10% of the way toward it. Unlike the windowed stats it never</span>
+<span class="tok-com">;; forgets abruptly, the burst just decays out over the next few dozen</span>
+<span class="tok-com">;; samples. Raise ALPHA to follow the signal faster.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">ewma</span> <span class="tok-num">0.1</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"rpc.latency.ewma"</span> <span class="tok-kw">:dp</span> <span class="tok-num">2</span>)))</code></pre></figure>
+<p>Each rule has its own 50-sample window (call-site state again). Swap any <code>50</code> for <code>:ms 30000</code> to get a 30-second sliding window. <a href="forms.html#exponential-average"><code>ewma</code></a> is the cheap trend line: one number of state instead of a ring. See <a href="forms.html#rate-percentiles-distribution-shape">Rate, percentiles, distribution shape</a>.</p>
+<h2 id="clock-forms-and-a-funnel">Clock forms and a funnel<a class="anchor" href="#clock-forms-and-a-funnel" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-advanced">Advanced</span> Most forms run only while handling a message. The clock forms keep a deadline, so they can publish after time passes even if the feed goes quiet. This file shows each of them, a top-level <code>every</code> heartbeat, and the funnel pattern for rolling several subjects into one piece of state.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/clocked.edn" target="_blank" rel="noopener noreferrer">examples/clocked.edn</a></span></figcaption><pre><code><span class="tok-com">;; Clock-native patchbay forms in one file.</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; Try publishing numeric values to `clocked.sensor.temp` quickly, then stop.</span>
+<span class="tok-com">;; The rules below produce:</span>
+<span class="tok-com">;;   - `clocked.sensor.temp.stale` true after 5s of silence, false on recovery</span>
+<span class="tok-com">;;   - `clocked.sensor.temp.debounced` after 250ms of quiet</span>
+<span class="tok-com">;;   - `clocked.sensor.temp.sampled` every 1s with the latest value</span>
+<span class="tok-com">;;   - `clocked.sensor.temp.avg5s` every 5s while the window has samples</span>
+<span class="tok-com">;;   - `clocked.sensor.temp.rate5s` every 5s while the window has samples</span>
+<span class="tok-com">;;   - `clocked.heartbeat` every 2s, whether or not anything is publishing</span>
+<span class="tok-com">;;   - `clocked.all.count` a running total across every `clocked.sensor.*`</span>
+<span class="tok-com">;;   - `clocked.all.avg5s` every 5s, the average across every sensor</span>
+
+(<span class="tok-op">lvc</span> [<span class="tok-str">"clocked.&gt;"</span>])
+
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.sensor.*"</span>
+  (<span class="tok-op">dropout</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span>
+    <span class="tok-kw">:lost</span>  (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"true"</span>)
+    <span class="tok-kw">:found</span> (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"false"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.sensor.*"</span>
+  (<span class="tok-op">debounce!</span> <span class="tok-kw">:ms</span> <span class="tok-num">250</span>
+    (<span class="tok-op">subject-append</span> <span class="tok-str">"debounced"</span>)
+    payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.sensor.*"</span>
+  (<span class="tok-op">sample!</span> <span class="tok-kw">:ms</span> <span class="tok-num">1000</span>
+    (<span class="tok-op">subject-append</span> <span class="tok-str">"sampled"</span>)
+    payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.sensor.*"</span>
+  (<span class="tok-op">aggregate!</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span>
+    (<span class="tok-op">subject-append</span> <span class="tok-str">"avg5s"</span>)
+    <span class="tok-kw">:avg</span>
+    payload-float))
+
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.sensor.*"</span>
+  (<span class="tok-op">aggregate!</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span>
+    (<span class="tok-op">subject-append</span> <span class="tok-str">"rate5s"</span>)
+    <span class="tok-kw">:rate</span>
+    payload-float))
+
+<span class="tok-com">;; Heartbeat: a top-level `every` rule runs on a timer, not on a publish.</span>
+<span class="tok-com">;; The first tick only schedules; it fires every 2s after that. Inside the</span>
+<span class="tok-com">;; body `subject` and `payload` are empty strings, so publish to an</span>
+<span class="tok-com">;; explicit subject.</span>
+(<span class="tok-op">every</span> <span class="tok-kw">:ms</span> <span class="tok-num">2000</span>
+  (<span class="tok-op">publish!</span> <span class="tok-str">"clocked.heartbeat"</span> <span class="tok-str">"alive"</span>))
+
+<span class="tok-com">;; Funnel: state is per subject, so `count!` and `aggregate!` directly on</span>
+<span class="tok-com">;; `clocked.sensor.*` would keep one slot per sensor. To roll every sensor</span>
+<span class="tok-com">;; up together, a re-entrant rule republishes each reading on one subject,</span>
+<span class="tok-com">;; and the stateful rules below sit on that subject. The funnel subject</span>
+<span class="tok-com">;; must not match the filter it came from.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.sensor.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">publish!</span> <span class="tok-str">"clocked.all"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.all"</span>
+  (<span class="tok-op">count!</span>))
+
+(<span class="tok-op">on</span> <span class="tok-str">"clocked.all"</span>
+  (<span class="tok-op">aggregate!</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span>
+    <span class="tok-str">"clocked.all.avg5s"</span>
+    <span class="tok-kw">:avg</span>
+    payload-float))</code></pre></figure>
+<div class="table-wrap"><table><thead><tr><th>rule</th><th>form</th><th>behaviour</th></tr></thead><tbody><tr><td>stale detection</td><td><a href="forms.html#clock-emitting-forms"><code>dropout</code></a></td><td>the first reading arms quietly; 5s of silence publishes <code>stale true</code> once; the next reading publishes <code>stale false</code> once</td></tr><tr><td>settle</td><td><code>debounce!</code></td><td>publishes the latest value after 250ms of quiet (a trailing edge)</td></tr><tr><td>fixed cadence</td><td><code>sample!</code></td><td>publishes the latest value every second after the first match</td></tr><tr><td>dashboard numbers</td><td><code>aggregate!</code></td><td>publishes the 5-second average and rate on the clock, with or without new messages</td></tr><tr><td>heartbeat</td><td><a href="forms.html#heartbeats-with-every"><code>every</code></a></td><td>runs on a timer, with no message in scope</td></tr><tr><td>fleet roll-up</td><td><a href="forms.html#funnel">funnel</a></td><td>a re-entrant rule republishes every sensor onto <code>clocked.all</code>, where <code>count!</code> and <code>aggregate!</code> keep one shared slot</td></tr></tbody></table></div>
+<p>Run it and publish quickly to <code>clocked.sensor.temp</code>, then stop and watch the delayed subjects arrive:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/clocked.sh</code></pre></figure>
+<p>Under <code>--soundcheck</code>, clock state lingers for 10 seconds after end of input so delayed forms can fire; <code>--soundcheck-linger-ms</code> changes that.</p>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="examples.html"><small>Previous</small>Start here</a><a class="next" href="examples-market.html"><small>Next</small>Market data</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

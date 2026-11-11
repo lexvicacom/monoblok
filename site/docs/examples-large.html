@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Large patchbays | monoblok docs</title>
+<meta name="description" content="Two large generated patchbays, Moonwell and Cloudhook, that use most of the language over nested JSON telemetry.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Large patchbays</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html" aria-current="page">Large patchbays</a><ul class="toc"><li><a href="#how-a-large-patchbay-is-laid-out">How a large patchbay is laid out</a></li><li><a href="#moonwell">Moonwell</a></li><li><a href="#cloudhook">Cloudhook</a></li><li><a href="#making-your-own">Making your own</a></li><li><a href="#sizing-a-large-patchbay">Sizing a large patchbay</a></li></ul></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Examples</p>
+<h1>Large patchbays</h1>
+<p class="lede">Two patchbays of two dozen rules each, showing how the small forms compose into a whole conditioning layer: JSON demux at the head, stable dashboard channels, safety alerts, roll-ups, liveness and audit trails.</p>
+<p>Both files live in <a href="https://github.com/lexvicacom/monoblok/tree/main/advanced-examples" target="_blank" rel="noopener noreferrer"><code>advanced-examples/</code></a>. They were written by a coding agent with <a href="https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md" target="_blank" rel="noopener noreferrer"><code>AGENTS_PATCHBAY.md</code></a> loaded, for deliberately fictional domains. They are not reference deployments or domain-accurate models, but they validate, they run, and they give a feel for what is possible. Each has a matching Python pump script that publishes randomised telemetry.</p>
+<h2 id="how-a-large-patchbay-is-laid-out">How a large patchbay is laid out<a class="anchor" href="#how-a-large-patchbay-is-laid-out" aria-label="Link to this section">#</a></h2>
+<p>Both files follow the same order, and it is a good template for your own:</p>
+<ol><li><strong>Cache.</strong> One <code>(lvc ...)</code> form opts the input, alert, ops and audit trees into the last-value cache, so a dashboard that connects late is populated at once.</li><li><strong>Demux.</strong> One <code>:reentrant true</code> rule per JSON frame type breaks the frame into scalar subjects. Everything after this works on plain numbers and strings.</li><li><strong>Stable channels.</strong> Short <code>-&gt;</code> pipelines (smooth, round, gate, publish) give dashboards quiet subjects to subscribe to.</li><li><strong>Liveness.</strong> <code>sample!</code> republishes the latest frame on a fixed cadence and <code>dropout</code> flags a rig that has gone silent.</li><li><strong>Alerts.</strong> <code>transition</code> over a windowed statistic raises one alert and one all-clear; <code>rising-edge</code> plus <code>throttle</code> caps one-shot alerts.</li><li><strong>Roll-ups.</strong> <code>aggregate!</code>, <code>bar!</code> and <code>count!</code> produce the numbers a report wants.</li><li><strong>Audit.</strong> Rules build dated subjects with <code>subject-with</code> and <code>now</code>, so events land on subjects like <code>audit.2026-11-11.rig-03.seal</code>.</li><li><strong>Fleet meter.</strong> One rule on the whole tree publishes the ingest rate.</li></ol>
+<h2 id="moonwell">Moonwell<a class="anchor" href="#moonwell" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-advanced">Advanced</span> A fictional lunar ice-mining habitat. Rigs publish three nested JSON frames (<code>env</code>, <code>drill</code>, <code>power</code>) and free-form log lines under <code>moonwell.&lt;rig&gt;.*</code>.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/advanced-examples/moonwell_patchbay.edn" target="_blank" rel="noopener noreferrer">advanced-examples/moonwell_patchbay.edn</a></span></figcaption><pre><code><span class="tok-com">; Moonwell patchbay: a fictional lunar ice-mining habitat under Shackleton</span>
+<span class="tok-com">; crater. Prospectors publish JSON frames; rules derive stable telemetry,</span>
+<span class="tok-com">; drill safety alerts, power rollups, and operator audit streams.</span>
+
+(<span class="tok-op">lvc</span> [<span class="tok-str">"moonwell.&gt;"</span>
+      <span class="tok-str">"alerts.&gt;"</span>
+      <span class="tok-str">"ops.&gt;"</span>
+      <span class="tok-str">"audit.&gt;"</span>])
+
+<span class="tok-com">; Environmental frame:</span>
+<span class="tok-com">; moonwell.rig-03.env {"sensor":{"thermal":{"temp":-142.1},</span>
+<span class="tok-com">;                      "atmo":{"pressure":69.4,"dust":0.12,"radiation":0.08},</span>
+<span class="tok-com">;                      "prospect":{"ice":41.2},"hatch":{"seal":"LOCKED"}}}</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> [<span class="tok-str">"sensor.thermal.temp"</span> <span class="tok-str">"temp"</span>]
+               [<span class="tok-str">"sensor.atmo.pressure"</span> <span class="tok-str">"pressure"</span>]
+               [<span class="tok-str">"sensor.atmo.dust"</span> <span class="tok-str">"dust"</span>]
+               [<span class="tok-str">"sensor.atmo.radiation"</span> <span class="tok-str">"radiation"</span>]
+               [<span class="tok-str">"sensor.prospect.ice"</span> <span class="tok-str">"ice"</span>]
+               [<span class="tok-str">"sensor.hatch.seal"</span> <span class="tok-str">"seal"</span>]
+               payload))
+
+<span class="tok-com">; Drill frame:</span>
+<span class="tok-com">; moonwell.rig-03.drill {"sensor":{"bore":{"depth":18.4},</span>
+<span class="tok-com">;                        "motor":{"torque":62,"rpm":94,"mode":"AUTO"},</span>
+<span class="tok-com">;                        "bit":{"vibration":0.31,"temp":81.4}}}</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.drill"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> [<span class="tok-str">"sensor.bore.depth"</span> <span class="tok-str">"depth"</span>]
+               [<span class="tok-str">"sensor.motor.torque"</span> <span class="tok-str">"torque"</span>]
+               [<span class="tok-str">"sensor.motor.rpm"</span> <span class="tok-str">"rpm"</span>]
+               [<span class="tok-str">"sensor.bit.vibration"</span> <span class="tok-str">"vibration"</span>]
+               [<span class="tok-str">"sensor.bit.temp"</span> <span class="tok-str">"bit_temp"</span>]
+               [<span class="tok-str">"sensor.motor.mode"</span> <span class="tok-str">"mode"</span>]
+               payload))
+
+<span class="tok-com">; Power frame:</span>
+<span class="tok-com">; moonwell.rig-03.power {"sensor":{"storage":{"battery":77.4},</span>
+<span class="tok-com">;                        "array":{"solar":410},</span>
+<span class="tok-com">;                        "bus":{"load":360,"heater":44,"state":"NOMINAL"}}}</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.power"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> [<span class="tok-str">"sensor.storage.battery"</span> <span class="tok-str">"battery"</span>]
+               [<span class="tok-str">"sensor.array.solar"</span> <span class="tok-str">"solar"</span>]
+               [<span class="tok-str">"sensor.bus.load"</span> <span class="tok-str">"load"</span>]
+               [<span class="tok-str">"sensor.bus.heater"</span> <span class="tok-str">"heater"</span>]
+               [<span class="tok-str">"sensor.bus.state"</span> <span class="tok-str">"bus"</span>]
+               payload))
+
+<span class="tok-com">; Stable dashboard channels.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env.temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-kw">:ms</span> <span class="tok-num">45000</span>)
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env.pressure"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">0.8</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.drill.depth"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">quantize</span> <span class="tok-num">0.5</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"meter"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.power.load"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">hold-off</span> <span class="tok-num">10000</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"sampled"</span>))))
+
+<span class="tok-com">; Liveness and current snapshots.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env"</span>
+  (<span class="tok-op">do</span>
+    (<span class="tok-op">sample!</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"snapshot"</span>) payload)
+    (<span class="tok-op">dropout</span> <span class="tok-kw">:ms</span> <span class="tok-num">60000</span>
+      <span class="tok-kw">:lost</span>  (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"true"</span>)
+      <span class="tok-kw">:found</span> (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"false"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.drill"</span>
+  (<span class="tok-op">sample!</span> <span class="tok-kw">:ms</span> <span class="tok-num">3000</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"snapshot"</span>) payload))
+
+<span class="tok-com">; Habitat safety.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env.pressure"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&lt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">8</span> payload-float) <span class="tok-num">61.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"pressure-low"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) <span class="tok-str">"pressure-restored"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env.dust"</span>
+  (<span class="tok-op">-&gt;</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">0.55</span>)
+      (<span class="tok-op">rising-edge</span>)
+      (<span class="tok-op">throttle</span> <span class="tok-kw">:ms</span> <span class="tok-num">300000</span> <span class="tok-num">2</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts"</span> <span class="tok-str">"dust"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env.radiation"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">percentile</span> <span class="tok-num">40</span> <span class="tok-num">0.95</span> payload-float) <span class="tok-num">0.18</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"radiation-p95-high"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) <span class="tok-str">"radiation-normal"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env.seal"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">changed?</span> payload)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"audit"</span> (<span class="tok-op">now</span> <span class="tok-kw">:date</span>) (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"seal"</span>)
+              (<span class="tok-op">str-concat</span> subject <span class="tok-str">": "</span> payload))))
+
+<span class="tok-com">; Drill protection.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.drill.torque"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">-</span> (<span class="tok-op">moving-max</span> <span class="tok-num">20</span> payload-float)
+              (<span class="tok-op">moving-min</span> <span class="tok-num">20</span> payload-float)) <span class="tok-num">32.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"chatter"</span>) payload)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.drill.vibration"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-kw">:ms</span> <span class="tok-num">20000</span> payload-float) <span class="tok-num">0.72</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"ops"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"drill"</span> <span class="tok-str">"slow"</span>) <span class="tok-str">"vibration"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"ops"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"drill"</span> <span class="tok-str">"resume"</span>) <span class="tok-str">"vibration-clear"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.drill.bit_temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-num">10</span>)
+      (<span class="tok-op">clamp</span> <span class="tok-num">-200.0</span> <span class="tok-num">140.0</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">2.0</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"managed"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.drill.mode"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">contains?</span> [<span class="tok-str">"MANUAL"</span> <span class="tok-str">"SAFE"</span> <span class="tok-str">"FAULT"</span>] payload)
+    (<span class="tok-op">do</span>
+      (<span class="tok-op">count!</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts"</span> <span class="tok-str">"drill-mode"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload))))
+
+<span class="tok-com">; Ice yield and power economics.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.env.ice"</span>
+  (<span class="tok-op">do</span>
+    (<span class="tok-op">debounce!</span> <span class="tok-kw">:ms</span> <span class="tok-num">2500</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"settled"</span>) payload)
+    (<span class="tok-op">aggregate!</span> <span class="tok-kw">:ms</span> <span class="tok-num">300000</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"avg5m"</span>) <span class="tok-kw">:avg</span> payload-float)
+    (<span class="tok-op">bar!</span> <span class="tok-kw">:ms</span> <span class="tok-num">60000</span> payload-float)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.power.battery"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&lt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">12</span> payload-float) <span class="tok-num">24.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"reserve-low"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) <span class="tok-str">"reserve-recovered"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.power.solar"</span>
+  (<span class="tok-op">aggregate!</span> <span class="tok-kw">:ms</span> <span class="tok-num">300000</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"sum5m"</span>) <span class="tok-kw">:sum</span> payload-float))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.power.heater"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">variance</span> <span class="tok-num">30</span> payload-float) <span class="tok-num">260.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"unstable"</span>) payload)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.power.bus"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">not</span> (<span class="tok-op">=</span> payload <span class="tok-str">"NOMINAL"</span>))
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts"</span> <span class="tok-str">"power-bus"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload)))
+
+<span class="tok-com">; Free-form rig diagnostics.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.*.log"</span>
+  (<span class="tok-op">do</span>
+    (<span class="tok-op">count!</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"ERROR"</span>))
+    (<span class="tok-op">when</span> (<span class="tok-op">or</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"ERROR"</span>)
+              (<span class="tok-op">contains?</span> payload <span class="tok-str">"ICE_VOID"</span>))
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"audit"</span> (<span class="tok-op">now</span> <span class="tok-kw">:hour</span>) (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"events"</span>)
+                (<span class="tok-op">str-concat</span> subject <span class="tok-str">": "</span> payload)))))
+
+<span class="tok-com">; Fleet ingest and noisy-subject meter.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"moonwell.&gt;"</span>
+  (<span class="tok-op">-&gt;</span> payload
+      (<span class="tok-op">rate</span> <span class="tok-kw">:ms</span> <span class="tok-num">1000</span>)
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"ops.moonwell.ingest.hz"</span>)))</code></pre></figure>
+<p>Forms worth studying here:</p>
+<div class="table-wrap"><table><thead><tr><th>rule</th><th>technique</th></tr></thead><tbody><tr><td><code>moonwell.*.env</code> demux</td><td><a href="forms.html#json-payloads"><code>json-demux!</code></a> with <code>[PATH SUFFIX]</code> pairs flattens nested paths such as <code>sensor.thermal.temp</code> to a short suffix (<code>temp</code>)</td></tr><tr><td><code>env.temp</code> stable</td><td>a time window feeding value gates: <code>moving-avg :ms 45000</code>, then <code>round</code>, then <code>squelch</code></td></tr><tr><td><code>env</code> liveness</td><td>two effects in one <code>do</code>: <a href="forms.html#clock-emitting-forms"><code>sample!</code></a> for a 5-second snapshot and <code>dropout</code> for stale and recovered</td></tr><tr><td><code>env.dust</code> alert</td><td>a boolean threaded through <a href="forms.html#edge-gates"><code>rising-edge</code></a> then <a href="forms.html#time-based-gates"><code>throttle :ms 300000 2</code></a>: at most two dust alerts in five minutes</td></tr><tr><td><code>env.radiation</code> alert</td><td><a href="forms.html#edge-gates"><code>transition</code></a> over a 95th <a href="forms.html#rate-percentiles-distribution-shape"><code>percentile</code></a>, so one outlier does not raise the alarm</td></tr><tr><td><code>env.seal</code> audit</td><td><a href="forms.html#idempotent-filters"><code>changed?</code></a> as a predicate, publishing to a dated subject built with <code>subject-with</code> and <code>(now :date)</code></td></tr><tr><td><code>drill.torque</code> chatter</td><td>spread over a window: <code>moving-max</code> minus <code>moving-min</code></td></tr><tr><td><code>drill.mode</code></td><td>vector membership with <a href="forms.html#strings-and-subjects"><code>contains?</code></a>, a <a href="forms.html#running-counters"><code>count!</code></a> and an alert in one <code>do</code></td></tr><tr><td><code>env.ice</code></td><td>three clock forms on one subject: <code>debounce!</code>, <code>aggregate!</code> and a one-minute <code>bar!</code></td></tr><tr><td><code>moonwell.&gt;</code> meter</td><td><a href="forms.html#rate-percentiles-distribution-shape"><code>rate :ms 1000</code></a> across the whole tree for a fleet-wide messages-per-second figure</td></tr></tbody></table></div>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>cd advanced-examples
+monoblok moonwell_patchbay.edn
+python pump_moonwell.py</code></pre></figure>
+<p>A <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">recorded session</a> shows a coding assistant building this patchbay.</p>
+<h2 id="cloudhook">Cloudhook<a class="anchor" href="#cloudhook" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-advanced">Advanced</span> A fictional offshore fleet of autonomous kite turbines. Kites publish flat JSON frames for flight, weather and power under <code>cloudhook.&lt;kite&gt;.*</code>.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/advanced-examples/cloudhook_patchbay.edn" target="_blank" rel="noopener noreferrer">advanced-examples/cloudhook_patchbay.edn</a></span></figcaption><pre><code><span class="tok-com">; Cloudhook patchbay: a fictional fleet of autonomous kite turbines tethered</span>
+<span class="tok-com">; above offshore buoys. Kites publish JSON frames; rules derive flight safety,</span>
+<span class="tok-com">; power quality, stable dashboards, and operator audit streams.</span>
+
+(<span class="tok-op">lvc</span> [<span class="tok-str">"cloudhook.&gt;"</span>
+      <span class="tok-str">"alerts.&gt;"</span>
+      <span class="tok-str">"ops.&gt;"</span>
+      <span class="tok-str">"audit.&gt;"</span>])
+
+<span class="tok-com">; Flight frame:</span>
+<span class="tok-com">; cloudhook.kite-04.flight {"alt":612,"airspeed":28.4,"tether":43.1,</span>
+<span class="tok-com">;                           "yaw":-2.4,"roll":8.1,"mode":"LOOP"}</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"alt"</span> <span class="tok-str">"airspeed"</span> <span class="tok-str">"tether"</span> <span class="tok-str">"yaw"</span> <span class="tok-str">"roll"</span> <span class="tok-str">"mode"</span> payload))
+
+<span class="tok-com">; Weather frame:</span>
+<span class="tok-com">; cloudhook.kite-04.weather {"wind":31.2,"gust":39.5,"shear":0.14,</span>
+<span class="tok-com">;                            "pressure":1002.3,"rain":0.0}</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.weather"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"wind"</span> <span class="tok-str">"gust"</span> <span class="tok-str">"shear"</span> <span class="tok-str">"pressure"</span> <span class="tok-str">"rain"</span> payload))
+
+<span class="tok-com">; Power frame:</span>
+<span class="tok-com">; cloudhook.kite-04.power {"kw":84.2,"voltage":711,"battery":68.1,</span>
+<span class="tok-com">;                          "inverter":"GRID","brake":0}</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.power"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"kw"</span> <span class="tok-str">"voltage"</span> <span class="tok-str">"battery"</span> <span class="tok-str">"inverter"</span> <span class="tok-str">"brake"</span> payload))
+
+<span class="tok-com">; Stable dashboard outputs.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight.alt"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-num">10</span>)
+      (<span class="tok-op">quantize</span> <span class="tok-num">10</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"band"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight.airspeed"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-kw">:ms</span> <span class="tok-num">20000</span>)
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">0.6</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.weather.wind"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.power.kw"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">hold-off</span> <span class="tok-num">5000</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"sampled"</span>))))
+
+<span class="tok-com">; Liveness and recent snapshots.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight"</span>
+  (<span class="tok-op">do</span>
+    (<span class="tok-op">sample!</span> <span class="tok-kw">:ms</span> <span class="tok-num">4000</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"snapshot"</span>) payload)
+    (<span class="tok-op">dropout</span> <span class="tok-kw">:ms</span> <span class="tok-num">30000</span>
+      <span class="tok-kw">:lost</span>  (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"true"</span>)
+      <span class="tok-kw">:found</span> (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"false"</span>))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.weather"</span>
+  (<span class="tok-op">sample!</span> <span class="tok-kw">:ms</span> <span class="tok-num">10000</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"snapshot"</span>) payload))
+
+<span class="tok-com">; Flight envelope protection.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight.alt"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">or</span> (<span class="tok-op">&lt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">6</span> payload-float) <span class="tok-num">350.0</span>)
+                  (<span class="tok-op">&gt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">6</span> payload-float) <span class="tok-num">900.0</span>))
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"altitude-envelope"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) <span class="tok-str">"altitude-normal"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight.tether"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">percentile</span> <span class="tok-num">30</span> <span class="tok-num">0.95</span> payload-float) <span class="tok-num">72.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"ops"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"winch"</span> <span class="tok-str">"ease"</span>) <span class="tok-str">"high-tension"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"ops"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"winch"</span> <span class="tok-str">"hold"</span>) <span class="tok-str">"tension-normal"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight.roll"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">stddev</span> <span class="tok-num">20</span> payload-float) <span class="tok-num">14.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"unstable"</span>) payload)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.flight.mode"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">changed?</span> payload)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"audit"</span> (<span class="tok-op">now</span> <span class="tok-kw">:date</span>) (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"mode"</span>)
+              (<span class="tok-op">str-concat</span> subject <span class="tok-str">": "</span> payload))))
+
+<span class="tok-com">; Weather hazards.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.weather.gust"</span>
+  (<span class="tok-op">-&gt;</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">47.0</span>)
+      (<span class="tok-op">rising-edge</span>)
+      (<span class="tok-op">throttle</span> <span class="tok-kw">:ms</span> <span class="tok-num">600000</span> <span class="tok-num">3</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts"</span> <span class="tok-str">"gust"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.weather.shear"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-kw">:ms</span> <span class="tok-num">30000</span> payload-float) <span class="tok-num">0.32</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"ops"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"pattern"</span> <span class="tok-str">"widen"</span>) <span class="tok-str">"shear"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"ops"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"pattern"</span> <span class="tok-str">"normal"</span>) <span class="tok-str">"shear-clear"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.weather.rain"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">-</span> (<span class="tok-op">moving-max</span> <span class="tok-num">20</span> payload-float)
+              (<span class="tok-op">moving-min</span> <span class="tok-num">20</span> payload-float)) <span class="tok-num">4.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"squall"</span>) payload)))
+
+<span class="tok-com">; Power quality and generation rollups.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.power.kw"</span>
+  (<span class="tok-op">do</span>
+    (<span class="tok-op">aggregate!</span> <span class="tok-kw">:ms</span> <span class="tok-num">300000</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"avg5m"</span>) <span class="tok-kw">:avg</span> payload-float)
+    (<span class="tok-op">bar!</span> <span class="tok-kw">:ms</span> <span class="tok-num">60000</span> payload-float)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.power.voltage"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">or</span> (<span class="tok-op">&lt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">8</span> payload-float) <span class="tok-num">640.0</span>)
+                  (<span class="tok-op">&gt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">8</span> payload-float) <span class="tok-num">780.0</span>))
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"voltage-out-of-band"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) <span class="tok-str">"voltage-normal"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.power.battery"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&lt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">12</span> payload-float) <span class="tok-num">25.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"reserve-low"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) <span class="tok-str">"reserve-recovered"</span>)))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.power.inverter"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">contains?</span> [<span class="tok-str">"ISLAND"</span> <span class="tok-str">"FAULT"</span> <span class="tok-str">"STARTUP"</span>] payload)
+    (<span class="tok-op">do</span>
+      (<span class="tok-op">count!</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts"</span> <span class="tok-str">"inverter"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload))))
+
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.power.brake"</span>
+  (<span class="tok-op">-&gt;</span> (<span class="tok-op">=</span> payload-int <span class="tok-num">1</span>)
+      (<span class="tok-op">rising-edge</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"audit"</span> (<span class="tok-op">now</span> <span class="tok-kw">:minute</span>) (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"brake"</span>))))
+
+<span class="tok-com">; Free-form kite diagnostics.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.*.log"</span>
+  (<span class="tok-op">do</span>
+    (<span class="tok-op">count!</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"ERROR"</span>))
+    (<span class="tok-op">when</span> (<span class="tok-op">or</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"ERROR"</span>)
+              (<span class="tok-op">contains?</span> payload <span class="tok-str">"LINE_SNAP"</span>)
+              (<span class="tok-op">contains?</span> payload <span class="tok-str">"BIRD_STRIKE"</span>))
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"audit"</span> (<span class="tok-op">now</span> <span class="tok-kw">:hour</span>) (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"events"</span>)
+                (<span class="tok-op">str-concat</span> subject <span class="tok-str">": "</span> payload)))))
+
+<span class="tok-com">; Fleet ingest rate.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"cloudhook.&gt;"</span>
+  (<span class="tok-op">-&gt;</span> payload
+      (<span class="tok-op">rate</span> <span class="tok-kw">:ms</span> <span class="tok-num">1000</span>)
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"ops.cloudhook.ingest.hz"</span>)))</code></pre></figure>
+<p>The structure matches Moonwell, with a few different techniques:</p>
+<ul><li><strong>Compound conditions in a <code>transition</code>.</strong> The altitude and voltage rules use <code>(or (&lt; avg LO) (&gt; avg HI))</code> to alert when a smoothed value leaves a band in either direction. Each <code>moving-avg</code> inside the <code>or</code> is its own call site with its own ring.</li><li><strong>Operator commands as subjects.</strong> The tether and shear rules publish to <code>ops.&lt;kite&gt;.winch.ease</code> and <code>ops.&lt;kite&gt;.pattern.widen</code>: the alert is addressed to whatever acts on it.</li><li><strong>Integer payloads.</strong> <code>(= payload-int 1)</code> through <code>rising-edge</code> records the moment a brake engages, once.</li><li><strong>Quantized bands.</strong> <code>moving-avg</code>, <code>quantize 10</code>, <code>squelch</code> reports altitude in 10-unit bands, so a dashboard updates only when the kite changes band.</li></ul>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>cd advanced-examples
+monoblok cloudhook_patchbay.edn
+python pump_cloudhook.py</code></pre></figure>
+<p>The pump scripts default to <code>127.0.0.1:4222</code>. Use <code>--host</code> and <code>--port</code> if monoblok is listening somewhere else.</p>
+<h2 id="making-your-own">Making your own<a class="anchor" href="#making-your-own" aria-label="Link to this section">#</a></h2>
+<p>To make more examples like these, give your coding agent the patchbay-specific instructions first. Append <code>docs/AGENTS_PATCHBAY.md</code> to an <code>AGENTS.md</code> (or <code>CLAUDE.md</code>) in the directory where you want the agent to work:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md &gt;&gt; ./AGENTS.md</code></pre></figure>
+<p>Then ask for a complete pair: one patchbay <code>.edn</code> file and one pump script that publishes matching test data.</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>Give me a cool patchbay .edn file plus a matching Python pump driver script.
+
+Make it a weird fictional telemetry domain, optionally with JSON input subjects, scalar
+demux rules, alerts, stable dashboard outputs, audit subjects, and a few
+windowed stats. The pump script should connect to monoblok on 127.0.0.1:4222
+and publish realistic randomized data for the subjects the patchbay expects.</code></pre></figure>
+<p>Check whatever comes back before running it:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok --validate your_example_patchbay.edn</code></pre></figure>
+<h2 id="sizing-a-large-patchbay">Sizing a large patchbay<a class="anchor" href="#sizing-a-large-patchbay" aria-label="Link to this section">#</a></h2>
+<ul><li>Cost follows the rules that <strong>match</strong> a message, not the number of rules in the file. Narrow filters keep the per-message work small.</li><li>Each re-entrant demux adds one round of rule evaluation per emitted field. Demux only the fields that later rules or subscribers use.</li><li>Every stateful form keeps a slot per concrete subject. A wildcard over thousands of devices is thousands of slots; see <a href="examples-market.html#budgeting-bar-state">Budgeting bar state</a> for how to measure it.</li><li><code>(now :minute)</code> in a subject creates a new subject every minute. Prefer <code>:hour</code> or <code>:date</code> unless you mean it.</li></ul>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="examples-nats.html"><small>Previous</small>NATS integration</a><a class="next" href="state.html"><small>Next</small>LVC, stats and snapshots</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

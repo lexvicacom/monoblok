@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Export, import and JetStream | monoblok docs</title>
+<meta name="description" content="Forward conditioned subjects to a real NATS cluster, tap remote subjects, and replay JetStream streams through patchbay.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Export, import and JetStream</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html" aria-current="page">Export, import and JetStream</a><ul class="toc"><li><a href="#export">Export</a></li><li><a href="#import">Import</a></li><li><a href="#jetstream">JetStream</a></li><li><a href="#secrets-and-addresses-from-the-environment">Secrets and addresses from the environment</a></li></ul></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Server</p>
+<h1>Export, import and JetStream</h1>
+<p class="lede">monoblok is meant to be paired with a real NATS cluster. <code>export</code> forwards chosen subjects out, <code>import</code> feeds remote subjects in as rule input, and JetStream import replays history before going live.</p>
+<p>Sensors publish to a local monoblok, patchbay rules do the conditioning, and only the tidy subjects of interest are forwarded to a remote NATS cluster. The subjects remain in the local monoblok for local subscribers. An edge monoblok can therefore do its conditioning work locally and send only the meaningful subjects on to a production NATS deployment.</p>
+<p>Both directions connect through vendored <a href="https://github.com/nats-io/nats.c" target="_blank" rel="noopener noreferrer">nats.c</a>, so TLS and <code>.creds</code> files are supported and reconnects are handled for you. Leaving the forms out makes the runtime cost zero. Runnable versions of everything here are in <a href="examples-nats.html">NATS integration examples</a>.</p>
+<h2 id="export">Export<a class="anchor" href="#export" aria-label="Link to this section">#</a></h2>
+<p>Zero or one <code>(export ...)</code> form in the patchbay file configures the outbound forwarder. The old <code>(bridge ...)</code> spelling is deprecated but still accepted.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">export</span>
+  <span class="tok-kw">:servers</span>  [<span class="tok-str">"tls://connect.ngs.global:4222"</span>]
+  <span class="tok-kw">:creds</span>    <span class="tok-str">"/etc/monoblok/ngs.creds"</span>
+  <span class="tok-kw">:tls</span>      true
+  <span class="tok-kw">:name</span>     <span class="tok-str">"monoblok-prod-1"</span>
+  <span class="tok-kw">:origin-header</span> true
+  <span class="tok-kw">:replay-header</span> true
+  <span class="tok-kw">:export</span>   [<span class="tok-str">"telemetry.&gt;"</span> <span class="tok-str">"alerts.&gt;"</span>])</code></pre></figure>
+<p>A local publish (from a NATS client or a patchbay rule) whose subject matches any <code>:export</code> filter is forwarded as-is. With <code>:origin-header true</code>, forwarded messages also carry <code>x-monoblok: &lt;hostname&gt;</code> for remote-side provenance, including replay-derived publishes bridged during JetStream catch-up. With <code>:replay-header true</code>, replay-derived bridge publishes carry <code>x-monoblok-replay: true</code> and <code>x-monoblok-assumed-ts: &lt;unix-ms&gt;</code>, the wall timestamp used for replay evaluation; after catch-up, live bridge publishes do not carry either replay header. Local subscribers are served first, bridge second, so a slow remote can't starve local delivery. Reconnects are handled inside nats.c.</p>
+<p>It is export-only: remote replies are not routed back. A good export list names the conditioned subjects, not the raw ones. Point it at <code>T.*.p.stable</code> and a JetStream stream on the far side stores deduplicated, rounded prices instead of the raw firehose: less write amplification, less retained noise, and smaller, faster replays.</p>
+<h3 id="export-keywords">Export keywords<a class="anchor" href="#export-keywords" aria-label="Link to this section">#</a></h3>
+<p>A single optional <code>(export ...)</code> form at top level configures the outbound NATS forwarder. Deprecated <code>(bridge ...)</code> is still accepted as a compatibility alias. Counters remain <code>$STATS.bridge.published</code> / <code>.dropped</code> on the normal stats tick.</p>
+<p>String-valued config fields can use <code>(env "NAME")</code>; YAML uses <code>env: "NAME"</code>. Env values are read once at patchbay load time, must be non-empty, and are not comma-split.</p>
+<div class="table-wrap"><table><thead><tr><th>keyword</th><th>type</th><th>meaning</th></tr></thead><tbody><tr><td><code>:servers</code></td><td>vector of strings</td><td>server URLs (nats:// or tls://). e.g. <code>["nats://a:4222" "nats://b:4222"]</code></td></tr><tr><td><code>:name</code></td><td>string</td><td>client name shown in remote monitoring</td></tr><tr><td><code>:creds</code></td><td>string</td><td>path to a .creds file (JWT+NKey)</td></tr><tr><td><code>:user</code> / <code>:password</code></td><td>strings</td><td>basic auth</td></tr><tr><td><code>:token</code></td><td>string</td><td>bearer token</td></tr><tr><td><code>:tls</code></td><td>bool</td><td>required for tls:// URLs</td></tr><tr><td><code>:tls-ca</code></td><td>string</td><td>CA cert path (PEM)</td></tr><tr><td><code>:tls-cert</code> / <code>:tls-key</code></td><td>strings</td><td>client cert + key (mTLS)</td></tr><tr><td><code>:tls-skip-verify</code></td><td>bool</td><td>dev only, insecure</td></tr><tr><td><code>:origin-header</code></td><td>bool</td><td>when true, forwarded messages include <code>x-monoblok: &lt;hostname&gt;</code></td></tr><tr><td><code>:replay-header</code></td><td>bool</td><td>when true, replay bridge output includes <code>x-monoblok-replay: true</code> and <code>x-monoblok-assumed-ts: &lt;unix-ms&gt;</code>; live output omits both</td></tr><tr><td><code>:connect-timeout-ms</code> / <code>:ping-interval-ms</code></td><td>numbers</td><td>tuning</td></tr><tr><td><code>:max-reconnect</code></td><td>number</td><td>-1 for unlimited</td></tr><tr><td><code>:reconnect-wait-ms</code></td><td>number</td><td>tuning</td></tr><tr><td><code>:export</code></td><td>vector of strings</td><td>subject filters to forward (standard NATS wildcards). e.g. <code>["telemetry.&gt;" "alerts.&gt;"]</code></td></tr></tbody></table></div>
+<h2 id="import">Import<a class="anchor" href="#import" aria-label="Link to this section">#</a></h2>
+<p>Zero or one <code>(import ...)</code> form configures inbound tap mode. The flat shape is a compatibility alias for one core NATS import:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">import</span>
+  <span class="tok-kw">:servers</span> [<span class="tok-str">"nats://raw.example:4222"</span>]
+  <span class="tok-kw">:name</span>    <span class="tok-str">"monoblok-import-prod-1"</span>
+  <span class="tok-kw">:subject</span> [<span class="tok-str">"raw.&gt;"</span> <span class="tok-str">"replay.&gt;"</span>])
+
+(<span class="tok-op">on</span> <span class="tok-str">"raw.temp"</span>
+  (<span class="tok-op">publish!</span> <span class="tok-str">"clean.temp"</span> payload))</code></pre></figure>
+<p>Imported messages are patchbay inputs only. Direct monoblok subscribers do not see the raw imported subject unless a rule republishes it: a subscriber to <code>raw.&gt;</code> will not see the imported <code>raw.temp</code>, only what rules emit, such as <code>clean.temp</code> above. In import mode the local socket stays open for <code>SUB</code>, <code>UNSUB</code>, <code>PING</code> and LVC and stats reads, but client <code>PUB</code> commands are rejected.</p>
+<p>Newer configs can make the import kind explicit. <code>:core</code> entries are live core NATS subscriptions; <code>:streams</code> entries are JetStream durable consumers:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">import</span>
+  <span class="tok-kw">:core</span>
+  [[<span class="tok-kw">:servers</span> [<span class="tok-str">"nats://raw.example:4222"</span>]
+    <span class="tok-kw">:subject</span> [<span class="tok-str">"raw.&gt;"</span>]]]
+
+  <span class="tok-kw">:streams</span>
+  [[<span class="tok-kw">:servers</span> [<span class="tok-str">"nats://js.example:4222"</span>]
+    <span class="tok-kw">:subject</span> <span class="tok-str">"sensors.temp"</span>
+    <span class="tok-kw">:stream</span> <span class="tok-str">"SENSORS"</span>
+    <span class="tok-kw">:consumer</span> <span class="tok-str">"monoblok-prod-1"</span>
+    <span class="tok-kw">:catch-up</span> true]])</code></pre></figure>
+<p>When export and import touch the same cluster, set <code>:origin-header true</code> on both: exported messages carry <code>x-monoblok: &lt;hostname&gt;</code>, and import ignores messages carrying that header, so monoblok does not consume its own output.</p>
+<h3 id="import-keywords">Import keywords<a class="anchor" href="#import-keywords" aria-label="Link to this section">#</a></h3>
+<p>A single optional <code>(import ...)</code> form at top level configures inbound tap mode from a real NATS cluster. The flat shape configures one core NATS import; newer configs can use <code>:core [...]</code> for core NATS entries and <code>:streams [...]</code> for JetStream durable consumers. Imported raw messages run through patchbay but are not visible to direct monoblok subscribers unless a rule republishes them. Local socket clients may still subscribe, but client <code>PUB</code> commands are rejected while import mode is configured.</p>
+<p>Counters land on <code>$STATS.import.received</code>, <code>.processed</code>, <code>.dropped</code>, and <code>.failed</code> on the normal stats tick.</p>
+<p>Connection keywords match export: <code>:servers</code>, <code>:name</code>, <code>:creds</code>, <code>:user</code> / <code>:password</code>, <code>:token</code>, <code>:tls</code>, <code>:tls-ca</code>, <code>:tls-cert</code> / <code>:tls-key</code>, <code>:tls-skip-verify</code>, <code>:connect-timeout-ms</code>, <code>:ping-interval-ms</code>, <code>:max-reconnect</code>, and <code>:reconnect-wait-ms</code>.</p>
+<div class="table-wrap"><table><thead><tr><th>keyword</th><th>type</th><th>meaning</th></tr></thead><tbody><tr><td><code>:subject</code> / <code>:subjects</code></td><td>string or vector of strings</td><td>remote subject filters to subscribe to</td></tr><tr><td><code>:core</code></td><td>vector of entry vectors</td><td>scoped core NATS import entries</td></tr><tr><td><code>:streams</code></td><td>vector of entry vectors</td><td>scoped JetStream import entries; one subject filter per entry in v1</td></tr><tr><td><code>:stream</code></td><td>string</td><td>JetStream stream name, required inside <code>:streams</code> entries</td></tr><tr><td><code>:consumer</code></td><td>string</td><td>JetStream durable consumer name, required inside <code>:streams</code> entries</td></tr><tr><td><code>:catch-up</code></td><td>bool</td><td>JetStream historical replay before listener open; default true</td></tr><tr><td><code>:origin-header</code></td><td>bool</td><td>when true, imported messages carrying <code>x-monoblok</code> are ignored</td></tr><tr><td><code>:max-pending</code></td><td>number</td><td>bounded NATS-to-loop queue length; default 4096</td></tr></tbody></table></div>
+<h2 id="jetstream">JetStream<a class="anchor" href="#jetstream" aria-label="Link to this section">#</a></h2>
+<p>With <code>:streams</code>, monoblok consumes JetStream; it does not serve JetStream to local clients. On startup it can replay historical messages before opening its listener, using JetStream message metadata as the event-time clock, so windows, bars, counters and the last-value cache are warm before the first client connects.</p>
+<p>JetStream import is consumer-only: monoblok does not serve JetStream to local clients. On startup, <code>:catch-up true</code> replays each configured stream entry to the stream's startup high-water sequence before monoblok opens its listener. Multiple stream entries catch up serially in config order. After catch-up, the same durable consumers continue in live mode. <code>:catch-up false</code> skips the historical event-time loading phase and consumes any durable backlog as live processing-time work.</p>
+<p>For filtered stream entries, the startup high-water is a global stream sequence, not a count of messages monoblok must consume. Catch-up stops when a delivered matching message reaches that startup sequence, or when the durable consumer reports <code>pending=0</code> for the filter.</p>
+<p>Replay-derived output is ordinary patchbay output: if it matches <code>export</code>, it is bridged during catch-up. With <code>origin-header: true</code>, those bridged messages carry the same <code>x-monoblok</code> provenance header as live bridged messages. With <code>replay-header: true</code>, replay-derived bridged messages also carry <code>x-monoblok-replay: true</code> and <code>x-monoblok-assumed-ts: &lt;unix-ms&gt;</code>, where the timestamp is the wall timestamp used for patchbay evaluation. Live bridged messages do not carry these replay headers.</p>
+<h3 id="telling-replay-from-live">Telling replay from live<a class="anchor" href="#telling-replay-from-live" aria-label="Link to this section">#</a></h3>
+<p>During JetStream catch-up, rules see <code>replaying?</code> as true. After the listener opens, <code>replaying?</code> is false. Rules that do not mention <code>replaying?</code> produce the same subjects during replay and live operation; rules that want to suppress or redirect historical output gate that behaviour explicitly:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"js.sensors.temp"</span>
+  (<span class="tok-op">if</span> replaying?
+    (<span class="tok-op">publish!</span> <span class="tok-str">"js.replay.last-temp"</span> payload)
+    (<span class="tok-op">publish!</span> <span class="tok-str">"js.live.temp"</span> payload)))</code></pre></figure>
+<h3 id="acknowledgement">Acknowledgement<a class="anchor" href="#acknowledgement" aria-label="Link to this section">#</a></h3>
+<p>Event time comes from JetStream message metadata. A message is acknowledged only after the patchbay handler and the downstream publish path succeed. Malformed subjects, oversized payloads, missing metadata, failed rule evaluation, or a failed downstream publish leave the message unacked; JetStream owns redelivery.</p>
+<p>The JetStream worker threads never touch rule state. Each message is handed to the single event loop for evaluation, one at a time, and that handoff is backpressured.</p>
+<p>See the <a href="examples-nats.html#jetstream-replay">JetStream replay example</a> for a complete runnable file.</p>
+<h2 id="secrets-and-addresses-from-the-environment">Secrets and addresses from the environment<a class="anchor" href="#secrets-and-addresses-from-the-environment" aria-label="Link to this section">#</a></h2>
+<p>Top-level config string values may be written as <code>(env "NAME")</code>. This is load-time only, not a rule-body form, and it reads exactly one environment variable as one string. Missing or empty variables fail validation; values are not split on commas.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">export</span>
+  <span class="tok-kw">:servers</span> (<span class="tok-op">env</span> <span class="tok-str">"NATS_SERVERS"</span>)
+  <span class="tok-kw">:token</span>   (<span class="tok-op">env</span> <span class="tok-str">"NATS_TOKEN"</span>)
+  <span class="tok-kw">:export</span>  [<span class="tok-str">"sensors.&gt;"</span>])</code></pre></figure>
+<p>In YAML config, write the same value as <code>env: "NAME"</code>:</p>
+<figure class="code"><figcaption><span>YAML</span></figcaption><pre><code><span class="tok-key">export:</span>
+<span class="tok-key">  servers:</span>
+<span class="tok-key">    env:</span> <span class="tok-str">"NATS_SERVERS"</span>
+<span class="tok-key">  token:</span>
+<span class="tok-key">    env:</span> <span class="tok-str">"NATS_TOKEN"</span>
+<span class="tok-key">  export:</span> [<span class="tok-str">"sensors.&gt;"</span>]</code></pre></figure>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="clients.html"><small>Previous</small>NATS clients, auth and HTTP</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Install and run | monoblok docs</title>
+<meta name="description" content="Install monoblok from a binary, container or source, then run, deploy and size it.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Install and run</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html" aria-current="page">Install and run</a><ul class="toc"><li><a href="#install">Install</a></li><li><a href="#command-line">Command line</a></li><li><a href="#deploying">Deploying</a></li><li><a href="#design">Design</a></li><li><a href="#running-the-tests">Running the tests</a></li><li><a href="#how-fast-is-it">How fast is it?</a></li></ul></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Start</p>
+<h1>Install and run</h1>
+<p class="lede">monoblok is a single binary for Linux (x64 or ARM64) and macOS on Apple Silicon, and a multi-arch container image. There is no cluster to form and no storage to provision.</p>
+<h2 id="install">Install<a class="anchor" href="#install" aria-label="Link to this section">#</a></h2>
+<h3 id="binary">Binary<a class="anchor" href="#binary" aria-label="Link to this section">#</a></h3>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash</code></pre></figure>
+<p>The <a href="https://github.com/lexvicacom/monoblok/blob/main/scripts/start.sh" target="_blank" rel="noopener noreferrer">release helper</a> downloads the latest monoblok (macOS/Linux) and extracts it into the current directory. To run the unpacked binary:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn</code></pre></figure>
+<p>Release binaries require the OpenSSL 3 runtime libraries. On macOS, install them with <code>brew install openssl@3</code> before running monoblok. On Linux, install your distribution's OpenSSL 3 runtime package. Container images include these libraries.</p>
+<p>The unpacked directory contains the runnable <a href="examples.html">examples</a>. Run the <code>.sh</code> files.</p>
+<h3 id="container">Container<a class="anchor" href="#container" aria-label="Link to this section">#</a></h3>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>docker run --rm -p 14222:14222 ghcr.io/lexvicacom/monoblok:latest --port 14222</code></pre></figure>
+<h3 id="build-from-source">Build from source<a class="anchor" href="#build-from-source" aria-label="Link to this section">#</a></h3>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/monoblok --port 14222 --patchbay patchbay.edn</code></pre></figure>
+<p>Requires CMake 3.22+, a compiler with C23 mode (GCC 11+ or current Apple Clang), and system OpenSSL (1.1.1 or 3.x; 4.x is not supported). libuv, nats.c and yyjson are vendored.</p>
+<h2 id="command-line">Command line<a class="anchor" href="#command-line" aria-label="Link to this section">#</a></h2>
+<p>A patchbay file is the only configuration. Pass it positionally or with <code>--patchbay</code>; <code>.edn</code>, <code>.json</code>, <code>.yml</code> and <code>.yaml</code> are accepted.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok --port 4222 --patchbay patchbay.edn
+monoblok examples/sensors.edn</code></pre></figure>
+<div class="table-wrap"><table><thead><tr><th>option</th><th>meaning</th></tr></thead><tbody><tr><td><code>--patchbay FILE</code></td><td>patchbay path (also accepted as the positional argument)</td></tr><tr><td><code>--host HOST</code> / <code>--port PORT</code></td><td>NATS listener, default <code>127.0.0.1:4222</code></td></tr><tr><td><code>--http-host HOST</code> / <code>--http-port PORT</code></td><td>enable the <a href="clients.html#http-sse-adapter">HTTP/SSE adapter</a> on this port</td></tr><tr><td><code>--tls-cert FILE</code> / <code>--tls-key FILE</code></td><td>enable <a href="clients.html#tls-for-local-nats-clients">client TLS</a></td></tr><tr><td><code>--auth-token-env ENV</code></td><td>require a CONNECT <code>auth_token</code> matching the value of <code>ENV</code></td></tr><tr><td><code>--auth-user-env ENV</code> / <code>--auth-pass-env ENV</code></td><td>require a CONNECT user and password (<a href="clients.html#simple-auth-for-local-nats-clients">auth</a>)</td></tr><tr><td><code>--no-lvc</code></td><td>disable the <a href="state.html"><code>$LVC.*</code></a> last-value cache</td></tr><tr><td><code>--snapshot FILE</code></td><td>load and write an LVC and patchbay state <a href="state.html#snapshots">snapshot</a></td></tr><tr><td><code>--snapshot-every S</code></td><td>write the snapshot every S seconds</td></tr><tr><td><code>--stats-tick-ms MS</code></td><td><a href="state.html#stats-live-counters"><code>$STATS.*</code></a> publish cadence, default 60000</td></tr><tr><td><code>--validate</code></td><td>parse and lint the patchbay, then exit</td></tr><tr><td><code>--soundcheck</code></td><td>read <code>SUBJECT|payload</code> rows from stdin and print what the rules emit</td></tr><tr><td><code>--soundcheck-label</code></td><td>prefix soundcheck rows with <code>in|</code> or <code>out|</code></td></tr><tr><td><code>--soundcheck-linger-ms MS</code></td><td>keep clock and window state alive after soundcheck EOF, default 10000; 0 disables</td></tr><tr><td><code>--trace</code></td><td>log parsed client operations to stderr</td></tr><tr><td><code>--io-uring</code> / <code>--no-io-uring</code></td><td>opt in to libuv's io_uring paths on Linux (off by default, for seccomp-friendly containers)</td></tr><tr><td><code>--version</code>, <code>-V</code> / <code>--help</code>, <code>-h</code></td><td>print the version or usage</td></tr></tbody></table></div>
+<p><code>--validate</code>, <code>--soundcheck</code> and <code>--trace</code> are covered in <a href="patchbay.html#validate-and-debug-rules">Validate and debug rules</a>.</p>
+<h2 id="deploying">Deploying<a class="anchor" href="#deploying" aria-label="Link to this section">#</a></h2>
+<p>monoblok has low hardware requirements. A 2-vCPU VM with 256 MB+ of RAM is a good starting point. monoblok runs on one application core; the operating system can still use other cores for networking and file I/O.</p>
+<p>The systemd unit plus <code>--snapshot</code> handles restarts: a crash or reboot loses at most one snapshot interval of in-flight conditioning state. If you're bridging upstream, that cluster can be thought of as the system of record (anything already exported is durable there).</p>
+<h3 id="systemd">systemd<a class="anchor" href="#systemd" aria-label="Link to this section">#</a></h3>
+<p>Linux release tarballs ship a unit file and installer in <a href="https://github.com/lexvicacom/monoblok/tree/main/scripts" target="_blank" rel="noopener noreferrer">scripts/</a>:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>sudo bash scripts/install-systemd.sh
+sudo systemctl enable --now monoblok
+journalctl -u monoblok -f</code></pre></figure>
+<p>Drops the binary at <code>/usr/local/bin/monoblok</code>, the patchbay at <code>/etc/monoblok/patchbay.edn</code>, snapshots under <code>/var/lib/monoblok/state.mblk</code> (every 10s plus on stop), and creates a <code>monoblok</code> system user.</p>
+<p>Restart behaviour depends on <a href="state.html#snapshots">snapshots</a>: with <code>--snapshot</code>, the last-value cache and the state inside gates and windows survive a restart.</p>
+<h2 id="design">Design<a class="anchor" href="#design" aria-label="Link to this section">#</a></h2>
+<p>monoblok is intentionally simple at runtime: one process, one libuv loop, one application thread for protocol parsing, subject matching, patchbay evaluation, fan-out, write buffering, and LVC state. That makes the behavior predictable and keeps coordination costs out of the publish path.</p>
+<p>For lower-level details on ownership boundaries, snapshot I/O, libuv behavior, borrowed slices, and allocation policy, see <a href="https://github.com/lexvicacom/monoblok/blob/main/design/implementation-notes.md" target="_blank" rel="noopener noreferrer">implementation notes</a>.</p>
+<h2 id="running-the-tests">Running the tests<a class="anchor" href="#running-the-tests" aria-label="Link to this section">#</a></h2>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --build build --target smoke</code></pre></figure>
+<p><code>smoke</code> runs the TCP server smoke, patchbay <code>soundcheck</code>, <code>load-smoke</code>, and the larger <code>load-soak</code> profile. <code>load-smoke</code> starts a temporary daemon and verifies exact TCP fan-out plus derived <code>moving-avg</code>, <code>moving-sum</code>, and <code>count!</code> streams.</p>
+<h2 id="how-fast-is-it">How fast is it?<a class="anchor" href="#how-fast-is-it" aria-label="Link to this section">#</a></h2>
+<p>tl;dr: It's likely to be fast enough. The saved low-end VPS run is already in the low millions of messages/sec for simple pub/sub and fan-out cases. Getting meaningful benchmarks turned out to be trickier than I first realised, though, so run <code>scripts/bench-with-nats-server.sh</code> on your own hardware if numbers matter to you.</p>
+<p>The <strong>shape</strong> of the comparison vs. nats-server, though, is consistent across runs:</p>
+<ul><li><strong>nats-server wins on pure publish throughput on big machines.</strong> Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over and there are spare cores to spread it across. On small ARM VPSes the gap narrows or disappears: nats-server has less parallelism to exploit, and monoblok has less coordination overhead to pay.</li><li><strong>The two are roughly comparable at low fan-out</strong> (1-10 subscribers per publish).</li><li><strong>monoblok scales better with subscriber count.</strong> Its fan-out model has low per-subscriber coordination overhead. Crossover happens somewhere around 10-30 subscribers; the further past that you go, the bigger monoblok's lead.</li></ul>
+<p>Worth keeping in mind: nats-server has a decade of production-grade performance work behind it. Any monoblok win in these benches should be read as "the single-threaded design happens to fit this specific workload shape well," not "monoblok is faster than nats." The right tool for most pub/sub deployments is still nats-server; monoblok is for the cases where the patchbay or LVC features earn their place, and "fast enough on a small box" is a happy side-effect of the design, not the headline.</p>
+<p>The <a href="https://github.com/lexvicacom/monoblok/tree/main/bench-results" target="_blank" rel="noopener noreferrer">saved benchmark runs</a> span up to 2-18 million msgs/sec across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples and trends, not capacity promises.</p>
+<p>Patchbay overhead scales with matching rules per PUB, not total rules in the file. On Linux the benchmark scripts default to monoblok's opt-in io_uring path to match the saved runs; pass <code>--epoll</code> to benchmark the production-default epoll path.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>scripts/bench.sh
+scripts/bench-with-nats-server.sh</code></pre></figure>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="index.html"><small>Previous</small>Introduction</a><a class="next" href="patchbay.html"><small>Next</small>Patchbay guide</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

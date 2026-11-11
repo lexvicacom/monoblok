@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Examples | monoblok docs</title>
+<meta name="description" content="Runnable patchbay examples graded from a five-line sensor rule to a multi-asset market data feed.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Start here</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html" aria-current="page">Start here</a><ul class="toc"><li><a href="#how-to-run-them">How to run them</a></li><li><a href="#the-examples-by-level">The examples by level</a></li><li><a href="#round-and-squelch">Round and squelch</a></li><li><a href="#last-value-cache">Last-value cache</a></li><li><a href="#a-tour-of-the-primitives">A tour of the primitives</a></li></ul></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Examples</p>
+<h1>Examples</h1>
+<p class="lede">Every example here is a real file in the repository, shown in full and checked with <code>monoblok --validate</code>. They are graded so you can start small and stop when you have what you need.</p>
+<h2 id="how-to-run-them">How to run them<a class="anchor" href="#how-to-run-them" aria-label="Link to this section">#</a></h2>
+<p>Each example in <a href="https://github.com/lexvicacom/monoblok/tree/main/examples" target="_blank" rel="noopener noreferrer"><code>examples/</code></a> has a matching <code>.sh</code> script that starts a temporary monoblok, subscribes, publishes sample data and prints what arrived. The scripts need the <a href="https://github.com/nats-io/natscli" target="_blank" rel="noopener noreferrer">NATS CLI</a>.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/sensors.sh</code></pre></figure>
+<p>To run a patchbay yourself, pass the file to monoblok and use any NATS client:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok examples/sensors.edn
+nats sub <span class="tok-str">'sensors.&gt;'</span>
+nats pub sensors.temp 42.04</code></pre></figure>
+<p>To see what a file does with no server at all, pipe <code>SUBJECT|payload</code> rows through <code>--soundcheck</code>. The transcripts on these pages are produced this way when the site is built, so they are real output:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>printf <span class="tok-str">'sensors.temp|42.01\nsensors.temp|42.04\n'</span> | monoblok --soundcheck --soundcheck-label examples/sensors.edn</code></pre></figure>
+<p>When testing with <code>nats pub</code>, pass negative bodies after <code>--</code>, for example <code>nats pub sensors.temp -- -5</code>.</p>
+<h2 id="the-examples-by-level">The examples by level<a class="anchor" href="#the-examples-by-level" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>example</th><th>level</th><th>what it shows</th></tr></thead><tbody><tr><td><a href="#round-and-squelch"><code>sensors.edn</code></a></td><td><span class="tag tag-starter">Starter</span></td><td>round + squelch on a noisy sensor</td></tr><tr><td><a href="#last-value-cache"><code>lvc.edn</code></a></td><td><span class="tag tag-starter">Starter</span></td><td><code>$LVC.&gt;</code> replay: a late joiner gets the last value</td></tr><tr><td><a href="#a-tour-of-the-primitives"><code>demo.edn</code></a></td><td><span class="tag tag-starter">Starter</span></td><td>one rule for each primitive family</td></tr><tr><td><a href="examples-telemetry.html#office-temperature"><code>office-temp.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>moving-average alert and all-clear with <code>transition</code> and <code>hysteresis</code></td></tr><tr><td><a href="examples-telemetry.html#rental-car-telemetry"><code>rental-car.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>quantize, deadband and an over-rev alert, in EDN and YAML</td></tr><tr><td><a href="examples-telemetry.html#json-frames-from-a-gateway"><code>json-frames.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td><code>json-demux!</code> a JSON device into scalar sub-subjects</td></tr><tr><td><a href="examples-telemetry.html#joins-and-request-reply"><code>ask.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>join two subjects with <code>last</code>, answer a request with <code>reply!</code></td></tr><tr><td><a href="examples-telemetry.html#clock-forms-and-a-funnel"><code>clocked.edn</code></a></td><td><span class="tag tag-advanced">Advanced</span></td><td>silence detection, debounce, sampling, clocked aggregates, <code>every</code>, a funnel</td></tr><tr><td><a href="examples-telemetry.html#latency-statistics"><code>latency-stats.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>live p50/p95/p99/stddev over a sliding window</td></tr><tr><td><a href="examples-market.html#price-ticker"><code>ticker.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>round, squelch, big-jump alerts, export</td></tr><tr><td><a href="examples-market.html#ohlc-bars"><code>bars.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>tick-count OHLC bars per symbol, alerting on closed bars</td></tr><tr><td><a href="examples-market.html#a-market-data-firehose"><code>json-massive/</code></a></td><td><span class="tag tag-advanced">Advanced</span></td><td>a multi-asset JSON feed demuxed, cleaned and alerted on</td></tr><tr><td><a href="examples-market.html#budgeting-bar-state"><code>bar-cardinality.edn</code></a></td><td><span class="tag tag-advanced">Advanced</span></td><td>measuring memory for bars across a large symbol universe</td></tr><tr><td><a href="examples-nats.html#export-to-a-nats-server"><code>bridge.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>export selected subjects to a real NATS server</td></tr><tr><td><a href="examples-nats.html#tap-an-existing-nats-server"><code>import.edn</code></a></td><td><span class="tag tag-intermediate">Intermediate</span></td><td>tap remote subjects, keep raw input private, export the clean stream</td></tr><tr><td><a href="examples-nats.html#jetstream-replay"><code>jetstream.yml</code></a></td><td><span class="tag tag-advanced">Advanced</span></td><td>replay a populated JetStream stream, then continue live</td></tr><tr><td><a href="examples-large.html#moonwell"><code>moonwell_patchbay.edn</code></a></td><td><span class="tag tag-advanced">Advanced</span></td><td>24 rules over nested JSON telemetry, using most of the language</td></tr><tr><td><a href="examples-large.html#cloudhook"><code>cloudhook_patchbay.edn</code></a></td><td><span class="tag tag-advanced">Advanced</span></td><td>23 rules: a second large generated patchbay</td></tr></tbody></table></div>
+<h2 id="round-and-squelch">Round and squelch<a class="anchor" href="#round-and-squelch" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-starter">Starter</span> The canonical first rule. A jittery sensor publishes readings that differ in the second decimal place; subscribers only care when the value really moves.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/sensors.edn" target="_blank" rel="noopener noreferrer">examples/sensors.edn</a></span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))</code></pre></figure>
+<p><code>payload-float</code> parses the payload as a number, <a href="forms.html#idempotent-filters"><code>round</code></a> trims it to one decimal place, <a href="forms.html#idempotent-filters"><code>squelch</code></a> passes it only if it differs from the last value seen on this subject, and <a href="forms.html#side-effects"><code>publish!</code></a> sends it to <code>&lt;subject&gt;.stable</code>. When <code>squelch</code> suppresses, it returns nil, and <code>publish!</code> on nil does nothing.</p>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/sensors.edn" target="_blank" rel="noopener noreferrer">examples/sensors.edn</a></span></figcaption><pre><code><span class="sc-in">in   sensors.temp  42.01</span>
+<span class="sc-out">out  sensors.temp.stable  42</span>
+<span class="sc-in">in   sensors.temp  42.04</span>
+<span class="sc-in">in   sensors.temp  42.08</span>
+<span class="sc-out">out  sensors.temp.stable  42.1</span>
+<span class="sc-in">in   sensors.temp  42.12</span>
+<span class="sc-in">in   sensors.temp  43.00</span>
+<span class="sc-out">out  sensors.temp.stable  43</span>
+<span class="sc-in">in   sensors.temp  43.00</span>
+<span class="sc-in">in   sensors.temp  43.01</span></code></pre></figure>
+<p>Seven readings in, three out. State is per subject, so <code>sensors.temp</code> and <code>sensors.humidity</code> are deduplicated independently by the same rule.</p>
+<h2 id="last-value-cache">Last-value cache<a class="anchor" href="#last-value-cache" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-starter">Starter</span> A normal subscriber sees nothing until the next publish. The last-value cache fixes that: opt subjects in with <code>(lvc ...)</code>, and a subscriber to <code>$LVC.&lt;subject&gt;</code> gets the cached value immediately, then live updates.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/lvc.edn" target="_blank" rel="noopener noreferrer">examples/lvc.edn</a></span></figcaption><pre><code><span class="tok-com">;; LVC example: opt all subjects into $LVC.&lt;subject&gt; last-value streams.</span>
+(<span class="tok-op">lvc</span> [<span class="tok-str">"&gt;"</span>])
+(<span class="tok-op">on</span> <span class="tok-str">"never.matches"</span> (<span class="tok-op">publish!</span> <span class="tok-str">"never"</span> payload))</code></pre></figure>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code><span class="tok-com"># Publish a value, then walk away.</span>
+nats pub sensors.temp 23.5
+
+<span class="tok-com"># Later, subscribe. A normal SUB would see nothing until the next publish.</span>
+nats sub <span class="tok-str">'$LVC.sensors.temp'</span>
+<span class="tok-com"># -&gt; prints "23.5" immediately</span></code></pre></figure>
+<p>Single-quote any subject starting with <code>$</code> so your shell does not try to expand it. The cache pairs particularly well with conditioning rules: a subscriber to <code>$LVC.sensors.temp.stable</code> gets the most recent rule-produced value on connect, not the raw input. More in <a href="state.html">LVC, stats and snapshots</a>.</p>
+<h2 id="a-tour-of-the-primitives">A tour of the primitives<a class="anchor" href="#a-tour-of-the-primitives" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-starter">Starter</span> This is the patchbay loaded on the public demo server. It gives one compact example of every primitive family so you hit all of them in a single sitting: <code>squelch</code> for value dedup, <code>deadband</code> for "ignore small wobbles", <code>moving-avg</code> for smoothing, <code>delta</code> for per-tick change, <code>transition</code> for boolean edge detection, <code>rising-edge</code> for one-shot crossings, <code>hold-off</code> for time-based rate limiting, and <code>count!</code> for tallies.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.edn" target="_blank" rel="noopener noreferrer">examples/demo.edn</a></span></figcaption><pre><code><span class="tok-com">;; Public demo patchbay for demo.monoblok.host:4222.</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; Everything is scoped under `demo.&gt;` so visitors can't stomp on server</span>
+<span class="tok-com">;; internals or each other's namespaces. Each rule below is an example</span>
+<span class="tok-com">;; of one patchbay primitive; see docs/demo.md for the companion walkthrough.</span>
+
+(<span class="tok-op">lvc</span> [<span class="tok-str">"demo.&gt;"</span>])
+
+<span class="tok-com">;; 1. Squelch: round to 1dp, only emit when the rounded value changes.</span>
+<span class="tok-com">;;    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.stable`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">;; 2. Deadband: analog-style suppression; ignore moves smaller than 0.5.</span>
+<span class="tok-com">;;    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.delta`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">deadband</span> <span class="tok-num">0.5</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"delta"</span>))))
+
+<span class="tok-com">;; 3. Moving average + deadband: smooth a noisy stream over 10 samples</span>
+<span class="tok-com">;;    and only emit when the smoothed value drifts by at least 1.0.</span>
+<span class="tok-com">;;    Watch `demo.sensors.*.smoothed`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-num">10</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">1.0</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"smoothed"</span>))))
+
+<span class="tok-com">;; 3b. Time-windowed average: 5-second sliding mean. Old samples expire</span>
+<span class="tok-com">;;     by age, so the average self-drains when the publisher goes quiet.</span>
+<span class="tok-com">;;     Watch `demo.sensors.*.avg5s`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"avg5s"</span>))))
+
+<span class="tok-com">;; 4. Delta + squelch: emit the per-tick change, but only when it</span>
+<span class="tok-com">;;    differs from the last delta (so a stream of identical values</span>
+<span class="tok-com">;;    doesn't produce a stream of zeros). 0 on first sight.</span>
+<span class="tok-com">;;    Watch `demo.sensors.*.delta-abs`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> (<span class="tok-op">delta</span> payload-float)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"delta-abs"</span>))))
+
+<span class="tok-com">;; 5. Transition: one rule covers both edges of a threshold. Fires</span>
+<span class="tok-com">;;    "hot" once on crossing &gt; 28, "cool" once on crossing back.</span>
+<span class="tok-com">;;    Watch `demo.sensors.*.alert` and `demo.sensors.*.ok`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">28.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"hot"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>)    <span class="tok-str">"cool"</span>)))
+
+<span class="tok-com">;; 6. Hold-off: leading-edge rate gate. While above 40, emit at most</span>
+<span class="tok-com">;;    once every 2s. Publish faster than that and extra publishes are</span>
+<span class="tok-com">;;    dropped silently. Watch `demo.sensors.*.overload`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">40.0</span>)
+    (<span class="tok-op">-&gt;</span> payload
+        (<span class="tok-op">hold-off</span> <span class="tok-num">2000</span>)
+        (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"overload"</span>)))))
+
+<span class="tok-com">;; 7. Rising-edge: only fire on the false-to-true transition. Useful</span>
+<span class="tok-com">;;    when you care about "went high" but not "is high."</span>
+<span class="tok-com">;;    Watch `demo.sensors.*.spike`.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> (<span class="tok-op">rising-edge</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">50.0</span>))
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"spike"</span>))))
+
+<span class="tok-com">;; 8. Alert mirror: anything on `demo.log.*` whose payload contains</span>
+<span class="tok-com">;;    "alert" is copied to `demo.alerts`. Subject-token demo too:</span>
+<span class="tok-com">;;    `(subject-token 2)` is the third dot-separated token.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.log.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"alert"</span>)
+    (<span class="tok-op">publish!</span> <span class="tok-str">"demo.alerts"</span>
+      (<span class="tok-op">str-concat</span> <span class="tok-str">"["</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>) <span class="tok-str">"] "</span> payload))))
+
+<span class="tok-com">;; 9. Count: a running tally of threshold crossings, not raw samples.</span>
+<span class="tok-com">;;    Increments once per false-&gt;true transition above 50, publishes</span>
+<span class="tok-com">;;    the new total to `demo.sensors.*.count`. Pair with example 7</span>
+<span class="tok-com">;;    (rising-edge "spike") and watch the count climb in lockstep.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"demo.sensors.*"</span>
+  (<span class="tok-op">count!</span> (<span class="tok-op">rising-edge</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">50.0</span>))))
+
+(<span class="tok-op">export</span>
+   <span class="tok-kw">:servers</span>  [<span class="tok-str">"nats://127.0.0.1:4223"</span>]
+   <span class="tok-kw">:name</span>     <span class="tok-str">"monoblok-prod-1"</span>
+   <span class="tok-kw">:export</span>   [<span class="tok-str">"demo.sensors.*.spike"</span> <span class="tok-str">"demo.alerts.&gt;"</span>])</code></pre></figure>
+<p>Try it against the public server without installing anything:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>nats context save monoblok-demo --server nats://demo.monoblok.host:4222
+nats context select monoblok-demo
+
+<span class="tok-com"># One terminal</span>
+nats sub <span class="tok-str">'demo.&gt;'</span>
+
+<span class="tok-com"># Another</span>
+nats pub demo.sensors.temp 25.3
+nats pub demo.sensors.temp 25.34
+nats pub demo.sensors.temp 25.38</code></pre></figure>
+<p>The first terminal prints a handful of derived subjects: <code>demo.sensors.temp.stable</code>, <code>.delta</code>, <code>.smoothed</code>, <code>.delta-abs</code>. Each one comes from a different patchbay rule applied to the input. The client publishing the raw readings does not know any of those rules exist.</p>
+<div class="table-wrap"><table><thead><tr><th>publish here</th><th>watch here</th><th>what the rule does</th></tr></thead><tbody><tr><td><code>demo.sensors.&lt;name&gt;</code> (a number)</td><td><code>demo.sensors.&lt;name&gt;.stable</code></td><td><code>round 1</code> then <code>squelch</code> (emit when the rounded value moves)</td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.delta</code></td><td><code>deadband 0.5</code> (suppress moves smaller than 0.5)</td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.smoothed</code></td><td><code>moving-avg 10</code> then <code>deadband 1.0</code></td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.avg5s</code></td><td><code>moving-avg :ms 5000</code>, a 5-second sliding mean</td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.delta-abs</code></td><td>per-tick numeric <code>delta</code> (0 on first sight)</td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.alert</code> / <code>.ok</code></td><td><code>transition</code> across 28.0: "hot" rising, "cool" falling</td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.overload</code></td><td><code>hold-off 2000</code> while above 40 (one emit per 2s)</td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.spike</code></td><td><code>rising-edge</code> across 50.0</td></tr><tr><td></td><td><code>demo.sensors.&lt;name&gt;.count</code></td><td><code>count!</code> of false-to-true crossings above 50.0</td></tr><tr><td><code>demo.log.&lt;name&gt;</code> (any text)</td><td><code>demo.alerts</code></td><td>mirror if the payload contains <code>alert</code>, prefixed with the source</td></tr></tbody></table></div>
+<p>The same file exists as <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.yml" target="_blank" rel="noopener noreferrer"><code>demo.yml</code></a> and <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.json" target="_blank" rel="noopener noreferrer"><code>demo.json</code></a> if you want to compare the three spellings rule by rule. The demo server is shared and public with no auth, so do not send secrets. The <a href="https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md" target="_blank" rel="noopener noreferrer">demo walkthrough</a> has more to try, and the <a href="../demo.html">live demo</a> page drives the same server from your browser.</p>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="forms.html"><small>Previous</small>Forms reference</a><a class="next" href="examples-telemetry.html"><small>Next</small>Sensors and telemetry</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

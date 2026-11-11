@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NATS clients, auth and HTTP | monoblok docs</title>
+<meta name="description" content="Which parts of NATS monoblok speaks, plus optional auth, TLS and the HTTP/SSE adapter.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · NATS clients, auth and HTTP</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html" aria-current="page">NATS clients, auth and HTTP</a><ul class="toc"><li><a href="#nats-support">NATS support</a></li><li><a href="#simple-auth-for-local-nats-clients">Simple auth for local NATS clients</a></li><li><a href="#tls-for-local-nats-clients">TLS for local NATS clients</a></li><li><a href="#http-sse-adapter">HTTP/SSE adapter</a></li></ul></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Server</p>
+<h1>NATS clients, auth and HTTP</h1>
+<p class="lede">monoblok speaks enough of the NATS wire protocol that any NATS client can connect. You can drop it in alongside existing tooling without writing a client library first.</p>
+<h2 id="nats-support">NATS support<a class="anchor" href="#nats-support" aria-label="Link to this section">#</a></h2>
+<p>monoblok implements the NATS core pieces it needs to behave like a small broker.</p>
+<div class="table-wrap"><table><thead><tr><th>Feature</th><th>Support</th></tr></thead><tbody><tr><td><code>PUB</code> / <code>SUB</code> / <code>UNSUB</code> / <code>MSG</code></td><td>yes</td></tr><tr><td>wildcards</td><td>yes</td></tr><tr><td>request/reply / reply-to</td><td>yes, local core reply-to; bridge remains export-only</td></tr><tr><td>queue groups</td><td>yes</td></tr><tr><td>headers</td><td>no</td></tr><tr><td><code>$LVC.*</code> last-value replay</td><td>yes, monoblok extension</td></tr><tr><td><code>$STATS.*</code> live counters</td><td>yes, monoblok extension</td></tr><tr><td>bridge to real NATS</td><td>export-only</td></tr><tr><td>import from real NATS</td><td>yes, as private patchbay ingress</td></tr><tr><td>JetStream import</td><td>yes, as consumer-only patchbay ingress</td></tr><tr><td>TLS on the local server</td><td>yes, optional server cert/key</td></tr><tr><td>auth on the local server</td><td>yes, optional global token or user/pass from environment</td></tr><tr><td>HTTP/SSE adapter</td><td>yes, optional plain HTTP listener</td></tr><tr><td>JetStream service for local clients</td><td>no</td></tr><tr><td>clustering</td><td>no</td></tr></tbody></table></div>
+<p>Request-reply works through patchbay as well as plain pub/sub. A rule can read the request's reply subject as <code>reply-to</code>, and <code>(reply! VALUE)</code> publishes to it, so <code>(on "q.temp" (reply! (last "temp.kitchen")))</code> makes <code>nats req q.temp ""</code> answer with the latest cached kitchen temperature. <code>reply-to</code> is nil for imported messages, clock ticks, and <code>every</code> bodies. See <a href="forms.html#request-reply">Request-reply</a>.</p>
+<p>Without auth flags, <code>CONNECT</code> bodies are accepted and ignored. <code>+OK</code> is never sent. Client publishes to <code>$LVC.*</code> and <code>$STATS.*</code> are rejected, and while an <a href="bridge.html#import"><code>import</code></a> form is configured all client <code>PUB</code> commands are rejected.</p>
+<h2 id="simple-auth-for-local-nats-clients">Simple auth for local NATS clients<a class="anchor" href="#simple-auth-for-local-nats-clients" aria-label="Link to this section">#</a></h2>
+<p>Local client auth is optional and global. Configure either a token or a single username/password pair by naming the environment variables that hold the expected secret values:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>MONOBLOK_AUTH_TOKEN=<span class="tok-str">'sekret'</span> \
+  monoblok --port 4222 --patchbay patchbay.edn \
+    --auth-token-env MONOBLOK_AUTH_TOKEN
+
+MONOBLOK_AUTH_USER=<span class="tok-str">'alice'</span> MONOBLOK_AUTH_PASS=<span class="tok-str">'wonder'</span> \
+  monoblok --port 4222 --patchbay patchbay.edn \
+    --auth-user-env MONOBLOK_AUTH_USER \
+    --auth-pass-env MONOBLOK_AUTH_PASS</code></pre></figure>
+<p>With auth enabled, <code>INFO</code> advertises <code>"auth_required":true</code>. Clients must send the normal NATS <code>CONNECT</code> fields: <code>auth_token</code> for token auth, or <code>user</code> and <code>pass</code> for username/password auth. Missing or wrong credentials receive <code>-ERR 'Authorization Violation'</code> and the socket is closed.</p>
+<p>This is intentionally only simple CONNECT-time authentication. It does not add per-subject authorization, accounts, bcrypt hashes, JWTs, NKEYs, or reloadable user maps. Use TLS, a trusted network, or a fronting proxy if credentials cross anything outside your control.</p>
+<h2 id="tls-for-local-nats-clients">TLS for local NATS clients<a class="anchor" href="#tls-for-local-nats-clients" aria-label="Link to this section">#</a></h2>
+<p>Server-side TLS is optional. Start monoblok with a PEM certificate chain and matching private key:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok --port 4222 --patchbay patchbay.edn \
+  --tls-cert /etc/monoblok/server.crt \
+  --tls-key /etc/monoblok/server.key</code></pre></figure>
+<p>monoblok follows the normal NATS TLS upgrade flow: the accepted socket first receives a plaintext <code>INFO</code> containing <code>"tls_required":true</code>, then the client starts TLS on that same socket before sending <code>CONNECT</code>. Non-TLS clients will not be able to complete the connection once TLS is enabled.</p>
+<p>Use a certificate trusted by your clients in production. For private/self-signed certificates, configure clients with the CA certificate where possible. Test clients can disable verification, but that is insecure and should stay out of production. With <code>nats.c</code>, the development-only equivalent is <code>natsOptions_SkipServerVerification(opts, true)</code>.</p>
+<h2 id="http-sse-adapter">HTTP/SSE adapter<a class="anchor" href="#http-sse-adapter" aria-label="Link to this section">#</a></h2>
+<p>The optional HTTP listener is a small browser-friendly adapter over the same local client publish and subscribe paths. It is disabled by default:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok --port 4222 --patchbay patchbay.edn \
+  --http-host 127.0.0.1 \
+  --http-port 8080</code></pre></figure>
+<p>Routes use path segments as NATS subject tokens:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>GET  /sub/sensors/temp       -&gt; SSE subscription to sensors.temp
+GET  /sub/sensors/%3E        -&gt; SSE subscription to sensors.&gt;
+GET  /sub/$LVC/sensors/temp  -&gt; SSE subscription to $LVC.sensors.temp
+GET  /latest/sensors/temp    -&gt; one-shot LVC lookup for sensors.temp
+POST /pub/sensors/temp       -&gt; client publish to sensors.temp</code></pre></figure>
+<p><code>GET /latest/&lt;subject&gt;</code> returns the cached payload for that exact, unprefixed subject as <code>Content-Type: text/plain; charset=utf-8</code>, with no JSON wrapper. It returns <code>404</code> when LVC has no value for the subject and <code>409</code> when LVC is disabled. Use <code>/sub/$LVC/...</code> for wildcard replay or for a stream that stays open for future updates.</p>
+<p><code>POST</code> requires <code>Content-Length</code> plus <code>Content-Type: text/plain</code> or <code>Content-Type: application/json</code>, and rejects NUL bytes. It is intentionally a text adapter, not a binary payload API. Successful POSTs fan out exactly like a local NATS <code>PUB</code>: normal subscribers, SSE subscribers, LVC, bridge, and patchbay all see the same publish.</p>
+<p>SSE messages are JSON data envelopes:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>event: msg
+data: {"subject":"sensors.temp","payload":"31.2"}
+</code></pre></figure>
+<p>When local auth is configured, HTTP uses <code>Authorization: Bearer &lt;token&gt;</code> for token mode or <code>Authorization: Basic ...</code> for user/pass mode. The HTTP listener is plain HTTP only; put Caddy, nginx, or another proxy in front for HTTPS. A tiny fetch-based JavaScript helper lives at <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/http-sse-client.js" target="_blank" rel="noopener noreferrer"><code>examples/http-sse-client.js</code></a>, with a browser page at <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/http-sse-client.html" target="_blank" rel="noopener noreferrer"><code>examples/http-sse-client.html</code></a>.</p>
+<p>Every HTTP response carries a <code>Server: monoblok/v&lt;version&gt;</code> header.</p>
+<h3 id="nginx-reverse-proxy-for-sse">nginx reverse proxy for SSE<a class="anchor" href="#nginx-reverse-proxy-for-sse" aria-label="Link to this section">#</a></h3>
+<p>Run monoblok's HTTP listener on loopback and let nginx terminate public TLS:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok --port 4222 --patchbay patchbay.edn \
+  --http-host 127.0.0.1 \
+  --http-port 8080</code></pre></figure>
+<p>Use a <code>proxy_pass</code> without a URI suffix so encoded subject tokens such as <code>%3E</code> stay intact. SSE subscriptions also need buffering and compression disabled, with a read timeout longer than the longest expected quiet period:</p>
+<figure class="code"><figcaption><span>nginx</span></figcaption><pre><code>upstream monoblok_http {
+    server 127.0.0.1:8080;
+}
+
+server {
+    listen 443 ssl;
+    server_name events.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/events.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/events.example.com/privkey.pem;
+
+    location /sub/ {
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    location /pub/ {
+        client_max_body_size 1m;
+
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+    }
+
+    location /latest/ {
+        proxy_pass http://monoblok_http;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+    }
+}</code></pre></figure>
+<p>Serve browser clients from the same nginx origin when possible. monoblok does not add CORS headers itself, and same-origin <code>/sub/...</code>, <code>/pub/...</code>, and <code>/latest/...</code> requests avoid needing browser-specific CORS handling. If monoblok auth is enabled, make sure nginx forwards the <code>Authorization</code> header; the default proxy behavior does unless you override it.</p>
+<p>Use the Node demo server to serve the page and proxy <code>/sub</code>, <code>/pub</code>, and <code>/latest</code> from the same origin, which avoids browser CORS. It can also start a local monoblok process for the demo:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>node examples/http-sse-demo.js --start-monoblok --port 8090 --open</code></pre></figure>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="state.html"><small>Previous</small>LVC, stats and snapshots</a><a class="next" href="bridge.html"><small>Next</small>Export, import and JetStream</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

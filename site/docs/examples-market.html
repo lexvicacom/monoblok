@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Market data | monoblok docs</title>
+<meta name="description" content="Market data patchbays: a price ticker, OHLC bars, and a multi-asset JSON firehose demuxed and cleaned at the broker.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Market data</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html" aria-current="page">Market data</a><ul class="toc"><li><a href="#price-ticker">Price ticker</a></li><li><a href="#ohlc-bars">OHLC bars</a></li><li><a href="#a-market-data-firehose">A market data firehose</a></li><li><a href="#budgeting-bar-state">Budgeting bar state</a></li></ul></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Examples</p>
+<h1>Market data</h1>
+<p class="lede">High-frequency market data is a poster case for monoblok: data moves fast, most of the movement is not worth a downstream message, and every subscriber would otherwise re-implement the same rounding, dedupe and demux logic.</p>
+<h2 id="price-ticker">Price ticker<a class="anchor" href="#price-ticker" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> Two rules and an export. Prices arrive on <code>MARKET.&lt;SYM&gt;</code>; subscribers get a deduplicated mirror, and big jumps are fanned out to an alerts subject that is forwarded to a real NATS server.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/ticker.edn" target="_blank" rel="noopener noreferrer">examples/ticker.edn</a></span></figcaption><pre><code><span class="tok-com">; Market ticker: clean up noisy prices and alert on big jumps.</span>
+
+<span class="tok-com">; Round to 3 decimals, drop duplicates, emit on MARKET.&lt;SYM&gt;.stable.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">3</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">; Fan out big jumps (&gt;= 1.0 move between consecutive ticks) to</span>
+<span class="tok-com">; alerts.market.&lt;SYM&gt;. delta is 0 on first sight so this stays quiet</span>
+<span class="tok-com">; until we have a prior value.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">1.0</span>)
+    (<span class="tok-op">publish!</span>
+      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.market."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      payload)))
+
+<span class="tok-com">; Forward all market alerts to the remote NATS server.</span>
+(<span class="tok-op">export</span>
+  <span class="tok-kw">:servers</span> [<span class="tok-str">"nats://127.0.0.1:4222"</span>]
+  <span class="tok-kw">:name</span>    <span class="tok-str">"monoblok-ticker"</span>
+  <span class="tok-kw">:export</span>  [<span class="tok-str">"alerts.market.&gt;"</span>])</code></pre></figure>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/ticker.edn" target="_blank" rel="noopener noreferrer">examples/ticker.edn</a></span></figcaption><pre><code><span class="sc-in">in   MARKET.AAPL  182.3401</span>
+<span class="sc-out">out  MARKET.AAPL.stable  182.34</span>
+<span class="sc-in">in   MARKET.AAPL  182.3402</span>
+<span class="sc-in">in   MARKET.AAPL  182.351</span>
+<span class="sc-out">out  MARKET.AAPL.stable  182.351</span>
+<span class="sc-in">in   MARKET.AAPL  183.9</span>
+<span class="sc-out">out  MARKET.AAPL.stable  183.9</span>
+<span class="sc-out">out  alerts.market.AAPL  183.9</span></code></pre></figure>
+<p><a href="forms.html#idempotent-filters"><code>delta</code></a> returns the difference from the previous value on the same subject (0 on first sight), so the alert rule stays quiet until it has a prior price. <a href="forms.html#strings-and-subjects"><code>(subject-token 1)</code></a> pulls the symbol out of <code>MARKET.AAPL</code> to build a per-symbol alert subject. The <a href="bridge.html#export"><code>export</code></a> form forwards only <code>alerts.market.&gt;</code>; the raw ticks and the stable mirror stay local.</p>
+<h2 id="ohlc-bars">OHLC bars<a class="anchor" href="#ohlc-bars" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> <a href="forms.html#bars"><code>bar!</code></a> folds samples into open / high / low / close bars per symbol, closing either every N ticks or on wall-clock boundaries.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/bars.edn" target="_blank" rel="noopener noreferrer">examples/bars.edn</a></span></figcaption><pre><code><span class="tok-com">; OHLC bars over a market feed.</span>
+<span class="tok-com">;</span>
+<span class="tok-com">; Producers publish raw prices on MARKET.&lt;SYM&gt; (e.g. MARKET.AAPL "182.34").</span>
+<span class="tok-com">; A bar closes either every 60 ticks per symbol or every wall-clock minute,</span>
+<span class="tok-com">; depending on the window descriptor. On close, `bar` emits four sub-subjects:</span>
+<span class="tok-com">;   MARKET.AAPL.bar.open   first price in the bar</span>
+<span class="tok-com">;   MARKET.AAPL.bar.high   max price seen</span>
+<span class="tok-com">;   MARKET.AAPL.bar.low    min price seen</span>
+<span class="tok-com">;   MARKET.AAPL.bar.close  last price seen in the bar</span>
+<span class="tok-com">;</span>
+<span class="tok-com">; State is per call site, subject, and window kind, so each ticker builds its</span>
+<span class="tok-com">; own bars and tick + time forms keep distinct slots. The in-progress</span>
+<span class="tok-com">; bar is part of the snapshot, so a restart mid-bar resumes without</span>
+<span class="tok-com">; losing the open / high / low collected so far. Time bars also close</span>
+<span class="tok-com">; from the server's clock walker if a window elapses without a new tick.</span>
+
+<span class="tok-com">; Tick bars: every 60 trades, regardless of how long that takes.</span>
+<span class="tok-com">; :reentrant is only needed because the rule below consumes the derived</span>
+<span class="tok-com">; MARKET.&lt;SYM&gt;.bar.close stream in the same patchbay. The bar subjects</span>
+<span class="tok-com">; do not match MARKET.*, so this does not feed the bar builder back into</span>
+<span class="tok-com">; itself.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">bar!</span> <span class="tok-num">60</span> payload-float))
+
+<span class="tok-com">; Wall-clock bars, aligned to whole minutes. Useful when you want a</span>
+<span class="tok-com">; clean per-minute chart row regardless of trade rate.</span>
+<span class="tok-com">;(on "MARKET.*"</span>
+<span class="tok-com">;  (bar! :ms 60000 payload-float))</span>
+
+<span class="tok-com">; Downstream alerting can sit on the closed-bar stream and stay clean of</span>
+<span class="tok-com">; intra-bar noise. Example: alert if the bar's close jumps by &gt;= 1.0</span>
+<span class="tok-com">; from the prior bar's close on the same symbol.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*.bar.close"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">1.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.market."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload)))</code></pre></figure>
+<p>The bar rule is <code>:reentrant true</code> only because the second rule consumes the derived <code>MARKET.&lt;SYM&gt;.bar.close</code> stream. Alerting on closed bars instead of raw ticks keeps the alert free of intra-bar noise. A subscriber to <code>MARKET.AAPL.bar.&gt;</code> sees a burst of four messages per closed bar, in open / high / low / close order. In-progress bars are part of the <a href="state.html#snapshots">snapshot</a>, so a restart mid-bar resumes without losing the open, high and low collected so far.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/bars.sh</code></pre></figure>
+<h2 id="a-market-data-firehose">A market data firehose<a class="anchor" href="#a-market-data-firehose" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-advanced">Advanced</span> Imagine your data provider gives you a stream of JSON frames that carry several fields per message, and every downstream subscriber re-implements the same demux, round, dedupe and alert logic. At scale, doing this n times causes read/write amplification and much wasted work, not to mention subtle bugs. Doing it once at the broker means subscribers can use subject filtering to pick the slice they actually need and ignore the rest.</p>
+<p>The <a href="https://github.com/lexvicacom/monoblok/tree/main/examples/json-massive" target="_blank" rel="noopener noreferrer"><code>json-massive</code></a> example simulates a Massive-shape websocket feed (stocks, options, crypto, forex). It has two pieces: <code>mock_producer.js</code>, a synthetic producer that speaks the NATS protocol over a plain socket and publishes frames on subjects shaped <code>&lt;ev&gt;.&lt;symbol&gt;</code>, and <code>massive.edn</code>, the patchbay below. There is more background in the <a href="https://alexjreid.dev/posts/monoblok-massive/" target="_blank" rel="noopener noreferrer">blog post</a>.</p>
+<p>For stock trades the whole conditioning layer is three rules, each feeding the next:</p>
+<ol><li><code>(json-demux! ...)</code> on <code>T.*</code> splits the frame into one subject per field: <code>T.AAPL.p</code> (price) and <code>T.AAPL.s</code> (size).</li><li>A rule on the demuxed <code>T.*.p</code> rounds to 2dp, drops duplicates and mirrors to <code>T.&lt;SYM&gt;.p.stable</code>.</li><li>A second rule on <code>T.*.p</code> alerts on a jump of 1.00 or more between consecutive ticks on the same symbol.</li></ol>
+<p>Rule 2 matches <code>T.*.p</code>, a subject that only exists because rule 1 emitted it. That works because rule 1 is marked <a href="forms.html#re-entry"><code>:reentrant true</code></a>. Options come along free (the <code>T.*</code> wildcard matches <code>T.O:AAPL250620C00200000</code> too), and crypto and FX repeat the pattern with their own thresholds.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-massive/massive.edn" target="_blank" rel="noopener noreferrer">examples/json-massive/massive.edn</a></span></figcaption><pre><code><span class="tok-com">; Demux Massive JSON frames into per-field scalar subjects. Re-entry (depth</span>
+<span class="tok-com">; cap 8) lets the downstream rules below match the demuxed subjects.</span>
+<span class="tok-com">;</span>
+<span class="tok-com">; AM / XA / CA carry server-side OHLC bars, so we just demux them. For</span>
+<span class="tok-com">; bar-from-tick logic on a raw trade stream, see examples/bars.edn.</span>
+
+<span class="tok-com">; --- Stocks ----------------------------------------------------------------</span>
+
+<span class="tok-com">; Stock trade: T.&lt;SYM&gt; -&gt; { p, s, ... }</span>
+(<span class="tok-op">on</span> <span class="tok-str">"T.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"p"</span> <span class="tok-str">"s"</span> payload))
+
+<span class="tok-com">; Stock NBBO quote: Q.&lt;SYM&gt; -&gt; { bp, bs, ap, as, ... }</span>
+(<span class="tok-op">on</span> <span class="tok-str">"Q.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"bp"</span> <span class="tok-str">"bs"</span> <span class="tok-str">"ap"</span> <span class="tok-str">"as"</span> payload))
+
+<span class="tok-com">; Stock minute aggregate: AM.&lt;SYM&gt; -&gt; { o, h, l, c, v, vw, ... }</span>
+(<span class="tok-op">on</span> <span class="tok-str">"AM.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"o"</span> <span class="tok-str">"h"</span> <span class="tok-str">"l"</span> <span class="tok-str">"c"</span> <span class="tok-str">"v"</span> <span class="tok-str">"vw"</span> payload))
+
+<span class="tok-com">; --- Options (same T/Q ev letters as stocks, OCC symbol with O: prefix) ----</span>
+<span class="tok-com">; The "T.*"/"Q.*" rules above already cover options because the wildcard</span>
+<span class="tok-com">; matches "T.O:AAPL250620C00200000" too. Nothing extra needed here.</span>
+
+<span class="tok-com">; --- Crypto ----------------------------------------------------------------</span>
+
+(<span class="tok-op">on</span> <span class="tok-str">"XT.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"p"</span> <span class="tok-str">"s"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"XQ.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"bp"</span> <span class="tok-str">"bs"</span> <span class="tok-str">"ap"</span> <span class="tok-str">"as"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"XA.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"o"</span> <span class="tok-str">"h"</span> <span class="tok-str">"l"</span> <span class="tok-str">"c"</span> <span class="tok-str">"v"</span> <span class="tok-str">"vw"</span> payload))
+
+<span class="tok-com">; --- Forex -----------------------------------------------------------------</span>
+
+<span class="tok-com">; Forex quotes use single-letter b/a (no sizes). Demux those.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"C.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"b"</span> <span class="tok-str">"a"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"CA.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"o"</span> <span class="tok-str">"h"</span> <span class="tok-str">"l"</span> <span class="tok-str">"c"</span> <span class="tok-str">"v"</span> payload))
+
+<span class="tok-com">; --- Cleanup pipelines (consume demuxed subjects via re-entry) -------------</span>
+
+<span class="tok-com">; Stock trade prices: round to 2dp, drop duplicates, mirror to .stable.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"T.*.p"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">2</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">; Alert on big single-trade price jumps (&gt;= 1.0 between consecutive ticks</span>
+<span class="tok-com">; on the same symbol). delta is 0 on first sight so this stays quiet</span>
+<span class="tok-com">; until we have a prior value.</span>
+<span class="tok-com">;</span>
+<span class="tok-com">; (subject-token 1) pulls the Nth dot-separated token from the matched</span>
+<span class="tok-com">; subject (0-indexed), so for "T.AAPL.p" it returns "AAPL". Used here</span>
+<span class="tok-com">; (and in the crypto/fx rules below) to build a per-symbol alert subject.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"T.*.p"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">1.0</span>)
+    (<span class="tok-op">publish!</span>
+      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.trade."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      payload)))
+
+<span class="tok-com">; Crypto prices move bigger; alert on &gt;= 1% moves between trades.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"XT.*.p"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">/</span> (<span class="tok-op">delta</span> payload-float) payload-float)) <span class="tok-num">0.01</span>)
+    (<span class="tok-op">publish!</span>
+      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.crypto."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      payload)))
+
+<span class="tok-com">; Forex mid-rate alert: a 5 pip move on a major is notable. Computed off</span>
+<span class="tok-com">; the demuxed bid; cheap proxy for "the market moved".</span>
+(<span class="tok-op">on</span> <span class="tok-str">"C.*.b"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">0.0005</span>)
+    (<span class="tok-op">publish!</span>
+      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.fx."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      payload)))</code></pre></figure>
+<p>Five frames through the trade and crypto rules:</p>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-massive/massive.edn" target="_blank" rel="noopener noreferrer">examples/json-massive/massive.edn</a></span></figcaption><pre><code><span class="sc-in">in   T.AAPL  {"ev":"T","sym":"AAPL","p":187.421,"s":100}</span>
+<span class="sc-out">out  T.AAPL.p  187.421</span>
+<span class="sc-out">out  T.AAPL.p.stable  187.42</span>
+<span class="sc-out">out  T.AAPL.s  100</span>
+<span class="sc-in">in   T.AAPL  {"ev":"T","sym":"AAPL","p":187.424,"s":50}</span>
+<span class="sc-out">out  T.AAPL.p  187.424</span>
+<span class="sc-out">out  T.AAPL.s  50</span>
+<span class="sc-in">in   T.AAPL  {"ev":"T","sym":"AAPL","p":188.95,"s":200}</span>
+<span class="sc-out">out  T.AAPL.p  188.95</span>
+<span class="sc-out">out  T.AAPL.p.stable  188.95</span>
+<span class="sc-out">out  alerts.trade.AAPL  188.95</span>
+<span class="sc-out">out  T.AAPL.s  200</span>
+<span class="sc-in">in   XT.BTC-USD  {"p":64000,"s":0.1}</span>
+<span class="sc-out">out  XT.BTC-USD.p  64000</span>
+<span class="sc-out">out  XT.BTC-USD.s  0.1</span>
+<span class="sc-in">in   XT.BTC-USD  {"p":64700,"s":0.2}</span>
+<span class="sc-out">out  XT.BTC-USD.p  64700</span>
+<span class="sc-out">out  alerts.crypto.BTC-USD  64700</span>
+<span class="sc-out">out  XT.BTC-USD.s  0.2</span></code></pre></figure>
+<p>The second AAPL trade rounds to the same 187.42, so the stable mirror stays quiet. The third moves 1.526 and raises <code>alerts.trade.AAPL</code>. The second BTC trade is a 1.08% move and raises <code>alerts.crypto.BTC-USD</code>.</p>
+<p>A subscriber that only cares about price changes subscribes to <code>T.*.p.stable</code> and gets a clean, per-symbol stream of rounded floats. No JSON parsing, and no need for every consumer to chew through the firehose and repeat the same logic.</p>
+<h3 id="run-it">Run it<a class="anchor" href="#run-it" aria-label="Link to this section">#</a></h3>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code><span class="tok-com"># terminal 1: start monoblok with the demuxing patchbay</span>
+<span class="tok-com"># if you don't need the last-value cache, save some cpu by turning it off</span>
+monoblok --no-lvc examples/json-massive/massive.edn
+
+<span class="tok-com"># terminal 2: start the producer (RATE=2 doubles the message rate)</span>
+node examples/json-massive/mock_producer.js
+
+<span class="tok-com"># terminal 3: peek at everything</span>
+nats sub <span class="tok-str">'&gt;'</span></code></pre></figure>
+<p>Or let the script do all three for five seconds and print tables of the raw frames, the demuxed prices, the stable mirror and the alerts side by side:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>./examples/json-massive/run.sh</code></pre></figure>
+<h3 id="last-prints-for-slow-markets-and-the-close">Last prints for slow markets and the close<a class="anchor" href="#last-prints-for-slow-markets-and-the-close" aria-label="Link to this section">#</a></h3>
+<p>A dashboard opening on Sunday afternoon wants to render the last print for every symbol it tracks. Nothing is publishing, the market is closed, and the patchbay has been idle for two days. Opt the stable mirror into the last-value cache:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">lvc</span> [<span class="tok-str">"T.*.p.stable"</span>])</code></pre></figure>
+<p>Subscribe to <code>$LVC.T.*.p.stable</code> and the broker hands back the most recent rounded price for every symbol it has seen, then nothing else until trading resumes. The same subscribe works for a logger restarting mid-session, or a tool that wants the last print on a thinly-traded name where ticks arrive minutes apart. The dedupe rule is what makes the <code>.stable</code> cache useful: without <code>squelch</code>, the cached value would be whatever noisy reprint happened to land last, not the last meaningful price.</p>
+<h3 id="already-aggregated-channels">Already-aggregated channels<a class="anchor" href="#already-aggregated-channels" aria-label="Link to this section">#</a></h3>
+<p>The <code>AM</code> / <code>XA</code> / <code>CA</code> channels deliver server-side OHLC bars on delayed feeds, so the patchbay demuxes those frames into scalar <code>o</code> / <code>h</code> / <code>l</code> / <code>c</code> / <code>v</code> streams instead of recomputing bars from raw trades. If you only have a trade stream and need to build bars locally, use <a href="#ohlc-bars"><code>bar!</code></a>.</p>
+<h3 id="bridging-to-nats">Bridging to NATS<a class="anchor" href="#bridging-to-nats" aria-label="Link to this section">#</a></h3>
+<p>Subscribers can hook up directly to monoblok. Most of the time, though, you already have a NATS cluster doing the heavy lifting for the rest of the system, and you want the conditioned market data to land there too. Add an <a href="bridge.html#export"><code>export</code></a> form pointing at <code>T.*.p.stable</code> and JetStream on the far side stores the deduplicated, rounded prices, not the raw firehose:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">export</span>
+  <span class="tok-kw">:servers</span> [<span class="tok-str">"nats://nats.internal:4222"</span>]
+  <span class="tok-kw">:name</span>    <span class="tok-str">"monoblok-market"</span>
+  <span class="tok-kw">:export</span>  [<span class="tok-str">"T.*.p.stable"</span> <span class="tok-str">"alerts.&gt;"</span>])</code></pre></figure>
+<p>Less write amplification, less retained noise, and only the precision a consumer needs. Replays are smaller and faster, and consumers reading from the stream get the same shape of data as live subscribers on the broker, so a backfill and a live tail stitch together cleanly. The raw frames stay on the monoblok side for anyone who wants them.</p>
+<h2 id="budgeting-bar-state">Budgeting bar state<a class="anchor" href="#budgeting-bar-state" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-advanced">Advanced</span> <code>bar!</code> is cheap per subject, but it is stateful. A local bar builder keeps one in-progress bar slot for every distinct market/symbol subject the rule has seen. Thousands of symbols across tens of markets can therefore turn into tens or hundreds of thousands of long-lived slots.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-massive/bar-cardinality.edn" target="_blank" rel="noopener noreferrer">examples/json-massive/bar-cardinality.edn</a></span></figcaption><pre><code><span class="tok-com">; High-cardinality `bar!` memory probe for Massive-style trade streams.</span>
+<span class="tok-com">;</span>
+<span class="tok-com">; This is deliberately separate from massive.edn. The normal Massive example</span>
+<span class="tok-com">; demuxes AM / XA / CA aggregate frames that already contain bars. This file is</span>
+<span class="tok-com">; for the case where raw trades arrive as JSON and monoblok builds local bars.</span>
+<span class="tok-com">;</span>
+<span class="tok-com">; Subjects use T.&lt;MARKET&gt;.&lt;SYM&gt; so the measurement script can scale both</span>
+<span class="tok-com">; market count and symbol count:</span>
+<span class="tok-com">;</span>
+<span class="tok-com">;   T.M00.S00001|{"ev":"T","sym":"S00001","p":100.25,"s":10}</span>
+<span class="tok-com">;</span>
+<span class="tok-com">; The bar tick window is intentionally huge. The point of the probe is not</span>
+<span class="tok-com">; closed-bar output; it is the long-lived in-progress bar slot allocated for</span>
+<span class="tok-com">; every distinct trade subject.</span>
+
+(<span class="tok-op">on</span> <span class="tok-str">"T.*.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">json-get</span> <span class="tok-str">"p"</span> payload)
+    (<span class="tok-op">bar!</span> <span class="tok-num">100000000</span> (<span class="tok-op">json-get</span> <span class="tok-str">"p"</span> payload))))</code></pre></figure>
+<p>The harness drives that patchbay through <code>--soundcheck</code> and reports max RSS:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code><span class="tok-com"># defaults: MARKETS=20 SYMBOLS=5000 TICKS=1 BAR_WINDOW=100000000</span>
+examples/json-massive/measure-bar-cardinality.sh
+
+<span class="tok-com"># scale the subject universe and keep bars open longer</span>
+MARKETS=50 SYMBOLS=10000 TICKS=1 BAR_WINDOW=1000000000 examples/json-massive/measure-bar-cardinality.sh</code></pre></figure>
+<p>The important dimension is <code>MARKETS * SYMBOLS</code>: increasing <code>TICKS</code> mostly reuses existing slots, while increasing the subject universe creates more retained patchbay state. The same reasoning applies to every stateful form: narrow the filter when you can, and measure the shape you plan to run.</p>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="examples-telemetry.html"><small>Previous</small>Sensors and telemetry</a><a class="next" href="examples-nats.html"><small>Next</small>NATS integration</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

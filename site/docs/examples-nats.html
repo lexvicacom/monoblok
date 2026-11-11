@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NATS integration | monoblok docs</title>
+<meta name="description" content="Patchbays that pair monoblok with a real NATS server: export, import, and JetStream replay.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · NATS integration</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html" aria-current="page">NATS integration</a><ul class="toc"><li><a href="#export-to-a-nats-server">Export to a NATS server</a></li><li><a href="#tap-an-existing-nats-server">Tap an existing NATS server</a></li><li><a href="#jetstream-replay">JetStream replay</a></li></ul></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Examples</p>
+<h1>NATS integration</h1>
+<p class="lede">These examples run monoblok next to a real <code>nats-server</code>: forwarding conditioned subjects out, tapping raw subjects in, and replaying a JetStream stream through the rules before going live.</p>
+<p>The configuration forms are described in <a href="bridge.html">Export, import and JetStream</a>. Each example script starts the <code>nats-server</code> it needs, so you need <code>nats-server</code> and the NATS CLI installed.</p>
+<h2 id="export-to-a-nats-server">Export to a NATS server<a class="anchor" href="#export-to-a-nats-server" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> The front door pattern in its smallest form: publishers send to monoblok, and one top-level <code>export</code> form names the subjects that are forwarded to the remote server.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/bridge.edn" target="_blank" rel="noopener noreferrer">examples/bridge.edn</a></span></figcaption><pre><code><span class="tok-com">;; Export every `telemetry.&gt;` publish to a remote NATS server, and also</span>
+<span class="tok-com">;; republish each one locally under a `.echoed` suffix (which, since it</span>
+<span class="tok-com">;; matches `telemetry.&gt;` too, the exporter will forward as well).</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; Point `:servers` at a reachable nats-server. The port here matches</span>
+<span class="tok-com">;; scripts/bridge-smoke.sh; override it to wherever your remote actually lives.</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; Start a local remote to point at:</span>
+<span class="tok-com">;;   nats-server -p 14888</span>
+<span class="tok-com">;; Then run monoblok against this file:</span>
+<span class="tok-com">;;   ./build/monoblok --port 4222 --patchbay examples/bridge.edn</span>
+<span class="tok-com">;; And watch forwarded messages on the remote:</span>
+<span class="tok-com">;;   nats -s nats://127.0.0.1:14888 sub 'telemetry.&gt;'</span>
+<span class="tok-com">;; Publish into monoblok to drive the export:</span>
+<span class="tok-com">;;   nats --no-context -s nats://127.0.0.1:4222 pub telemetry.troubledwater 1</span>
+(<span class="tok-op">export</span>
+  <span class="tok-kw">:servers</span> [<span class="tok-str">"nats://127.0.0.1:14888"</span>]
+  <span class="tok-kw">:name</span>    <span class="tok-str">"monoblok-export-example"</span>
+  <span class="tok-kw">:export</span>  [<span class="tok-str">"telemetry.&gt;"</span>])
+
+(<span class="tok-op">on</span> <span class="tok-str">"telemetry.*"</span>
+  (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"echoed"</span>) payload))</code></pre></figure>
+<p>Local subscribers are served first and the remote second, so a slow uplink cannot starve local delivery. The rule's <code>.echoed</code> publishes also match <code>telemetry.&gt;</code>, so they are forwarded too: export applies to client publishes and rule publishes alike.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/bridge.sh</code></pre></figure>
+<h2 id="tap-an-existing-nats-server">Tap an existing NATS server<a class="anchor" href="#tap-an-existing-nats-server" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-intermediate">Intermediate</span> The reverse direction. monoblok subscribes to <code>raw.&gt;</code> on a real NATS server, runs those messages through the rules, and exposes only the conditioned output. Here the clean stream is also exported back to the same server.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/import.edn" target="_blank" rel="noopener noreferrer">examples/import.edn</a></span></figcaption><pre><code><span class="tok-com">;; Tap raw telemetry from a real NATS server, keep raw private to patchbay,</span>
+<span class="tok-com">;; and expose only the conditioned output from monoblok. The conditioned</span>
+<span class="tok-com">;; `clean.&gt;` stream is also exported back to the same nats-server.</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; The example script starts nats-server on this port:</span>
+<span class="tok-com">;;   nats-server -p 14889</span>
+<span class="tok-com">;; Then it starts monoblok with this patchbay:</span>
+<span class="tok-com">;;   ./build/monoblok --port 14222 --patchbay examples/import.edn</span>
+<span class="tok-com">;; Publish raw input to the real NATS server:</span>
+<span class="tok-com">;;   nats -s nats://127.0.0.1:14889 pub raw.temp 42.04</span>
+<span class="tok-com">;; Subscribe to the processed local stream:</span>
+<span class="tok-com">;;   nats -s nats://127.0.0.1:14222 sub clean.temp</span>
+<span class="tok-com">;; Or watch the exported stream on nats-server:</span>
+<span class="tok-com">;;   nats -s nats://127.0.0.1:14889 sub 'clean.&gt;'</span>
+(<span class="tok-op">import</span>
+  <span class="tok-kw">:servers</span> [<span class="tok-str">"nats://127.0.0.1:14889"</span>]
+  <span class="tok-kw">:name</span>    <span class="tok-str">"monoblok-import-example"</span>
+  <span class="tok-kw">:subject</span> [<span class="tok-str">"raw.&gt;"</span>]
+  <span class="tok-kw">:max-pending</span> <span class="tok-num">64</span>)
+
+(<span class="tok-op">export</span>
+  <span class="tok-kw">:servers</span> [<span class="tok-str">"nats://127.0.0.1:14889"</span>]
+  <span class="tok-kw">:name</span>    <span class="tok-str">"monoblok-export-example"</span>
+  <span class="tok-kw">:export</span>  [<span class="tok-str">"clean.&gt;"</span>])
+
+(<span class="tok-op">on</span> <span class="tok-str">"raw.temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"clean.temp"</span>)))</code></pre></figure>
+<p>Imported messages are private patchbay input. A direct monoblok subscriber to <code>raw.&gt;</code> does not see the imported <code>raw.temp</code>; subscribers see only what rules publish, such as <code>clean.temp</code>. While <code>import</code> is configured, local clients can still subscribe but their <code>PUB</code> commands are rejected.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/import.sh</code></pre></figure>
+<p>The YAML spelling of the same file:</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/import.yml" target="_blank" rel="noopener noreferrer">examples/import.yml</a></span></figcaption><pre><code><span class="tok-key">import:</span>
+<span class="tok-key">  servers:</span>
+    - <span class="tok-str">"nats://127.0.0.1:14889"</span>
+<span class="tok-key">  subject:</span>
+    - <span class="tok-str">"raw.&gt;"</span>
+
+<span class="tok-key">export:</span>
+<span class="tok-key">  servers:</span>
+    - <span class="tok-str">"nats://127.0.0.1:14889"</span>
+<span class="tok-key">  export:</span>
+    - <span class="tok-str">"clean.&gt;"</span>
+
+<span class="tok-key">on:</span>
+<span class="tok-key">  - sub:</span> <span class="tok-str">"raw.temp"</span>
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload-float</span>
+      - [round, <span class="tok-num">1</span>]
+      - [squelch]
+      - [publish!, <span class="tok-str">"clean.temp"</span>]</code></pre></figure>
+<h2 id="jetstream-replay">JetStream replay<a class="anchor" href="#jetstream-replay" aria-label="Link to this section">#</a></h2>
+<p><span class="tag tag-advanced">Advanced</span> monoblok can consume a JetStream durable consumer. On startup it replays the stream's history through the rules before opening its listener, using each message's JetStream timestamp as the clock, then carries on live with the same consumer. Windows, bars and counters are therefore warm before the first client connects.</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/jetstream.yml" target="_blank" rel="noopener noreferrer">examples/jetstream.yml</a></span></figcaption><pre><code><span class="tok-com"># JetStream replay example.</span>
+<span class="tok-com">#</span>
+<span class="tok-com"># Run the full demo:</span>
+<span class="tok-com">#   examples/jetstream.sh</span>
+<span class="tok-com">#   JS_PORT=15999 COUNT=1000 examples/jetstream.sh</span>
+<span class="tok-com">#</span>
+<span class="tok-com"># Or manually:</span>
+<span class="tok-com">#   export JS_URL=nats://127.0.0.1:15889</span>
+<span class="tok-com">#   export BRIDGE_URL=nats://127.0.0.1:15890</span>
+<span class="tok-com">#   nats-server -js -sd /tmp/monoblok-js-store -p 15889</span>
+<span class="tok-com">#   nats-server -p 15890</span>
+<span class="tok-com">#   COUNT=1000 PAUSE_EVERY=500 PAUSE_MS=1100 examples/jetstream-populate.sh</span>
+<span class="tok-com">#   ./build/monoblok --port 14222 --patchbay examples/jetstream.yml</span>
+<span class="tok-com">#   nats -s nats://127.0.0.1:14222 sub '$LVC.js.&gt;'</span>
+<span class="tok-com">#</span>
+<span class="tok-com"># monoblok is a JetStream consumer here, not a JetStream server. The source</span>
+<span class="tok-com"># subject stays private patchbay ingress unless a rule publishes derived output.</span>
+
+<span class="tok-key">lvc:</span>
+  - <span class="tok-str">"js.&gt;"</span>
+
+<span class="tok-key">import:</span>
+<span class="tok-key">  streams:</span>
+<span class="tok-key">    - servers:</span>
+<span class="tok-key">        - env:</span> <span class="tok-str">"JS_URL"</span>
+<span class="tok-key">      subject:</span> <span class="tok-str">"js.sensors.temp"</span>
+<span class="tok-key">      stream:</span> <span class="tok-str">"SENSORS"</span>
+<span class="tok-key">      consumer:</span> <span class="tok-str">"monoblok-jetstream-example"</span>
+<span class="tok-key">      catch-up:</span> true
+
+<span class="tok-key">export:</span>
+<span class="tok-key">  servers:</span>
+<span class="tok-key">    - env:</span> <span class="tok-str">"BRIDGE_URL"</span>
+<span class="tok-key">  origin-header:</span> true
+<span class="tok-key">  replay-header:</span> true
+<span class="tok-key">  export:</span>
+    - <span class="tok-str">"js.&gt;"</span>
+
+<span class="tok-key">on:</span>
+<span class="tok-key">  - sub:</span> <span class="tok-str">"js.sensors.temp"</span>
+<span class="tok-key">    do:</span>
+      - [count!]
+      - [publish!, <span class="tok-str">"js.metrics.avg20"</span>, [round, <span class="tok-num">2</span>, [moving-avg, <span class="tok-num">20</span>, <span class="tok-bind">$payload-float</span>]]]
+      - [bar!, ms, <span class="tok-num">1000</span>, <span class="tok-bind">$payload-float</span>]
+      - [if, <span class="tok-bind">$replaying</span>, [publish!, <span class="tok-str">"js.replay.last-temp"</span>, <span class="tok-bind">$payload</span>], [publish!, <span class="tok-str">"js.live.temp"</span>, <span class="tok-bind">$payload</span>]]
+
+  <span class="tok-com"># A few simple variants to try:</span>
+  <span class="tok-com">#</span>
+  <span class="tok-com"># Publish only meaningful live movement:</span>
+<span class="tok-key">  - sub:</span> <span class="tok-str">"js.sensors.temp"</span>
+<span class="tok-key">    when:</span> [not, <span class="tok-bind">$replaying</span>]
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload-float</span>
+      - [deadband, <span class="tok-num">0.25</span>]
+      - [publish!, <span class="tok-str">"js.live.deadband"</span>]
+  <span class="tok-com">#</span>
+  <span class="tok-com"># Publish a rounded stable signal from both replay and live data:</span>
+  <span class="tok-com"># - sub: "js.sensors.temp"</span>
+  <span class="tok-com">#   thread:</span>
+  <span class="tok-com">#     - $payload-float</span>
+  <span class="tok-com">#     - [round, 1]</span>
+  <span class="tok-com">#     - [squelch]</span>
+  <span class="tok-com">#     - [publish!, "js.metrics.stable"]</span></code></pre></figure>
+<p>What to notice:</p>
+<ul><li><strong><code>env: "JS_URL"</code></strong> reads the server URL from the environment when the patchbay loads, so the file holds no addresses.</li><li><strong><code>$replaying</code></strong> is true during catch-up and false afterwards. The first rule uses it to send historical values to <code>js.replay.last-temp</code> and live ones to <code>js.live.temp</code>; the second rule's <code>when: [not, $replaying]</code> guard keeps its deadband output live-only.</li><li><strong><code>[bar!, ms, 1000, ...]</code></strong> closes one-second bars on event time during replay, because the replay clock is the JetStream message timestamp.</li><li><strong><code>replay-header: true</code></strong> marks exported messages derived from replay with <code>x-monoblok-replay: true</code>, so the remote side can tell history from live output.</li><li><strong>Acks follow success.</strong> A message is acknowledged only after its rules and downstream publishes succeed; anything else is left for JetStream to redeliver.</li></ul>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/jetstream.sh
+JS_PORT=15999 COUNT=1000 examples/jetstream.sh</code></pre></figure>
+<p>The script starts a JetStream server and a plain NATS bridge target, populates 1000 events with a pause halfway (so the replay has enough event-time gap to close a bar), then runs monoblok through catch-up plus one live event.</p>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="examples-market.html"><small>Previous</small>Market data</a><a class="next" href="examples-large.html"><small>Next</small>Large patchbays</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

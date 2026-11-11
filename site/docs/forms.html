@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forms reference | monoblok docs</title>
+<meta name="description" content="Reference for every patchbay form: arguments, behaviour, state and worked snippets.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Forms reference</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html" aria-current="page">Forms reference</a><ul class="toc"><li><a href="#form-index">Form index</a></li><li><a href="#top-level-forms">Top-level forms</a></li><li><a href="#values">Values</a></li><li><a href="#bound-symbols">Bound symbols</a></li><li><a href="#special-forms">Special forms</a></li><li><a href="#threading-with">Threading with -&gt;</a></li><li><a href="#comparisons-and-logic">Comparisons and logic</a></li><li><a href="#arithmetic">Arithmetic</a></li><li><a href="#strings-and-subjects">Strings and subjects</a></li><li><a href="#subject-filters">Subject filters</a></li><li><a href="#side-effects">Side effects</a></li><li><a href="#re-entry">Re-entry</a></li><li><a href="#funnel">Funnel</a></li><li><a href="#idempotent-filters">Idempotent filters</a></li><li><a href="#time-based-gates">Time-based gates</a></li><li><a href="#edge-gates">Edge gates</a></li><li><a href="#windowed-aggregates">Windowed aggregates</a></li><li><a href="#json-payloads">JSON payloads</a></li><li><a href="#bars">Bars</a></li><li><a href="#running-counters">Running counters</a></li><li><a href="#last-values">Last values</a></li><li><a href="#request-reply">Request-reply</a></li><li><a href="#debug-printing">Debug printing</a></li><li><a href="#forms-that-are-not-there">Forms that are not there</a></li></ul></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Patchbay</p>
+<h1>Forms reference</h1>
+<p class="lede">Every patchbay form, grouped by what it is for. Each section has the signature, the behaviour on first sight and on nil, what state it keeps, and a snippet you can paste into a rule.</p>
+<p>New to the language? Read the <a href="patchbay.html">patchbay guide</a> first. Want whole files? See the <a href="examples.html">examples</a>.</p>
+<h2 id="form-index">Form index<a class="anchor" href="#form-index" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>family</th><th>forms</th></tr></thead><tbody><tr><td>Top level</td><td><a href="#top-level-forms"><code>on</code></a>, <a href="#heartbeats-with-every"><code>every</code></a>, <a href="#top-level-forms"><code>lvc</code></a>, <a href="#top-level-forms"><code>export</code></a>, <a href="#top-level-forms"><code>import</code></a></td></tr><tr><td>Bound symbols</td><td><a href="#bound-symbols"><code>subject</code>, <code>payload</code>, <code>payload-float</code>, <code>payload-int</code>, <code>payload-bool</code>, <code>replaying?</code>, <code>reply-to</code></a></td></tr><tr><td>Control flow</td><td><a href="#special-forms"><code>if</code>, <code>when</code>, <code>and</code>, <code>or</code>, <code>do</code></a>, <a href="#threading-with"><code>-&gt;</code></a>, <a href="#comparisons-and-logic"><code>not</code></a></td></tr><tr><td>Comparison and arithmetic</td><td><a href="#comparisons-and-logic"><code>=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code></a>, <a href="#arithmetic"><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>min</code>, <code>max</code>, <code>abs</code>, <code>sign</code>, <code>clamp</code></a></td></tr><tr><td>Numeric shaping</td><td><a href="#idempotent-filters"><code>round</code>, <code>quantize</code></a></td></tr><tr><td>Strings and subjects</td><td><a href="#strings-and-subjects"><code>subject-append</code>, <code>subject-with</code>, <code>subject-token</code>, <code>str-concat</code>, <code>contains?</code>, <code>starts-with?</code>, <code>ends-with?</code>, <code>now</code></a></td></tr><tr><td>Publishing</td><td><a href="#side-effects"><code>publish!</code></a>, <a href="#request-reply"><code>reply!</code></a>, <a href="#debug-printing"><code>print!</code></a></td></tr><tr><td>Value gates</td><td><a href="#idempotent-filters"><code>squelch</code>, <code>deadband</code>, <code>changed?</code>, <code>delta</code></a></td></tr><tr><td>Rate gates</td><td><a href="#time-based-gates"><code>hold-off</code>, <code>throttle</code></a></td></tr><tr><td>Edges and thresholds</td><td><a href="#edge-gates"><code>rising-edge</code>, <code>falling-edge</code>, <code>transition</code></a>, <a href="#hysteresis"><code>hysteresis</code></a></td></tr><tr><td>Windowed aggregates</td><td><a href="#windowed-aggregates"><code>moving-avg</code>, <code>moving-sum</code>, <code>moving-min</code>, <code>moving-max</code></a>, <a href="#exponential-average"><code>ewma</code></a>, <a href="#rate-percentiles-distribution-shape"><code>rate</code>, <code>percentile</code>, <code>median</code>, <code>stddev</code>, <code>variance</code></a></td></tr><tr><td>Clock forms</td><td><a href="#clock-emitting-forms"><code>on-silence</code>, <code>dropout</code>, <code>debounce!</code>, <code>sample!</code>, <code>aggregate!</code></a>, <a href="#heartbeats-with-every"><code>every</code></a></td></tr><tr><td>JSON</td><td><a href="#json-payloads"><code>json-get</code>, <code>json-demux!</code></a></td></tr><tr><td>Bars and counters</td><td><a href="#bars"><code>bar!</code></a>, <a href="#running-counters"><code>count!</code></a></td></tr><tr><td>Cross-subject</td><td><a href="#last-values"><code>last</code></a>, <a href="#re-entry"><code>:reentrant</code></a>, <a href="#funnel">the funnel pattern</a></td></tr></tbody></table></div>
+<p>Conventions used throughout:</p>
+<ul><li>A trailing <code>!</code> marks a form that emits or otherwise has an effect.</li><li><code>:ms N</code> is a wall-clock window; a bare <code>N</code> is a tick (sample) window.</li><li>Stateful forms take the value <strong>last</strong>, so they thread with <code>-&gt;</code>.</li><li>State is per call site and subject, and survives a <a href="state.html#snapshots">snapshot</a> reload.</li></ul>
+<h2 id="top-level-forms">Top-level forms<a class="anchor" href="#top-level-forms" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>meaning</th></tr></thead><tbody><tr><td><code>(on FILTER [:reentrant true] BODY)</code></td><td>run BODY whenever an incoming subject matches FILTER. Wildcards: <code>*</code> one token, <code>&gt;</code> tail. <code>:reentrant true</code> (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8.</td></tr><tr><td><code>(every :ms N [:reentrant BOOL] BODY...)</code></td><td>run BODY every N ms (integer, 1 to 1e12) instead of on a publish. Top level only; several BODY forms are an implicit <code>do</code>. First tick schedules, it does not fire. Inside, <code>subject</code> and <code>payload</code> are empty strings.</td></tr><tr><td><code>(lvc [FILTER ...])</code></td><td>opt matching subjects into <code>$LVC.*</code> last-value streams. Filters are strings or <code>(env "NAME")</code>. Legacy <code>(lvc FILTER ...)</code> is accepted.</td></tr><tr><td><code>(export :servers ... :export ...)</code></td><td>optional, zero or one. Outbound NATS forwarder. Deprecated <code>(bridge ...)</code> is accepted as an alias. See export keywords below.</td></tr><tr><td><code>(import :servers ... :subject ...)</code></td><td>optional, zero or one. Inbound core NATS tap into patchbay; compatibility alias for one <code>:core</code> entry.</td></tr><tr><td><code>(import :core [...] :streams [...])</code></td><td>scoped core NATS and JetStream imports. JetStream entries are consumer-only patchbay ingress.</td></tr></tbody></table></div>
+<p>Config forms are covered on their own pages: <a href="state.html"><code>lvc</code></a>, <a href="bridge.html"><code>export</code> and <code>import</code></a>.</p>
+<h2 id="values">Values<a class="anchor" href="#values" aria-label="Link to this section">#</a></h2>
+<p>Patchbay values have a small set of runtime kinds: <code>nil</code>, booleans (<code>true</code> / <code>false</code>), numbers (stored as C <code>double</code> values), strings (<code>"..."</code>), symbols, lists <code>(...)</code>, and vectors <code>[...]</code>. Truthiness: <code>nil</code> and <code>false</code> are falsy, everything else (including <code>0</code>, <code>""</code>, and an empty vector) is truthy.</p>
+<h2 id="bound-symbols">Bound symbols<a class="anchor" href="#bound-symbols" aria-label="Link to this section">#</a></h2>
+<p>Bare symbols inside a body that resolve against the current message:</p>
+<div class="table-wrap"><table><thead><tr><th>symbol</th><th>value kind</th><th>value</th></tr></thead><tbody><tr><td><code>subject</code></td><td>string</td><td>the incoming subject</td></tr><tr><td><code>payload</code></td><td>string</td><td>the raw payload bytes</td></tr><tr><td><code>payload-float</code></td><td>number</td><td><code>payload</code> parsed as a floating-point number (errors if not numeric)</td></tr><tr><td><code>payload-int</code></td><td>number</td><td><code>payload</code> parsed as an integer and returned as a number (errors on non-integer input)</td></tr><tr><td><code>payload-bool</code></td><td>bool</td><td><code>true</code> for <code>true</code> / <code>1</code> / <code>on</code>, <code>false</code> for <code>false</code> / <code>0</code> / <code>off</code> (ASCII case-insensitive, no trimming); any other payload is a type error</td></tr><tr><td><code>replaying?</code></td><td>bool</td><td>true while JetStream loading-phase replay is evaluating historical messages</td></tr><tr><td><code>reply-to</code></td><td>string or nil</td><td>the request's reply subject (see "Request-reply" below); nil when the message had none</td></tr></tbody></table></div>
+<p>An empty payload is not the number 0: <code>payload-float</code> and <code>payload-int</code> on an empty payload are type errors, and so is <code>payload-bool</code>.</p>
+<h2 id="special-forms">Special forms<a class="anchor" href="#special-forms" aria-label="Link to this section">#</a></h2>
+<p>Evaluate their arguments lazily / with short-circuiting.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>behavior</th></tr></thead><tbody><tr><td><code>(if C T E?)</code></td><td><code>T</code> if <code>C</code> is truthy, else <code>E</code> (or <code>nil</code> if omitted)</td></tr><tr><td><code>(when C BODY...)</code></td><td>evaluate <code>BODY</code> sequentially iff <code>C</code> is truthy</td></tr><tr><td><code>(and X...)</code></td><td>left-to-right, returns the first falsy value or the last</td></tr><tr><td><code>(or  X...)</code></td><td>left-to-right, returns the first truthy value or the last</td></tr><tr><td><code>(do  X...)</code></td><td>evaluate in order, return the last</td></tr><tr><td><code>(-&gt; X F...)</code></td><td>thread <code>X</code> as the <strong>last</strong> arg of each <code>F</code> (see below)</td></tr><tr><td><code>(transition C UP DOWN)</code></td><td>eval <code>UP</code> on <code>C</code> false→true, <code>DOWN</code> on true→false, else nil</td></tr><tr><td><code>(dropout :ms N :lost L :found F)</code></td><td>eval <code>L</code> after silence, <code>F</code> on recovery after a trip</td></tr></tbody></table></div>
+<p><code>transition</code> and <code>dropout</code> are described under <a href="#edge-gates">Edge gates</a> and <a href="#clock-emitting-forms">Clock-emitting forms</a>.</p>
+<h2 id="threading-with">Threading with <code>-&gt;</code><a class="anchor" href="#threading-with" aria-label="Link to this section">#</a></h2>
+<p><code>(-&gt; X f1 f2 ...)</code> starts with <code>X</code>, calls <code>f1</code>, feeds that result into <code>f2</code>, and so on. At each step, the current value is inserted as the <strong>last</strong> argument of the form. A bare symbol <code>f</code> is treated as the call <code>(f)</code>. Last-arg threading fits this dialect because every stateful/transform op takes the value last:</p>
+<p>The simplest case:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">-&gt;</span> x f1 f2)</code></pre></figure>
+<p>means:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">f2</span> (<span class="tok-op">f1</span> x))</code></pre></figure>
+<blockquote><p>If you know Clojure: monoblok's <code>-&gt;</code> is deliberately <strong>thread-last</strong>. Clojure's <code>-&gt;</code> threads into the first argument, while Clojure's <code>-&gt;&gt;</code> threads into the last. Patchbay only has <code>-&gt;</code>, and it behaves like Clojure <code>-&gt;&gt;</code> because the DSL's operators are value-last.</p></blockquote>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">-&gt;</span> payload-float
+    (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+    (<span class="tok-op">squelch</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>)))</code></pre></figure>
+<p>expands to:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>) (<span class="tok-op">squelch</span> (<span class="tok-op">round</span> <span class="tok-num">1</span> payload-float)))</code></pre></figure>
+<p>The gates (<code>squelch</code>, <code>deadband</code>) return the value on pass and <code>nil</code> on suppress, so <code>publish!</code> at the tail becomes a no-op when the gate blocks. You don't need <code>when</code> anywhere in a threaded pipeline.</p>
+<h2 id="comparisons-and-logic">Comparisons and logic<a class="anchor" href="#comparisons-and-logic" aria-label="Link to this section">#</a></h2>
+<p>All comparisons are chained: <code>(&lt; a b c)</code> means <code>a &lt; b &amp;&amp; b &lt; c</code>. Numeric comparisons coerce string args by parsing them as numbers; <code>=</code> only matches values of the same kind (a <code>number</code> never equals a <code>string</code>).</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>notes</th></tr></thead><tbody><tr><td><code>(= a b ...)</code></td><td>all equal; same kind, deep-equal for strings/symbols</td></tr><tr><td><code>(&gt; a b ...)</code></td><td>chained numeric</td></tr><tr><td><code>(&lt; a b ...)</code></td><td>chained numeric</td></tr><tr><td><code>(&gt;= a b ...)</code></td><td>chained numeric</td></tr><tr><td><code>(&lt;= a b ...)</code></td><td>chained numeric</td></tr><tr><td><code>(not x)</code></td><td>boolean negation on truthiness</td></tr></tbody></table></div>
+<h2 id="arithmetic">Arithmetic<a class="anchor" href="#arithmetic" aria-label="Link to this section">#</a></h2>
+<p>Variadic, left-fold, numeric. Single-arg variants follow Clojure: <code>(- x)</code> negates, <code>(/ x)</code> reciprocates, <code>(+ x)</code> / <code>(* x)</code> are identity.</p>
+<p><code>(+ a b ...)</code> <code>(- a b ...)</code> <code>(* a b ...)</code> <code>(/ a b ...)</code></p>
+<p>Also: <code>(min a b ...)</code>, <code>(max a b ...)</code> (variadic, at least 1 arg), <code>(abs x)</code>, <code>(sign x)</code> (returns -1, 0, 1), <code>(clamp LO HI X)</code> (value last so it threads).</p>
+<h2 id="strings-and-subjects">Strings and subjects<a class="anchor" href="#strings-and-subjects" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>result</th></tr></thead><tbody><tr><td><code>(str-concat a b ...)</code></td><td>concatenates string/symbol args</td></tr><tr><td><code>(subject-append "suffix")</code></td><td><code>"&lt;current-subject&gt;.suffix"</code></td></tr><tr><td><code>(subject-with TOK ...)</code> / <code>(subject-with [TOK ...])</code></td><td>join tokens with <code>.</code> to build a publishable subject (e.g. <code>(subject-with "sensors" room "temp")</code>). Numbers and bools coerce to strings; empty tokens error. Result is publish-validated.</td></tr><tr><td><code>(now :date)</code> / <code>(now :hour)</code> / <code>(now :minute)</code></td><td>wall-clock UTC string at the chosen granularity: <code>"YYYY-MM-DD"</code>, <code>"YYYY-MM-DDTHH"</code>, <code>"YYYY-MM-DDTHHMM"</code> (RFC 3339 basic form, no <code>:</code> so it's subject-token-safe). The result is formatted into the eval arena for each call. <code>:minute</code> is high cardinality (525,600 unique values per year per topic) when used as a subject token, prefer <code>:hour</code> or <code>:date</code> unless you really mean it.</td></tr><tr><td><code>(contains? coll item)</code></td><td>substring check on strings (<code>(contains? payload "ERROR")</code>), membership check on vectors (<code>(contains? [1 2 3] payload-int)</code>, <code>(contains? ["red" "green"] payload)</code>). Strict equality, so <code>"1"</code> does not match <code>1</code>.</td></tr><tr><td><code>(starts-with? text prefix)</code></td><td>boolean prefix check (strings only)</td></tr><tr><td><code>(ends-with? text suffix)</code></td><td>boolean suffix check (strings only)</td></tr><tr><td><code>(subject-token N [S])</code></td><td>Nth dot-separated token (0-indexed) of <code>S</code> (default: current subject); nil if out of range</td></tr></tbody></table></div>
+<h2 id="subject-filters">Subject filters<a class="anchor" href="#subject-filters" aria-label="Link to this section">#</a></h2>
+<p>Filters on <code>(on FILTER ...)</code> forms and in <code>SUB</code> subjects follow the NATS convention:</p>
+<div class="table-wrap"><table><thead><tr><th>token</th><th>meaning</th></tr></thead><tbody><tr><td><code>*</code></td><td>exactly one token in this position (any characters)</td></tr><tr><td><code>&gt;</code></td><td>one or more tokens, matches the rest of the subject</td></tr></tbody></table></div>
+<p><code>*</code> can appear in any position; <code>&gt;</code> must be the <strong>last</strong> token and consumes everything after it. <code>foo.&gt;</code> matches <code>foo.a</code> and <code>foo.a.b.c.d</code>. <code>foo.*</code> matches <code>foo.a</code> only (a filter with N tokens and no <code>&gt;</code> requires exactly N tokens in the subject). If you need "anything starting with <code>bip</code> with at least three tokens after it," that's <code>bip.*.*.*</code> or <code>bip.*.*.*.&gt;</code>, not <code>bip.&gt;</code> (which matches <code>bip.a</code> too). Putting <code>&gt;</code> anywhere except the tail is a validation error, not a silent reinterpretation.</p>
+<h2 id="side-effects">Side effects<a class="anchor" href="#side-effects" aria-label="Link to this section">#</a></h2>
+<p>Forms whose entire purpose is to emit (terminal effect, return nil) carry a trailing <code>!</code>. Scan a rule and the bangs are the lines that put bytes on the wire; everything else is pure or value-returning. Un-banged spellings (<code>publish</code>, <code>publish-to</code>, <code>publish-to!</code>, <code>json-demux</code>, <code>count</code>, <code>bar</code>) still work as aliases for now.</p>
+<p>A rule body may run more than one effect. Wrap them in <code>do</code> when the same inbound message should trigger several side effects:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
+  (<span class="tok-op">do</span>
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"raw"</span>) payload)
+    (<span class="tok-op">bar!</span> <span class="tok-num">60</span> payload-float)))</code></pre></figure>
+<p><code>(publish! SUBJECT VALUE)</code> validates <code>SUBJECT</code> as a publishable subject (no wildcards, no <code>$LVC.*</code> or <code>$STATS.*</code>), coerces <code>VALUE</code> to its canonical string form (numbers stringified, booleans → <code>"true"</code> / <code>"false"</code>, strings passed through), and enqueues a fan-out. Returns <code>nil</code>. Use <code>(publish! SUBJECT :dp N VALUE)</code> when a numeric payload should be formatted with exactly <code>N</code> decimal places at the output boundary. <code>N</code> must be an integer from 0 to 15.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">-&gt;</span> payload-float
+    (<span class="tok-op">moving-avg</span> <span class="tok-num">10</span>)
+    (<span class="tok-op">publish!</span> <span class="tok-str">"sensors.temp.avg"</span> <span class="tok-kw">:dp</span> <span class="tok-num">1</span>))</code></pre></figure>
+<p>The moving average keeps raw numeric state, and only the emitted text is rounded. Direct calls may also put the option after the value: <code>(publish! SUBJECT VALUE :dp N)</code>.</p>
+<p>Publishes from rules participate in normal delivery + configured LVC caching. By default they are not fed back through rule evaluation; opt in per rule with <code>:reentrant true</code> (see "Re-entry" below).</p>
+<p>If <code>VALUE</code> is <code>nil</code> (which is what a gate returns when it suppresses), <code>publish!</code> is a no-op. That nil short-circuit is what makes the pipeline form below read top-to-bottom.</p>
+<p><code>publish!</code> and <code>publish-to!</code> are now identical (<code>publish-to</code> predates the merge, when <code>publish</code> was a strict-string-only sibling). Use <code>publish!</code>.</p>
+<h2 id="re-entry">Re-entry<a class="anchor" href="#re-entry" aria-label="Link to this section">#</a></h2>
+<p>By default, a publish from inside a rule is delivered to subscribers and the LVC, but is not matched against other rules. That keeps rule graphs predictable: one inbound message produces one round of rule evaluation, full stop.</p>
+<p>Opt in per rule with <code>:reentrant true</code> between the filter and the body:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"devices.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"temp"</span> <span class="tok-str">"hum"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"devices.*.temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">0</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))</code></pre></figure>
+<p>The first rule is reentrant, so its demuxed <code>devices.kitchen.temp</code> emission re-enters rule evaluation and the second rule fires on it. The second rule is not reentrant, so its <code>...temp.stable</code> emission goes to subscribers only and stops there.</p>
+<p>Re-entry matches rules by subject, not by file position: the emitted message can trigger matching rules before or after the emitting rule. Rule evaluation still follows source order for a given subject, and re-entry runs synchronously before the outer publish continues to later matching rules.</p>
+<p>A reentrant rule whose emission matches its own filter would loop forever, so re-entry is depth-capped (default 8). The original PUB runs at depth 0, and each level of re-entry increments by one; emissions past the cap are dropped and logged to stderr.</p>
+<p><code>:reentrant</code> is the only rule option currently recognised (on <code>on</code> and <code>every</code>). Unknown options are a load error. Re-entry is also how rules share state across subjects; see "Funnel" below.</p>
+<h2 id="funnel">Funnel<a class="anchor" href="#funnel" aria-label="Link to this section">#</a></h2>
+<p>State is per subject, so a stateful form on <code>sensors.*</code> keeps one slot for each concrete subject. There is no shared state across subjects, and no key to choose. To combine subjects, publish them onto one subject with a re-entrant rule, and put the stateful rule on that subject:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">publish!</span> <span class="tok-str">"all.sensors"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"all.sensors"</span>
+  (<span class="tok-op">publish!</span> <span class="tok-str">"sensors.average"</span> <span class="tok-kw">:dp</span> <span class="tok-num">1</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">4</span> payload-float)))</code></pre></figure>
+<p>Every <code>sensors.*</code> message is republished as <code>all.sensors</code>, re-enters rule evaluation, and lands in one <code>moving-avg</code> ring. The funnel subject must not match the source filter, or the rule would feed itself. For one funnel per group, build the funnel subject from a token and match it with a wildcard:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"site.*.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">publish!</span> (<span class="tok-op">str-concat</span> <span class="tok-str">"group."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"group.*"</span>
+  (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"average"</span>) <span class="tok-kw">:dp</span> <span class="tok-num">1</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">8</span> payload-float)))</code></pre></figure>
+<p>The funnel subject is an ordinary publish: subscribers and <code>lvc</code> see it, and the cost is one extra rule evaluation per message.</p>
+<h2 id="idempotent-filters">Idempotent filters<a class="anchor" href="#idempotent-filters" aria-label="Link to this section">#</a></h2>
+<p>Real sensor streams are noisy. These primitives turn a chatty publisher into a "change-only" one without any timers or windows; one slot of state per call site and subject the rule has ever seen.</p>
+<p>State identity is per call site: each place a stateful form appears in a rule body gets its own state, so two <code>(squelch ...)</code> calls in one rule never share a slot. It is also per subject, so <code>sensors.*</code> keeps one slot for every concrete subject it has seen. To combine several subjects into one slot, see "Funnel" below.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>behavior</th></tr></thead><tbody><tr><td><code>(round N X)</code></td><td>round number <code>X</code> to <code>N</code> decimal places (pure)</td></tr><tr><td><code>(quantize STEP X)</code></td><td>snap <code>X</code> to the nearest multiple of <code>STEP</code> (pure)</td></tr><tr><td><code>(squelch X)</code></td><td>pass <code>X</code> through iff it differs from the last <code>X</code> seen at this call site and subject</td></tr><tr><td><code>(deadband DELTA X)</code></td><td>pass <code>X</code> through iff numeric <code>X</code> changed by at least <code>DELTA</code> since last emit</td></tr><tr><td><code>(changed? X)</code></td><td>boolean predicate: true iff <code>X</code> differs from the last <code>X</code> at this call site and subject; true on first sight</td></tr><tr><td><code>(delta X)</code></td><td>numeric difference between <code>X</code> and the last <code>X</code>; 0 on first sight</td></tr></tbody></table></div>
+<p><code>changed?</code> is the predicate form of <code>squelch</code>: it returns a plain boolean instead of value-or-nil, which composes cleanly inside <code>if</code>, <code>and</code>, <code>or</code> without relying on the nil short-circuit.</p>
+<p>Gates return the value on pass and <code>nil</code> on suppress. Truthy-on-pass keeps them usable as conditions in <code>when</code> / <code>and</code>, while passing the value through makes them compose directly with <code>-&gt;</code> and <code>publish!</code>. <code>squelch</code> stores the stringified value; <code>deadband</code> stores the numeric anchor and only updates it on an accepted change. Both are <strong>per call site, per subject</strong>: two rules (or two calls in one rule) watching the same subject don't interfere, and the first message a call site sees on a new subject always passes.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Jittery temperature sensor, only emit when the rounded value moves.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">; Analog deadband: suppress changes below 0.5.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">deadband</span> <span class="tok-num">0.5</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"delta"</span>))))</code></pre></figure>
+<h2 id="time-based-gates">Time-based gates<a class="anchor" href="#time-based-gates" aria-label="Link to this section">#</a></h2>
+<p>Where <code>squelch</code> and <code>deadband</code> dedupe by <em>value</em>, <code>hold-off</code> dedupes by <em>time</em>: fire once, then ignore further triggers for a fixed interval. Radar term for the same idea (the re-arm timer after a pulse). Useful when the upstream is chatty at a faster cadence than downstream consumers want, and you don't care which of the suppressed samples you drop.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>behavior</th></tr></thead><tbody><tr><td><code>(hold-off MS X)</code></td><td>pass <code>X</code> through on first sight, then suppress further <code>X</code> for <code>MS</code> ms</td></tr></tbody></table></div>
+<p>Time source is the ingress wall-clock (monotonic ms from the event loop), stamped once per incoming publish, so every op in one evaluation sees the same "now." This means <code>hold-off</code> is only evaluated when a message arrives (it's not a ticking timer): a stream that goes silent will stay silent, not fire a delayed trailing emit. Per call site and subject, same as the other gates.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Alert is noisy during a transient; emit at most once per 2s.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">80.0</span>)
+    (<span class="tok-op">-&gt;</span> payload
+        (<span class="tok-op">hold-off</span> <span class="tok-num">2000</span>)
+        (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>)))))</code></pre></figure>
+<p>Stacks cleanly with value-based gates when you want both: "only if the value changed, and at most once per 500ms."</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">-&gt;</span> payload-float
+    (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+    (<span class="tok-op">squelch</span>)
+    (<span class="tok-op">hold-off</span> <span class="tok-num">500</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>)))</code></pre></figure>
+<p><code>(throttle WINDOW MAX X)</code> is the related but distinct gate for "at most MAX events per WINDOW." <code>hold-off</code> enforces a minimum interval between passes; <code>throttle</code> enforces a maximum count over a sliding window (a bucket of recent pass timestamps). Reach for <code>hold-off</code> when you want to debounce a chattery edge, and <code>throttle</code> when you want to cap a steady stream's rate without caring about the spacing.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Up to 5 alerts per minute, regardless of how they arrive.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"alerts.&gt;"</span>
+  (<span class="tok-op">-&gt;</span> payload
+      (<span class="tok-op">throttle</span> <span class="tok-kw">:ms</span> <span class="tok-num">60000</span> <span class="tok-num">5</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"rate-limited"</span>))))</code></pre></figure>
+<p><code>WINDOW</code> is either a bare integer <code>N</code> (tick window) or <code>:ms N</code> (time window). Tick form counts the last <code>N</code> evaluations; time form counts pass timestamps in the last <code>N</code> ms and is evicted by the server's shared patchbay timer. Per call site, subject, and window kind.</p>
+<h2 id="edge-gates">Edge gates<a class="anchor" href="#edge-gates" aria-label="Link to this section">#</a></h2>
+<p><code>squelch</code> fires on every change; often you only want one fire per transition in a specific direction (alert on cross-up, all-clear on cross-down). Edge gates take a boolean and pass it through only on the matching transition.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>fires when</th></tr></thead><tbody><tr><td><code>(rising-edge X)</code></td><td><code>X</code> transitions from falsy to truthy</td></tr><tr><td><code>(falling-edge X)</code></td><td><code>X</code> transitions from truthy to falsy</td></tr></tbody></table></div>
+<p>Both are <strong>per call site, per subject</strong>, and the first message a call site sees on a new subject never fires (no prior state means no edge, so no cold-start noise). Use <code>rising-edge</code> / <code>falling-edge</code> when you only care about one direction and want to keep threading through <code>-&gt;</code>.</p>
+<p>When you want both directions (alert + all-clear), <code>transition</code> is the condensed form: one rule, one boolean, one shared <code>prev</code> slot, two branches.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Alert on cross-up, all-clear on cross-down, in a single rule.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"temp.*.*"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">60</span> payload-float) <span class="tok-num">28.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"hot"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>)    <span class="tok-str">"cool"</span>)))</code></pre></figure>
+<p>Compared to pairing two edge-gate rules, this evaluates the predicate once, keeps one <code>moving-avg</code> ring instead of two, and doesn't renumber when you later add or remove rules around it.</p>
+<h3 id="hysteresis">Hysteresis<a class="anchor" href="#hysteresis" aria-label="Link to this section">#</a></h3>
+<p>A single threshold chatters when the value hovers around it. <code>(hysteresis LO HI X)</code> returns a boolean with two thresholds: it becomes true once <code>X &gt;= HI</code>, false once <code>X &lt;= LO</code>, and between them it holds whatever it said last. On first sight it is <code>X &gt;= HI</code>. If <code>LO</code> equals <code>HI</code>, <code>X &gt;= HI</code> wins. <code>LO &gt; HI</code> or a non-numeric argument is a type error.</p>
+<p>It returns a bool on every call, so it composes with <code>rising-edge</code>, <code>falling-edge</code>, <code>transition</code>, and <code>when</code>:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Alert at 28 or above, clear only once it falls to 26 or below.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"temp.*"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">hysteresis</span> <span class="tok-num">26.0</span> <span class="tok-num">28.0</span> payload-float)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"hot"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>)    <span class="tok-str">"cool"</span>)))</code></pre></figure>
+<h2 id="windowed-aggregates">Windowed aggregates<a class="anchor" href="#windowed-aggregates" aria-label="Link to this section">#</a></h2>
+<p>A small windowing family for smoothing and window-based triggers. State is keyed by <code>(rule, call site, op, window kind, subject)</code>, so a tick-windowed and a time-windowed <code>moving-avg</code> on the same rule and subject keep independent state, and so do two <code>moving-avg</code> calls in one rule. (Before call-site identity, two uses of the same form in one rule shared a slot; they no longer do.)</p>
+<p>A window is either a tick count or a wall-clock duration:</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>meaning</th></tr></thead><tbody><tr><td><code>N</code></td><td>last N samples (fixed-cap ring)</td></tr><tr><td><code>:ms N</code></td><td>last N ms of wall-clock time</td></tr></tbody></table></div>
+<p>Rule of thumb: <code>!</code> marks forms that emit or otherwise have an effect, <code>:ms N</code> marks wall-clock windows that may use the host clock, and bare <code>N</code> marks tick/sample windows.</p>
+<p>Wall-clock time is the ingress timestamp stamped once per inbound PUB (same source <code>hold-off</code> reads). For windows that elapse without a new PUB, each time-windowed slot exposes its next deadline and the server keeps one rescheduled timer pointed at the earliest active deadline. On each fire it scans due slots, evicts old samples, and closes any time-windowed <code>bar!</code> whose window has fully passed, so a quiet feed doesn't leave you with a stale aggregate or an unflushed bar.</p>
+<p>On snapshot warm-start, existing time-window slots are re-armed when the server starts. If a brief service bounce crossed a slot's deadline, that slot fires immediately: old time-ring samples are evicted, and an in-progress time bar closes with the last sample captured before the bounce.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>returns</th><th>cost</th></tr></thead><tbody><tr><td><code>(moving-avg WINDOW X)</code></td><td>number</td><td>O(1) per update for tick form<br>O(n) per update for <code>:ms</code> form</td></tr><tr><td><code>(moving-sum WINDOW X)</code></td><td>number</td><td>same as <code>moving-avg</code></td></tr><tr><td><code>(moving-max WINDOW X)</code></td><td>number</td><td>O(n) scan over the live window<br>O(n) per update for <code>:ms</code> form</td></tr><tr><td><code>(moving-min WINDOW X)</code></td><td>number</td><td>same as <code>moving-max</code></td></tr></tbody></table></div>
+<p>Tick rings allocate <code>N × 8 B</code> and <code>N</code> is fixed at first call. Time rings grow with event rate × window: storage is unbounded in principle, bounded in practice by however many samples arrive inside the window. Aggregate readers such as <code>moving-min</code> and <code>moving-max</code> do an O(n) scan over the live window, which is fine at sensor / ticker rates; if you want sub-microsecond updates over wide time windows, prefer the tick form with a generous <code>N</code>.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Smooth with a 10-sample moving average, and only emit when the</span>
+<span class="tok-com">; smoothed value drifts by at least 1.0.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-num">10</span>)
+      (<span class="tok-op">deadband</span> <span class="tok-num">1.0</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"smoothed"</span>))))
+
+<span class="tok-com">; Same idea, but window over the last 5 seconds of wall-clock time</span>
+<span class="tok-com">; instead of the last N samples. Useful when sample cadence varies and</span>
+<span class="tok-com">; you want a stable "last 5 seconds" view.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"avg5s"</span>))))
+
+<span class="tok-com">; Volatility detector: alert if the spread over the last 20 samples</span>
+<span class="tok-com">; exceeds 5 units. Ring ops return numbers, so the non-threaded form</span>
+<span class="tok-com">; is often clearer when you need multiple windows at once.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">-</span> (<span class="tok-op">moving-max</span> <span class="tok-num">20</span> payload-float)
+              (<span class="tok-op">moving-min</span> <span class="tok-num">20</span> payload-float)) <span class="tok-num">5.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"volatile"</span>) payload)))</code></pre></figure>
+<p>Window ops return numbers, so they compose directly with the arithmetic, comparison, and gating primitives above. No special pipeline syntax.</p>
+<h3 id="exponential-average">Exponential average<a class="anchor" href="#exponential-average" aria-label="Link to this section">#</a></h3>
+<p><code>(ewma ALPHA X)</code> is a smoothed value that needs no ring. <code>ALPHA</code> is in <code>(0, 1]</code>; the first sample returns <code>X</code>, and after that <code>s = ALPHA * X + (1 - ALPHA) * s</code>. A small <code>ALPHA</code> is smooth and slow, an <code>ALPHA</code> of 1 passes <code>X</code> through. State is one number per call site and subject, so unlike <code>(moving-avg N X)</code> the cost does not grow with the window. <code>ALPHA</code> out of range, or a non-numeric <code>X</code>, is a type error.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency"</span>
+  (<span class="tok-op">publish!</span> <span class="tok-str">"rpc.latency.smooth"</span> <span class="tok-kw">:dp</span> <span class="tok-num">2</span> (<span class="tok-op">ewma</span> <span class="tok-num">0.2</span> payload-float)))</code></pre></figure>
+<h3 id="rate-percentiles-distribution-shape">Rate, percentiles, distribution shape<a class="anchor" href="#rate-percentiles-distribution-shape" aria-label="Link to this section">#</a></h3>
+<p>The same windowing machinery powers a few more analytical primitives. Each one is keyed by call site, op, window kind, and subject, so they don't share state with <code>moving-*</code> even on the same subject.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>returns</th><th>meaning</th></tr></thead><tbody><tr><td><code>(rate WINDOW X)</code></td><td>number</td><td>events per second over WINDOW. Time-only.</td></tr><tr><td><code>(percentile WINDOW P X)</code></td><td>number</td><td>Pth percentile of X (P in [0, 1])</td></tr><tr><td><code>(median WINDOW X)</code></td><td>number</td><td>sugar for <code>(percentile WINDOW 0.5 X)</code></td></tr><tr><td><code>(stddev WINDOW X)</code></td><td>number</td><td>population stddev of X over WINDOW</td></tr><tr><td><code>(variance WINDOW X)</code></td><td>number</td><td>population variance of X over WINDOW</td></tr></tbody></table></div>
+<p><code>rate</code> requires the <code>:ms N</code> form: "rate over the last N samples" has no time unit, so passing a bare tick count is an argument error. <code>X</code> is evaluated but its value ignored: the op counts pushes, not magnitudes. Useful for "events/sec on this subject," "alerts/sec," etc.</p>
+<p><code>percentile</code>, <code>median</code>, <code>stddev</code>, and <code>variance</code> all read the window and return immediately (no warm-up). On the first sample they return that sample (or 0 for variance/stddev). Cost is O(n log n) for percentile/median (sort copy) and O(n) for stddev/variance.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Latency p99 over the last 200 samples. Useful in front of a SLO</span>
+<span class="tok-com">; gate: only alert when sustained tail behaviour is bad, not a single</span>
+<span class="tok-com">; outlier.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">percentile</span> <span class="tok-num">200</span> <span class="tok-num">0.99</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"p99"</span>))))
+
+<span class="tok-com">; Live event rate per subject, expressed in Hz.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"events.&gt;"</span>
+  (<span class="tok-op">-&gt;</span> payload
+      (<span class="tok-op">rate</span> <span class="tok-kw">:ms</span> <span class="tok-num">1000</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"rate-hz"</span>))))
+
+<span class="tok-com">; Volatility flag: alert if the price stddev over the last minute</span>
+<span class="tok-com">; jumps above 0.5.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> (<span class="tok-op">stddev</span> <span class="tok-kw">:ms</span> <span class="tok-num">60000</span> payload-float) <span class="tok-num">0.5</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"volatile"</span>) payload)))</code></pre></figure>
+<h3 id="clock-emitting-forms">Clock-emitting forms<a class="anchor" href="#clock-emitting-forms" aria-label="Link to this section">#</a></h3>
+<p>Most patchbay forms run only while handling an inbound PUB. These forms store per-slot deadlines driven by the server's single rescheduled patchbay timer, so they can publish after time passes even if the feed goes quiet.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>behavior</th></tr></thead><tbody><tr><td><code>(on-silence :ms N BODY...)</code></td><td>evaluate BODY if no matching PUB arrives for N ms</td></tr><tr><td><code>(dropout :ms N :lost LOST :found FOUND)</code></td><td>silence runs LOST once; next match runs FOUND once</td></tr><tr><td><code>(debounce! :ms N SUBJECT VALUE)</code></td><td>publish the latest SUBJECT/VALUE after N ms of quiet</td></tr><tr><td><code>(sample! :ms N SUBJECT VALUE)</code></td><td>publish the latest SUBJECT/VALUE every N ms after the first match</td></tr><tr><td><code>(aggregate! :ms N SUBJECT :METRIC X)</code></td><td>publish a time-window metric on the clock deadline</td></tr></tbody></table></div>
+<p><code>on-silence</code> is a special form: BODY is stored unevaluated and runs later with the last subject and payload in scope. It is useful for liveness and stale-device detection. <code>dropout</code> adds the matching recovery side: the first heartbeat arms quietly, silence runs <code>:lost</code>, and only the next heartbeat after that runs <code>:found</code>.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"devices.*.heartbeat"</span>
+  (<span class="tok-op">dropout</span> <span class="tok-kw">:ms</span> <span class="tok-num">30000</span>
+    <span class="tok-kw">:lost</span>  (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"true"</span>)
+    <span class="tok-kw">:found</span> (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stale"</span>) <span class="tok-str">"false"</span>)))</code></pre></figure>
+<p><code>debounce!</code> is a trailing-edge emitter. It differs from <code>deadband</code>: <code>deadband</code> suppresses small value movement, while <code>debounce!</code> waits for quiet time and then publishes the latest value.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"dials.*"</span>
+  (<span class="tok-op">debounce!</span> <span class="tok-kw">:ms</span> <span class="tok-num">250</span>
+    (<span class="tok-op">subject-append</span> <span class="tok-str">"settled"</span>)
+    payload))</code></pre></figure>
+<p><code>sample!</code> keeps a regular cadence once the first matching message has arrived. New messages update the retained value without moving the cadence.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">sample!</span> <span class="tok-kw">:ms</span> <span class="tok-num">1000</span>
+    (<span class="tok-op">subject-append</span> <span class="tok-str">"sampled"</span>)
+    payload))</code></pre></figure>
+<p><code>aggregate!</code> is the clock-emitting sibling of the value-returning windowed aggregate forms. It supports <code>:avg</code>, <code>:sum</code>, <code>:min</code>, <code>:max</code>, <code>:count</code>, and <code>:rate</code>, and publishes to the subject you provide.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"rpc.latency"</span>
+  (<span class="tok-op">aggregate!</span> <span class="tok-kw">:ms</span> <span class="tok-num">10000</span> <span class="tok-str">"rpc.latency.avg10s"</span> <span class="tok-kw">:avg</span> payload-float))</code></pre></figure>
+<h3 id="heartbeats-with-every">Heartbeats with <code>every</code><a class="anchor" href="#heartbeats-with-every" aria-label="Link to this section">#</a></h3>
+<p><code>(every :ms N [:reentrant BOOL] BODY...)</code> is a top-level sibling of <code>on</code>. It runs BODY on a fixed period instead of on a publish. <code>N</code> is a literal integer from 1 to 1e12; several BODY forms are an implicit <code>do</code>.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">every</span> <span class="tok-kw">:ms</span> <span class="tok-num">5000</span>
+  (<span class="tok-op">publish!</span> <span class="tok-str">"monoblok.heartbeat"</span> <span class="tok-str">"alive"</span>))</code></pre></figure>
+<p>The first tick schedules the next one at now + N without firing. After that it fires once per interval; if several intervals were missed it fires once and realigns to now + N, with no burst. Inside the body, <code>subject</code> and <code>payload</code> are empty strings and <code>reply-to</code> is nil. <code>last</code>, <code>now</code>, stateful forms, and <code>publish!</code> work. <code>:reentrant true</code> feeds the body's emissions back to <code>on</code> rules.</p>
+<p><code>count!</code> defaults to <code>&lt;subject&gt;.count</code>, which is invalid with an empty subject, so inside <code>every</code> write <code>(count! :subject "x.count")</code>. <code>every</code> inside a rule body, a missing or fractional <code>:ms</code>, an empty body, and an unknown option are all load errors. The timer itself is not persisted in snapshots; it is recreated at load. An <code>every</code> rule takes a rule index, so <code>$STATS.rules.N.*</code> covers it.</p>
+<h2 id="json-payloads">JSON payloads<a class="anchor" href="#json-payloads" aria-label="Link to this section">#</a></h2>
+<p>Most off-the-shelf sensors and gateways emit JSON frames (<code>{"temp":12.04,"hum":80}</code>), not bare scalars. Two ops bridge that gap. Both accept top-level keys and dotted object paths up to four levels deep (<code>"a.b.c.d"</code>), but not arrays or full JSONPath. Escapes and <code>\uXXXX</code> sequences are handled correctly.</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>what it does</th></tr></thead><tbody><tr><td><code>(json-get KEY PAYLOAD)</code></td><td>return that field's value as a number, string, or boolean. Nil otherwise.</td></tr><tr><td><code>(json-demux! KEY ... PAYLOAD)</code></td><td>publish each KEY/path value to <code>&lt;subject&gt;.&lt;suffix&gt;</code>. Side-effecting. Returns nil.</td></tr></tbody></table></div>
+<p><code>json-get</code> returns <code>nil</code> whenever the selected path can't be turned into a scalar (key missing, payload not a JSON object, value is <code>null</code>, value is an array or non-selected nested object). That nil flows through <code>publish!</code> as a no-op, so a JSON-aware pipeline reads exactly like the analog ones:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Treat a JSON sensor frame like a scalar stream.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload
+      (<span class="tok-op">json-get</span> <span class="tok-str">"temp"</span>)
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"temp.stable"</span>))))</code></pre></figure>
+<p><code>json-demux!</code> is the breakout: one wire carrying a multi-field frame fanned out to one sub-subject per field, like a demultiplexer chip selecting an output line per key. Note that the publishing is implicit, the form has no return value to thread on. Useful as the first rule for JSON-publishing devices, so the rest of the patchbay can stay scalar.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Break a multi-field frame out into per-field subjects.</span>
+<span class="tok-com">; sensors.foo {"temp":12.5,"hum":80} -&gt; sensors.foo.temp 12.5</span>
+<span class="tok-com">;                                       sensors.foo.hum  80</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"temp"</span> <span class="tok-str">"hum"</span> payload))</code></pre></figure>
+<p>For nested objects, use dotted paths with either JSON op. In <code>json-demux!</code>, the full path is appended to the input subject by default:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; sensors.foo {"temp":{"c":20}} -&gt; sensors.foo.temp.c 20</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"temp.c"</span> payload))</code></pre></figure>
+<p><code>json-demux!</code> can flatten output subjects with <code>:leaf</code>, or override a single output suffix with <code>[PATH SUFFIX]</code>:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; both emit sensors.foo.c for {"temp":{"c":20}}</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">json-demux!</span> <span class="tok-kw">:leaf</span> <span class="tok-str">"temp.c"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">json-demux!</span> [<span class="tok-str">"temp.c"</span> <span class="tok-str">"c"</span>] payload))</code></pre></figure>
+<p>Both JSON ops support object paths up to four tokens deep, such as <code>"a.b.c.d"</code>. Deeper paths are rejected when the rule runs. If a key is missing, null, an array, or a non-selected nested object, <code>json-demux!</code> skips it silently rather than emitting an error. Numbers come out canonically formatted, strings are unquoted, booleans render as <code>true</code> / <code>false</code>.</p>
+<p>Both ops are arity-flexible at the <strong>value-last</strong> end (<code>PAYLOAD</code> is the last argument), matching the rest of the dialect, so you can just as easily write the threaded form <code>(-&gt; payload (json-get "temp") ...)</code>.</p>
+<h2 id="bars">Bars<a class="anchor" href="#bars" aria-label="Link to this section">#</a></h2>
+<p><code>(bar! WINDOW X)</code> is an OHLC bar accumulator for streams where you want open / high / low / close summaries instead of every tick. <code>WINDOW</code> is either <code>N</code> (close every N samples) or <code>:ms N</code> (close every N ms of wall-clock time, aligned to <code>floor(now/N)*N</code>). Each call folds one sample into the in-progress bar; on close the rule publishes four sub-subjects under <code>&lt;subject&gt;.bar</code>:</p>
+<div class="table-wrap"><table><thead><tr><th>sub-subject</th><th>value</th></tr></thead><tbody><tr><td><code>.bar.open</code></td><td>first sample of the bar</td></tr><tr><td><code>.bar.high</code></td><td>max sample seen in the bar</td></tr><tr><td><code>.bar.low</code></td><td>min sample seen in the bar</td></tr><tr><td><code>.bar.close</code></td><td>last sample seen in the bar (the closing tick or last</td></tr><tr><td></td><td>sample before the boundary, for time bars)</td></tr></tbody></table></div>
+<p>State is per call site, subject, and window kind, so a single rule on <code>MARKET.*</code> builds independent bars for every symbol, and a tick bar plus a time bar on the same subject keep distinct slots. The op returns <code>nil</code>, so it slots into a <code>do</code> block or stands alone as the rule body without polluting a threaded pipeline. In-progress bars survive a snapshot reload.</p>
+<p>For tick bars, the close happens inline on the Nth sample. For time bars, the close happens either on the next sample that crosses the boundary, or on the slot's exact deadline timer if no further samples arrive.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; 60-tick OHLC bars per symbol on a market feed.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
+  (<span class="tok-op">bar!</span> <span class="tok-num">60</span> payload-float))
+
+<span class="tok-com">; 1-minute aligned OHLC bars on the same feed. Bars cover wall-clock</span>
+<span class="tok-com">; minutes (00:00..00:01, 00:01..00:02, ...) regardless of how many</span>
+<span class="tok-com">; ticks land in each.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
+  (<span class="tok-op">bar!</span> <span class="tok-kw">:ms</span> <span class="tok-num">60000</span> payload-float))</code></pre></figure>
+<p>A subscriber to <code>MARKET.AAPL.bar.&gt;</code> then sees a clean burst of four messages per closed bar, in <code>open / high / low / close</code> order, with no intermediate per-tick noise.</p>
+<p><code>bar!</code> is fixed-size per stream, but the stream cardinality is yours to budget. Each distinct subject seen by the bar rule gets a long-lived state slot keyed by call site, subject, and window kind; closing a bar resets the in-progress values but does not remove that slot. A raw trade feed shaped like <code>T.&lt;MARKET&gt;.&lt;SYM&gt;</code> or a demuxed price stream shaped like <code>T.&lt;MARKET&gt;.&lt;SYM&gt;.p</code> across thousands of symbols and tens of markets can therefore retain tens or hundreds of thousands of bar slots. Narrow the filter when you can, avoid unnecessary subject-token expansion, and measure the shape you plan to run. The <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-massive/bar-cardinality.edn" target="_blank" rel="noopener noreferrer"><code>json-massive</code> cardinality probe</a> and <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-massive/measure-bar-cardinality.sh" target="_blank" rel="noopener noreferrer"><code>measure-bar-cardinality.sh</code></a> give a repeatable RSS check for this case.</p>
+<p>If another rule in the same patchbay should consume those derived bar subjects, mark the bar-building rule <code>:reentrant true</code>. The emitted subjects have two extra tokens (<code>MARKET.AAPL.bar.close</code>), so they do not match the original <code>MARKET.*</code> filter and will not feed back into the bar builder.</p>
+<p>Volume isn't reported. For tick bars it's always exactly N; for time bars, pair the rule with <code>(count!)</code> if you want the per-bar tick count.</p>
+<h2 id="running-counters">Running counters<a class="anchor" href="#running-counters" aria-label="Link to this section">#</a></h2>
+<p><code>(count!)</code> is a side-effecting running counter, per call site and subject. Each call increments and publishes the new total to <code>&lt;subject&gt;.count</code>. Returns nil so it threads or sits in a <code>do</code> block without disturbing the value being passed through.</p>
+<p>With one optional argument, <code>(count! COND)</code> only increments when <code>COND</code> is truthy (any value type, same rules as <code>if</code> / <code>when</code>). The predicate itself is fully general, so it composes with everything the dialect already has (<code>contains?</code>, comparisons, <code>changed?</code>, <code>rising-edge</code>, ...). Use <code>(count! :subject SUBJECT)</code> or <code>(count! :subject SUBJECT COND)</code> to publish the counter somewhere other than <code>&lt;subject&gt;.count</code>. The counter identity remains per source call site and subject; the option only changes the output subject.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Total tick count per symbol, live on MARKET.AAPL.count etc.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
+  (<span class="tok-op">count!</span>))
+
+<span class="tok-com">; Error-event counter per service.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"events.&gt;"</span>
+  (<span class="tok-op">count!</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"ERROR"</span>)))
+
+<span class="tok-com">; Threshold breaches.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.&gt;"</span>
+  (<span class="tok-op">count!</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">100</span>)))
+
+<span class="tok-com">; Publish edge counts to a fixed rollup subject instead of per-source .count.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.&gt;"</span>
+  (<span class="tok-op">count!</span> <span class="tok-kw">:subject</span> <span class="tok-str">"metrics.sensor.hot_edges"</span>
+          (<span class="tok-op">rising-edge</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">100</span>))))</code></pre></figure>
+<p>State is a single number, snapshot-persisted, so a restart resumes from the last seen total instead of zero. Subscribe to <code>&lt;subject&gt;.count</code> (or <code>$LVC.&lt;subject&gt;.count</code> for the latest value) to watch a counter live.</p>
+<h2 id="last-values">Last values<a class="anchor" href="#last-values" aria-label="Link to this section">#</a></h2>
+<p><code>(last SUBJECT)</code> returns the latest payload published on SUBJECT as a string, or nil when there is none. It reads the same cache that <code>$LVC.SUBJECT</code> serves, so SUBJECT must be a literal subject that matches a top-level <code>(lvc ...)</code> filter. Without <code>(lvc ...)</code>, or with <code>--no-lvc</code>, it is always nil. A wildcard, empty, or malformed subject is an error, and an empty stored payload returns <code>""</code>, not nil.</p>
+<p>A client publish reaches the cache before its rules run, so <code>(last subject)</code> inside a rule equals the current payload. A rule's own <code>publish!</code> updates the cache too.</p>
+<p>nil is not a number: arithmetic and comparison on it are type errors. The idiomatic nil-safe shape is a thread, which stops when a step yields nil:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">lvc</span> [<span class="tok-str">"temp.&gt;"</span>])
+
+(<span class="tok-op">on</span> <span class="tok-str">"temp.inside"</span>
+  (<span class="tok-op">-&gt;</span> (<span class="tok-op">last</span> <span class="tok-str">"temp.outside"</span>)
+      (<span class="tok-op">-</span> payload-float)
+      (<span class="tok-op">publish!</span> <span class="tok-str">"temp.difference"</span> <span class="tok-kw">:dp</span> <span class="tok-num">1</span>)))</code></pre></figure>
+<p>Threading puts the <code>last</code> value in the final argument, so this publishes <code>payload - outside</code>. Until <code>temp.outside</code> has been seen, the thread ends at the nil and nothing is published. The unthreaded form needs a guard: <code>(and (last "temp.outside") (&gt; (last "temp.outside") 30))</code>.</p>
+<p><code>last</code> returns a string. Arithmetic and comparison coerce numeric strings, but <code>:dp N</code> formats only numbers, so <code>(reply! :dp 1 (last "x"))</code> is a type error when it runs (<code>--validate</code> cannot see it, because <code>last</code> is nil there). Pass the value through arithmetic first, for example <code>(round 3 (last "x"))</code>, or leave <code>:dp</code> off and reply with the string as stored.</p>
+<p><code>--validate</code> checks arity and subject validity only. <code>--soundcheck</code> keeps its own last-value table that honours the file's <code>(lvc ...)</code> filters, updated from each input row and each emitted row.</p>
+<h2 id="request-reply">Request-reply<a class="anchor" href="#request-reply" aria-label="Link to this section">#</a></h2>
+<p>A NATS request carries a reply subject. Patchbay exposes it as the bound symbol <code>reply-to</code> (a string, or nil when the message had none), and <code>reply!</code> publishes to it:</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>effect</th></tr></thead><tbody><tr><td><code>(reply! VALUE)</code></td><td><code>publish!</code> VALUE to the reply subject</td></tr><tr><td><code>(reply! :dp N VALUE)</code></td><td>same, formatting a numeric VALUE with N decimal places</td></tr></tbody></table></div>
+<p><code>reply!</code> is a silent no-op (counted as suppressed) when there is no reply subject or VALUE is nil, and it applies the same subject checks as <code>publish!</code>. It threads like <code>publish!</code>: <code>(-&gt; (last "temp.kitchen") (reply!))</code> and <code>(-&gt; x (reply! :dp 1))</code> both work.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">lvc</span> [<span class="tok-str">"temp.&gt;"</span>])
+
+<span class="tok-com">; nats req q.temp "" answers with the latest kitchen temperature.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"q.temp"</span>
+  (<span class="tok-op">reply!</span> (<span class="tok-op">last</span> <span class="tok-str">"temp.kitchen"</span>)))</code></pre></figure>
+<p><code>reply-to</code> is nil for imported messages, clock ticks, <code>every</code> bodies, and re-entered evaluations, and it is always nil under <code>--soundcheck</code>, so a request-reply rule can be validated but is checked end to end with a real client:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>nats req q.temp <span class="tok-str">""</span></code></pre></figure>
+<h2 id="debug-printing">Debug printing<a class="anchor" href="#debug-printing" aria-label="Link to this section">#</a></h2>
+<p><code>(print! X)</code> and <code>(print! LABEL X)</code> are debug aids: they write a single line to stderr and return <code>X</code> unchanged, so they sit cleanly inside a threading chain without changing semantics.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; See the value at each stage of a pipeline.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">print!</span> <span class="tok-str">"raw"</span>)
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">print!</span> <span class="tok-str">"rounded"</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))</code></pre></figure>
+<p>Output:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>print! [sensors.kitchen] raw = 21.4378
+print! [sensors.kitchen] rounded = 21.4</code></pre></figure>
+<p><code>print!</code> is not a publish (it doesn't bump <code>$STATS.rules.&lt;i&gt;.emitted</code>) and is not gated by <code>--trace</code>. The loader counts every <code>print!</code> it sees and the server logs a single warning at startup, so a left-in <code>print!</code> is visible in the boot log:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>warning: patchbay contains 2 print! call(s) across 1 rule(s); will log
+payload data to stderr and add per-call overhead (debug aid, do not
+leave in production)</code></pre></figure>
+<p>Use it while you're debugging, take it out when you ship.</p>
+<h2 id="forms-that-are-not-there">Forms that are not there<a class="anchor" href="#forms-that-are-not-there" aria-label="Link to this section">#</a></h2>
+<p>Patchbay is deliberately small. There is no quote form, no macros, no user-defined functions and no lists-as-data: lists are calls, vectors are data. An unknown form or symbol is a load error, reported by <code>--validate</code> in every branch, so a typo cannot silently become text.</p>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="patchbay.html"><small>Previous</small>Patchbay guide</a><a class="next" href="examples.html"><small>Next</small>Start here</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Patchbay guide | monoblok docs</title>
+<meta name="description" content="The patchbay rule language: rule shape, threading, state, re-entry, file formats and debugging.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Patchbay guide</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html" aria-current="page">Patchbay guide</a><ul class="toc"><li><a href="#a-first-rule">A first rule</a></li><li><a href="#s-expression-syntax-in-30-seconds">S-expression syntax in 30 seconds</a></li><li><a href="#the-shape-of-a-patchbay-file">The shape of a patchbay file</a></li><li><a href="#pipelines">Pipelines</a></li><li><a href="#state">State</a></li><li><a href="#rules-feeding-rules">Rules feeding rules</a></li><li><a href="#file-formats">File formats</a></li><li><a href="#validate-and-debug-rules">Validate and debug rules</a></li><li><a href="#coding-assistants">Coding assistants</a></li></ul></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Patchbay</p>
+<h1>Patchbay guide</h1>
+<p class="lede">patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and tinyblok on microcontrollers.</p>
+<p>This page explains how the language fits together. For what each operator does, see the <a href="forms.html">forms reference</a>; for complete files, see the <a href="examples.html">examples</a>.</p>
+<h2 id="a-first-rule">A first rule<a class="anchor" href="#a-first-rule" aria-label="Link to this section">#</a></h2>
+<p>Rules are top-level <code>(on SUBJECT-FILTER BODY)</code> forms. The body is evaluated whenever an incoming subject matches the filter. Wildcards are NATS-style: <code>*</code> matches one token, <code>&gt;</code> matches the tail.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&gt;</span> payload-float <span class="tok-num">30.0</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"high"</span>) payload)))
+
+<span class="tok-com">; Round to 1dp, drop duplicates, emit on the .stable sub-subject.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))</code></pre></figure>
+<p>The first rule copies any reading above 30 to <code>sensors.&lt;name&gt;.high</code>. The second rounds to one decimal place, drops the value if it has not changed, and republishes to <code>sensors.&lt;name&gt;.stable</code>. Both rules see every <code>sensors.*</code> message; rules do not consume messages or stop each other.</p>
+<p>The vocabulary is borrowed from electronics (<code>squelch</code> suppresses until the value changes, <code>deadband</code> ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.</p>
+<h2 id="s-expression-syntax-in-30-seconds">S-expression syntax in 30 seconds<a class="anchor" href="#s-expression-syntax-in-30-seconds" aria-label="Link to this section">#</a></h2>
+<p>If the parens look alien: every list <code>(head arg1 arg2 ...)</code> is a call where <code>head</code> is the operator and the rest are its arguments. No commas, no infix, no precedence to memorise; <code>(+ 1 2 3)</code> is <code>1 + 2 + 3</code> and <code>(&gt; x 10)</code> is <code>x &gt; 10</code>. Nesting is just a list inside a list: <code>(publish! (subject-append "high") payload)</code> calls <code>publish!</code> with two args, the first of which is itself the result of calling <code>subject-append</code>. Strings are double-quoted, numbers bare, and everything else (<code>subject</code>, <code>payload</code>, <code>when</code>, <code>+</code>) is a symbol resolved by the evaluator.</p>
+<p>That's the whole grammar. The rest of this doc is just which operators exist and what they do.</p>
+<h3 id="json-patchbay-files">JSON patchbay files<a class="anchor" href="#json-patchbay-files" aria-label="Link to this section">#</a></h3>
+<p>EDN is the canonical notation for hand-written patchbays. Files ending in <code>.json</code> are also accepted, but treat that as a compatibility layer: useful for generated patchbays, web UIs, config systems, and users who need JSON as an affordance. If you're editing rules directly, consider embracing the S-expression form. It is terser, supports comments, and keeps symbols distinct from strings without escape hatches. VS Code's <a href="https://calva.io/" target="_blank" rel="noopener noreferrer">Calva</a> gives good Clojure/EDN highlighting, bracket matching, paren coloring, and Parinfer-style editing. In Emacs, <code>clojure-mode</code>/CIDER works well; <code>clojure-ts-mode</code> is the newer tree-sitter option. Parinfer, paredit, and smartparens are all good ways to make S-expressions feel less manual.</p>
+<p>JSON is read into the same patchbay AST, not a separate DSL: arrays are forms and the first array item is always the operator symbol. In argument positions, plain objects become keyword options, and strings with a leading <code>$</code> (<code>"$subject"</code>, <code>"$payload"</code>, <code>"$payload-float"</code>, <code>"$payload-int"</code>, <code>"$payload-bool"</code>, <code>"$replaying?"</code>, <code>"$reply-to"</code>) become bound symbols in rule expressions. An unknown <code>"$name"</code> is a load error.</p>
+<figure class="code"><figcaption><span>JSON</span></figcaption><pre><code>[
+  [<span class="tok-str">"on"</span>, <span class="tok-str">"sensors.*"</span>,
+    [<span class="tok-str">"-&gt;"</span>, <span class="tok-str">"$payload-float"</span>, [<span class="tok-str">"round"</span>, <span class="tok-num">1</span>], [<span class="tok-str">"squelch"</span>], [<span class="tok-str">"publish!"</span>, [<span class="tok-str">"subject-append"</span>, <span class="tok-str">"stable"</span>]]]],
+
+  [<span class="tok-str">"on"</span>, <span class="tok-str">"market.*"</span>, {<span class="tok-str">"reentrant"</span>: true},
+    [<span class="tok-str">"bar!"</span>, <span class="tok-num">60</span>, <span class="tok-str">"$payload-float"</span>]],
+
+  [<span class="tok-str">"every"</span>, {<span class="tok-str">"ms"</span>: <span class="tok-num">1000</span>}, [<span class="tok-str">"publish!"</span>, <span class="tok-str">"tick"</span>, <span class="tok-str">"alive"</span>]],
+
+  [<span class="tok-str">"export"</span>, {
+    <span class="tok-str">"servers"</span>: [<span class="tok-str">"nats://127.0.0.1:4223"</span>],
+    <span class="tok-str">"export"</span>: [<span class="tok-str">"sensors.*.stable"</span>]
+  }]
+]</code></pre></figure>
+<p>Other strings in argument positions are string literals, so a plain <code>"payload"</code> is just the text <code>payload</code>, with no error. That is the one migration hazard from the older JSON spelling, where bare <code>"payload"</code> was the bound value: an old file still loads, and silently publishes the word instead of the payload. Search old JSON patchbays for bare <code>"subject"</code>, <code>"payload"</code>, <code>"payload-float"</code>, <code>"payload-int"</code>, and <code>"replaying?"</code> and add the <code>$</code>. Use <code>{"str":"$payload"}</code> if you really need the literal text <code>$payload</code> in a rule body, <code>{"kw":"ms"}</code> for a standalone keyword, and <code>{"vector":[...]}</code> when a rule body needs a literal vector (the old <code>{"vec":[...]}</code> key is a load error). See <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.json" target="_blank" rel="noopener noreferrer"><code>examples/demo.json</code></a> for a fuller conversion of <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.edn" target="_blank" rel="noopener noreferrer"><code>examples/demo.edn</code></a>.</p>
+<h3 id="yaml-sugar-files">YAML sugar files<a class="anchor" href="#yaml-sugar-files" aria-label="Link to this section">#</a></h3>
+<p>Files ending in <code>.yml</code> or <code>.yaml</code> use a deliberately small patchbay YAML subset. It is also lowered directly into the same patchbay AST: YAML never evaluates and no EDN/JSON text is generated internally. Supported shapes are block maps/lists, flow arrays for call forms, quoted or unquoted scalars, numbers, booleans, nulls, top-level <code>on</code>, <code>every</code>, <code>lvc</code>, <code>export</code>, <code>bridge</code>, and <code>import</code>. In top-level config string positions, <code>env: "NAME"</code> lowers to <code>(env "NAME")</code>. Every file is also valid standard YAML.</p>
+<figure class="code"><figcaption><span>YAML</span></figcaption><pre><code><span class="tok-key">on:</span>
+<span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.rpm"</span>
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload-float</span>
+      - [quantize, <span class="tok-num">50</span>]
+      - [squelch]
+      - [publish!, [subject-append, <span class="tok-str">"stable"</span>], dp, <span class="tok-num">1</span>]</code></pre></figure>
+<p>That lowers to the same AST as:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"car.*.rpm"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">quantize</span> <span class="tok-num">50</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>) <span class="tok-kw">:dp</span> <span class="tok-num">1</span>)))</code></pre></figure>
+<p>Within expression arrays, the first item is a form symbol. A <code>$name</code> (<code>$payload</code>, <code>$payload-float</code>, <code>$payload-int</code>, <code>$payload-bool</code>, <code>$subject</code>, <code>$replaying</code>, <code>$reply-to</code>) lowers to the bound symbol, and a bare option word (<code>ms</code>, <code>dp</code>, <code>subject</code>, ...) lowers to the keyword (<code>:ms</code>, <code>:dp</code>). Every other string in a rule body must be quoted; an unquoted word that is not a number, boolean, null, binding or option is a load error, so a typo cannot silently become text. Operators made of punctuation (<code>&gt;</code>, <code>*</code>, <code>-&gt;</code>) must be quoted too, as in <code>["&gt;", $payload-float, 80]</code>. <code>when: EXPR</code> is a rule-level guard beside one body key, and <code>[vector, 1, 2, 3]</code> is a literal vector. See <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/rental-car.yml" target="_blank" rel="noopener noreferrer"><code>examples/rental-car.yml</code></a> for the fuller shape and <a href="https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay-yaml-schema.md" target="_blank" rel="noopener noreferrer"><code>patchbay-yaml-schema.md</code></a> for the YAML shape reference.</p>
+<h3 id="edn-is-the-notation-the-patchbay-is-the-evaluator">EDN is the notation; the patchbay is the evaluator<a class="anchor" href="#edn-is-the-notation-the-patchbay-is-the-evaluator" aria-label="Link to this section">#</a></h3>
+<p>Patchbay files are valid EDN, which is why <code>.edn</code> editor tooling (syntax highlighting, paren-matching, structural editing) works out of the box. EDN itself is a data notation: it parses lists <code>(...)</code>, vectors <code>[...]</code>, strings, numbers, keywords, and so on, and stops there. It does not say what any of those mean. The patchbay is the piece that gives some of those forms call semantics, and only in some places.</p>
+<p>If you've used Clojure, this is the part where the muscle memory diverges. Clojure's rule is "every <code>(...)</code> is a call unless I <code>'</code>-quote it." Patchbay has no quote form and doesn't need one, because whether a list dispatches as a call is decided by <em>where it appears</em>, not by a sigil:</p>
+<ul><li>Inside an <code>(on FILTER BODY)</code> or <code>(every :ms N BODY)</code> body, every list dispatches on its head symbol (<code>hold-off</code>, <code>publish!</code>, <code>+</code>, etc.). Unknown heads and unknown symbols are rejected at load and by <code>--validate</code>, in every branch, not just the one a test message happens to take.</li><li>Inside top-level config forms, sequences are data. In <code>(lvc ...)</code>, a single vector is read as the filter set. Inside <code>(export ...)</code>, deprecated <code>(bridge ...)</code>, and <code>(import ...)</code>, after a keyword like <code>:servers</code>, <code>:export</code>, or <code>:subject</code>, a list is read as a literal sequence of values. <code>(:servers ("nats://a:4222" "nats://b:4222") ...)</code> is a two-element list of strings, not a call to <code>nats://a:4222</code>. Same parser, different consumer. The one special list in config string positions is <code>(env "NAME")</code>, which reads an environment variable at patchbay load time.</li></ul>
+<p>For unambiguous data-as-data inside a rule body, write a vector with square brackets: <code>[1 2 3]</code>, <code>["red" "green" "blue"]</code>. Vectors self-evaluate (each element is evaluated, the result is returned as a vector), they never dispatch on a head, and they're what <code>contains?</code> checks for membership against. Config readers (<code>export</code>, deprecated <code>bridge</code>, <code>import</code>) accept either <code>(...)</code> or <code>[...]</code> for keyword-tagged collections; vectors read more naturally and are the recommended form.</p>
+<h2 id="the-shape-of-a-patchbay-file">The shape of a patchbay file<a class="anchor" href="#the-shape-of-a-patchbay-file" aria-label="Link to this section">#</a></h2>
+<p>A file is a list of top-level forms. Rules sit beside a handful of config forms:</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>role</th></tr></thead><tbody><tr><td><code>(on FILTER BODY)</code></td><td>a rule: run BODY for each message whose subject matches FILTER</td></tr><tr><td><code>(every :ms N BODY...)</code></td><td>a timer rule: run BODY every N milliseconds</td></tr><tr><td><code>(lvc [FILTER ...])</code></td><td>opt subjects into the <a href="state.html">last-value cache</a></td></tr><tr><td><code>(export ...)</code></td><td>forward matching publishes to a real NATS cluster (<a href="bridge.html#export">export</a>)</td></tr><tr><td><code>(import ...)</code></td><td>feed remote NATS or JetStream messages into the rules (<a href="bridge.html#import">import</a>)</td></tr></tbody></table></div>
+<p>Inside a rule body a handful of <strong>bound symbols</strong> stand for the current message: <code>subject</code>, <code>payload</code>, <code>payload-float</code>, <code>payload-int</code>, <code>payload-bool</code>, <code>reply-to</code> and <code>replaying?</code>. The <a href="forms.html#bound-symbols">reference</a> lists each one.</p>
+<p>Forms fall into a few families, and most rules are a short chain drawn from them:</p>
+<div class="table-wrap"><table><thead><tr><th>family</th><th>examples</th><th>what they do</th></tr></thead><tbody><tr><td>pure transforms</td><td><code>round</code>, <code>quantize</code>, <code>clamp</code>, <code>abs</code>, arithmetic</td><td>reshape a number</td></tr><tr><td>gates</td><td><code>squelch</code>, <code>deadband</code>, <code>hold-off</code>, <code>throttle</code></td><td>pass a value or suppress it (return nil)</td></tr><tr><td>edges</td><td><code>rising-edge</code>, <code>falling-edge</code>, <code>transition</code>, <code>hysteresis</code></td><td>fire once when a condition flips</td></tr><tr><td>windows</td><td><code>moving-avg</code>, <code>percentile</code>, <code>stddev</code>, <code>rate</code>, <code>ewma</code></td><td>summarise the last N samples or the last N ms</td></tr><tr><td>clock forms</td><td><code>on-silence</code>, <code>dropout</code>, <code>debounce!</code>, <code>sample!</code>, <code>aggregate!</code>, <code>every</code></td><td>act when time passes, not only when a message arrives</td></tr><tr><td>JSON</td><td><code>json-get</code>, <code>json-demux!</code></td><td>read fields out of JSON payloads</td></tr><tr><td>effects</td><td><code>publish!</code>, <code>reply!</code>, <code>count!</code>, <code>bar!</code>, <code>print!</code></td><td>put bytes on the wire (the <code>!</code> forms)</td></tr></tbody></table></div>
+<p>Scan a rule and the bangs are the lines that publish; everything else is pure or value-returning.</p>
+<h2 id="pipelines">Pipelines<a class="anchor" href="#pipelines" aria-label="Link to this section">#</a></h2>
+<p>Most rules read top to bottom as a pipeline, written with <code>-&gt;</code>. Each step receives the previous value as its <strong>last</strong> argument:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">-&gt;</span> payload-float
+    (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+    (<span class="tok-op">squelch</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>)))</code></pre></figure>
+<p>Gates return their input on pass and <code>nil</code> on suppress, and <code>publish!</code> is a no-op on nil, so a chain of gates stops by itself. You do not need <code>when</code> anywhere in a threaded pipeline. <a href="forms.html#threading-with">Threading with -&gt;</a> has the full expansion rules.</p>
+<h2 id="state">State<a class="anchor" href="#state" aria-label="Link to this section">#</a></h2>
+<p>Stateful forms (gates, windows, counters, bars) remember things between messages. The rules for that memory are short:</p>
+<ul><li><strong>State is per call site and subject.</strong> Each place a stateful form appears in a rule body gets its own state, so two <code>(squelch ...)</code> calls in one rule never share a slot. A rule on <code>sensors.*</code> keeps one slot for every concrete subject it has seen.</li><li><strong>The first message on a new subject passes gates.</strong> There is no prior value to compare against, so <code>squelch</code> and <code>deadband</code> emit; edge forms such as <code>rising-edge</code> stay quiet because no edge has happened yet.</li><li><strong>There is no shared state across subjects.</strong> To combine subjects, publish them onto one subject and keep the state there. That is the <a href="forms.html#funnel">funnel</a> pattern.</li><li><strong>State survives restarts</strong> when <a href="state.html#snapshots">snapshots</a> are enabled.</li></ul>
+<p>Because every distinct subject gets a slot, avoid unbounded subject tokens such as timestamps, user IDs, or raw device-generated strings unless you intend to create state for each one.</p>
+<h2 id="rules-feeding-rules">Rules feeding rules<a class="anchor" href="#rules-feeding-rules" aria-label="Link to this section">#</a></h2>
+<p>By default, a publish from inside a rule is delivered to subscribers and the LVC, but is not matched against other rules. One inbound message produces one round of rule evaluation.</p>
+<p>Mark a rule <code>:reentrant true</code> and its emissions are matched against the other rules too. That is how staged pipelines are built: one rule demuxes a JSON frame into scalar subjects, and later rules condition each scalar.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"devices.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"temp"</span> <span class="tok-str">"hum"</span> payload))
+
+(<span class="tok-op">on</span> <span class="tok-str">"devices.*.temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">0</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))</code></pre></figure>
+<p>A rule that emits a subject which matches itself is a feedback loop: howl, except in subject-space. Re-entry is capped at depth 8, long enough for any reasonable staged pipeline (demux, condition, mirror, alert is 3 or 4) and short enough that a misconfigured rule terminates, with a warning, almost immediately. See <a href="forms.html#re-entry">Re-entry</a>.</p>
+<h2 id="file-formats">File formats<a class="anchor" href="#file-formats" aria-label="Link to this section">#</a></h2>
+<p>EDN is canonical for hand-written patchbays. <code>.json</code> files are accepted for tooling compatibility, and <code>.yml</code> / <code>.yaml</code> files use a small YAML sugar layer. All three load into the same AST, so the choice is about who edits the file.</p>
+<p>The same rule three ways:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"car.*.rpm"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">quantize</span> <span class="tok-num">50</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>) <span class="tok-kw">:dp</span> <span class="tok-num">1</span>)))</code></pre></figure>
+<figure class="code"><figcaption><span>YAML</span></figcaption><pre><code><span class="tok-key">on:</span>
+<span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.rpm"</span>
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload-float</span>
+      - [quantize, <span class="tok-num">50</span>]
+      - [squelch]
+      - [publish!, [subject-append, <span class="tok-str">"stable"</span>], dp, <span class="tok-num">1</span>]</code></pre></figure>
+<figure class="code"><figcaption><span>JSON</span></figcaption><pre><code>[
+  [<span class="tok-str">"on"</span>, <span class="tok-str">"car.*.rpm"</span>,
+    [<span class="tok-str">"-&gt;"</span>, <span class="tok-str">"$payload-float"</span>, [<span class="tok-str">"quantize"</span>, <span class="tok-num">50</span>], [<span class="tok-str">"squelch"</span>],
+      [<span class="tok-str">"publish!"</span>, [<span class="tok-str">"subject-append"</span>, <span class="tok-str">"stable"</span>], {<span class="tok-str">"dp"</span>: <span class="tok-num">1</span>}]]]
+]</code></pre></figure>
+<h3 id="side-by-side">Side by side<a class="anchor" href="#side-by-side" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table><thead><tr><th>EDN</th><th>JSON</th><th>YAML</th></tr></thead><tbody><tr><td><code>(lvc ["demo.&gt;"])</code></td><td><code>["lvc", "demo.&gt;"]</code></td><td><code>lvc: ["demo.&gt;"]</code></td></tr><tr><td><code>(on "sensors.*" (publish! "out" payload))</code></td><td><code>["on", "sensors.*", ["publish!", "out", "$payload"]]</code></td><td><code>- sub: "sensors.*"</code> with <code>form: [publish!, "out", $payload]</code></td></tr><tr><td><code>(moving-avg :ms 5000 payload-float)</code></td><td><code>["moving-avg", {"ms":5000}, "$payload-float"]</code></td><td><code>[moving-avg, ms, 5000, $payload-float]</code></td></tr><tr><td><code>(on "MARKET.*" :reentrant true (bar! 60 payload-float))</code></td><td><code>["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "$payload-float"]]</code></td><td><code>sub: "MARKET.*"</code>, <code>reentrant: true</code>, <code>form: [bar!, 60, $payload-float]</code></td></tr><tr><td><code>(when (&gt; payload-float 80) ...)</code></td><td><code>["when", ["&gt;", "$payload-float", 80], ...]</code></td><td><code>when: ["&gt;", $payload-float, 80]</code> beside the body key</td></tr><tr><td><code>[1 2 3]</code></td><td><code>{"vector": [1, 2, 3]}</code></td><td><code>[vector, 1, 2, 3]</code></td></tr><tr><td><code>(every :ms 1000 (publish! "tick" "alive"))</code></td><td><code>["every", {"ms":1000}, ["publish!", "tick", "alive"]]</code></td><td><code>every:</code> list, item <code>ms: 1000</code> and <code>form: [publish!, "tick", "alive"]</code></td></tr><tr><td><code>(export :servers ["nats://127.0.0.1:4223"] :export ["demo.&gt;"])</code></td><td><code>["export", {"servers":["nats://127.0.0.1:4223"], "export":["demo.&gt;"]}]</code></td><td><code>export:</code> map with <code>servers:</code> and <code>export:</code></td></tr><tr><td><code>(import :servers ["nats://127.0.0.1:4223"] :subject ["raw.&gt;"])</code></td><td><code>["import", {"servers":["nats://127.0.0.1:4223"], "subject":["raw.&gt;"]}]</code></td><td><code>import:</code> map with <code>servers:</code> and <code>subject:</code></td></tr></tbody></table></div>
+<h3 id="yaml-sugar-files-2">YAML sugar files<a class="anchor" href="#yaml-sugar-files-2" aria-label="Link to this section">#</a></h3>
+<p>Files ending in <code>.yml</code> or <code>.yaml</code> use a deliberately small patchbay YAML subset. It is also lowered directly into the same patchbay AST: YAML never evaluates and no EDN/JSON text is generated internally. Supported shapes are block maps/lists, flow arrays for call forms, quoted or unquoted scalars, numbers, booleans, nulls, top-level <code>on</code>, <code>every</code>, <code>lvc</code>, <code>export</code>, <code>bridge</code>, and <code>import</code>. In top-level config string positions, <code>env: "NAME"</code> lowers to <code>(env "NAME")</code>. Every file is also valid standard YAML.</p>
+<figure class="code"><figcaption><span>YAML</span></figcaption><pre><code><span class="tok-key">on:</span>
+<span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.rpm"</span>
+<span class="tok-key">    thread:</span>
+      - <span class="tok-bind">$payload-float</span>
+      - [quantize, <span class="tok-num">50</span>]
+      - [squelch]
+      - [publish!, [subject-append, <span class="tok-str">"stable"</span>], dp, <span class="tok-num">1</span>]</code></pre></figure>
+<p>That lowers to the same AST as:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"car.*.rpm"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">quantize</span> <span class="tok-num">50</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>) <span class="tok-kw">:dp</span> <span class="tok-num">1</span>)))</code></pre></figure>
+<p>Within expression arrays, the first item is a form symbol. A <code>$name</code> (<code>$payload</code>, <code>$payload-float</code>, <code>$payload-int</code>, <code>$payload-bool</code>, <code>$subject</code>, <code>$replaying</code>, <code>$reply-to</code>) lowers to the bound symbol, and a bare option word (<code>ms</code>, <code>dp</code>, <code>subject</code>, ...) lowers to the keyword (<code>:ms</code>, <code>:dp</code>). Every other string in a rule body must be quoted; an unquoted word that is not a number, boolean, null, binding or option is a load error, so a typo cannot silently become text. Operators made of punctuation (<code>&gt;</code>, <code>*</code>, <code>-&gt;</code>) must be quoted too, as in <code>["&gt;", $payload-float, 80]</code>. <code>when: EXPR</code> is a rule-level guard beside one body key, and <code>[vector, 1, 2, 3]</code> is a literal vector. See <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/rental-car.yml" target="_blank" rel="noopener noreferrer"><code>examples/rental-car.yml</code></a> for the fuller shape and <a href="https://github.com/lexvicacom/monoblok/blob/main/docs/patchbay-yaml-schema.md" target="_blank" rel="noopener noreferrer"><code>patchbay-yaml-schema.md</code></a> for the YAML shape reference.</p>
+<h3 id="json-patchbay-files-2">JSON patchbay files<a class="anchor" href="#json-patchbay-files-2" aria-label="Link to this section">#</a></h3>
+<p>EDN is the canonical notation for hand-written patchbays. Files ending in <code>.json</code> are also accepted, but treat that as a compatibility layer: useful for generated patchbays, web UIs, config systems, and users who need JSON as an affordance. If you're editing rules directly, consider embracing the S-expression form. It is terser, supports comments, and keeps symbols distinct from strings without escape hatches. VS Code's <a href="https://calva.io/" target="_blank" rel="noopener noreferrer">Calva</a> gives good Clojure/EDN highlighting, bracket matching, paren coloring, and Parinfer-style editing. In Emacs, <code>clojure-mode</code>/CIDER works well; <code>clojure-ts-mode</code> is the newer tree-sitter option. Parinfer, paredit, and smartparens are all good ways to make S-expressions feel less manual.</p>
+<p>JSON is read into the same patchbay AST, not a separate DSL: arrays are forms and the first array item is always the operator symbol. In argument positions, plain objects become keyword options, and strings with a leading <code>$</code> (<code>"$subject"</code>, <code>"$payload"</code>, <code>"$payload-float"</code>, <code>"$payload-int"</code>, <code>"$payload-bool"</code>, <code>"$replaying?"</code>, <code>"$reply-to"</code>) become bound symbols in rule expressions. An unknown <code>"$name"</code> is a load error.</p>
+<figure class="code"><figcaption><span>JSON</span></figcaption><pre><code>[
+  [<span class="tok-str">"on"</span>, <span class="tok-str">"sensors.*"</span>,
+    [<span class="tok-str">"-&gt;"</span>, <span class="tok-str">"$payload-float"</span>, [<span class="tok-str">"round"</span>, <span class="tok-num">1</span>], [<span class="tok-str">"squelch"</span>], [<span class="tok-str">"publish!"</span>, [<span class="tok-str">"subject-append"</span>, <span class="tok-str">"stable"</span>]]]],
+
+  [<span class="tok-str">"on"</span>, <span class="tok-str">"market.*"</span>, {<span class="tok-str">"reentrant"</span>: true},
+    [<span class="tok-str">"bar!"</span>, <span class="tok-num">60</span>, <span class="tok-str">"$payload-float"</span>]],
+
+  [<span class="tok-str">"every"</span>, {<span class="tok-str">"ms"</span>: <span class="tok-num">1000</span>}, [<span class="tok-str">"publish!"</span>, <span class="tok-str">"tick"</span>, <span class="tok-str">"alive"</span>]],
+
+  [<span class="tok-str">"export"</span>, {
+    <span class="tok-str">"servers"</span>: [<span class="tok-str">"nats://127.0.0.1:4223"</span>],
+    <span class="tok-str">"export"</span>: [<span class="tok-str">"sensors.*.stable"</span>]
+  }]
+]</code></pre></figure>
+<p>Other strings in argument positions are string literals, so a plain <code>"payload"</code> is just the text <code>payload</code>, with no error. That is the one migration hazard from the older JSON spelling, where bare <code>"payload"</code> was the bound value: an old file still loads, and silently publishes the word instead of the payload. Search old JSON patchbays for bare <code>"subject"</code>, <code>"payload"</code>, <code>"payload-float"</code>, <code>"payload-int"</code>, and <code>"replaying?"</code> and add the <code>$</code>. Use <code>{"str":"$payload"}</code> if you really need the literal text <code>$payload</code> in a rule body, <code>{"kw":"ms"}</code> for a standalone keyword, and <code>{"vector":[...]}</code> when a rule body needs a literal vector (the old <code>{"vec":[...]}</code> key is a load error). See <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.json" target="_blank" rel="noopener noreferrer"><code>examples/demo.json</code></a> for a fuller conversion of <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.edn" target="_blank" rel="noopener noreferrer"><code>examples/demo.edn</code></a>.</p>
+<h3 id="edn-is-the-notation-the-patchbay-is-the-evaluator-2">EDN is the notation; the patchbay is the evaluator<a class="anchor" href="#edn-is-the-notation-the-patchbay-is-the-evaluator-2" aria-label="Link to this section">#</a></h3>
+<p>Patchbay files are valid EDN, which is why <code>.edn</code> editor tooling (syntax highlighting, paren-matching, structural editing) works out of the box. EDN itself is a data notation: it parses lists <code>(...)</code>, vectors <code>[...]</code>, strings, numbers, keywords, and so on, and stops there. It does not say what any of those mean. The patchbay is the piece that gives some of those forms call semantics, and only in some places.</p>
+<p>If you've used Clojure, this is the part where the muscle memory diverges. Clojure's rule is "every <code>(...)</code> is a call unless I <code>'</code>-quote it." Patchbay has no quote form and doesn't need one, because whether a list dispatches as a call is decided by <em>where it appears</em>, not by a sigil:</p>
+<ul><li>Inside an <code>(on FILTER BODY)</code> or <code>(every :ms N BODY)</code> body, every list dispatches on its head symbol (<code>hold-off</code>, <code>publish!</code>, <code>+</code>, etc.). Unknown heads and unknown symbols are rejected at load and by <code>--validate</code>, in every branch, not just the one a test message happens to take.</li><li>Inside top-level config forms, sequences are data. In <code>(lvc ...)</code>, a single vector is read as the filter set. Inside <code>(export ...)</code>, deprecated <code>(bridge ...)</code>, and <code>(import ...)</code>, after a keyword like <code>:servers</code>, <code>:export</code>, or <code>:subject</code>, a list is read as a literal sequence of values. <code>(:servers ("nats://a:4222" "nats://b:4222") ...)</code> is a two-element list of strings, not a call to <code>nats://a:4222</code>. Same parser, different consumer. The one special list in config string positions is <code>(env "NAME")</code>, which reads an environment variable at patchbay load time.</li></ul>
+<p>For unambiguous data-as-data inside a rule body, write a vector with square brackets: <code>[1 2 3]</code>, <code>["red" "green" "blue"]</code>. Vectors self-evaluate (each element is evaluated, the result is returned as a vector), they never dispatch on a head, and they're what <code>contains?</code> checks for membership against. Config readers (<code>export</code>, deprecated <code>bridge</code>, <code>import</code>) accept either <code>(...)</code> or <code>[...]</code> for keyword-tagged collections; vectors read more naturally and are the recommended form.</p>
+<h2 id="validate-and-debug-rules">Validate and debug rules<a class="anchor" href="#validate-and-debug-rules" aria-label="Link to this section">#</a></h2>
+<p>Run a patchbay directly with <code>monoblok examples/&lt;file&gt;.edn</code>, <code>.json</code>, or <code>.yml</code>; form-lint without starting the server with <code>monoblok --validate examples/&lt;file&gt;.edn</code>.</p>
+<p>For quick patchbay debugging, <code>--soundcheck</code> runs the same evaluator without opening a NATS socket. It reads newline-delimited <code>SUBJECT|payload</code> rows on stdin, passes inputs through stdout, and prints any <code>publish!</code> emissions. Clock/window state lingers briefly after EOF so delayed forms can close; use <code>--soundcheck-linger-ms 0</code> to disable that wait.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>printf <span class="tok-str">'sensors.temp|31\n'</span> | monoblok --soundcheck examples/sensors.edn
+printf <span class="tok-str">'sensors.temp|31\n'</span> | monoblok --soundcheck --soundcheck-label examples/sensors.edn</code></pre></figure>
+<p><code>--validate</code> loads the file with the same loader as startup, so it is strict: unknown forms and symbols are rejected in every branch, duplicate <code>export</code> / <code>import</code> forms and non-integer numbers where an integer is required are errors, and parse errors report <code>line:col</code>. <code>--soundcheck</code> follows <code>:reentrant true</code> publishes like the server does. <code>reply-to</code> is always nil under <code>--soundcheck</code>, so check <code>reply!</code> rules against a running server with <code>nats req</code>. At runtime a failed rule evaluation is logged with the rule's filter and rate-limited (the first failure, then every power of two).</p>
+<h3 id="trace-protocol-trace"><code>--trace</code>: protocol trace<a class="anchor" href="#trace-protocol-trace" aria-label="Link to this section">#</a></h3>
+<p>Logs parsed client operations to stderr. For rule-level debugging, use <code>--soundcheck</code> or a temporary <code>(print! ...)</code> inside the patchbay.</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>$ monoblok --port 4222 --patchbay patchbay.edn --trace
+trace: conn 1 CONNECT
+trace: conn 1 SUB sensors.&gt; 1
+trace: conn 2 PUB sensors.temp 4</code></pre></figure>
+<h3 id="stage-by-stage-with-print">Stage by stage with print!<a class="anchor" href="#stage-by-stage-with-print" aria-label="Link to this section">#</a></h3>
+<p><code>(print! LABEL X)</code> writes one line to stderr and returns <code>X</code> unchanged, so it can sit between any two steps of a pipeline. See <a href="forms.html#debug-printing">Debug printing</a>.</p>
+<h3 id="watching-rule-counters">Watching rule counters<a class="anchor" href="#watching-rule-counters" aria-label="Link to this section">#</a></h3>
+<p>The server publishes <code>emitted</code> and <code>suppressed</code> totals for every rule on <a href="state.html#stats-live-counters"><code>$STATS.rules.&lt;i&gt;.*</code></a>, so you can confirm a gate is actually firing (or not).</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>nats sub <span class="tok-str">'$STATS.&gt;'</span></code></pre></figure>
+<h2 id="coding-assistants">Coding assistants<a class="anchor" href="#coding-assistants" aria-label="Link to this section">#</a></h2>
+<p>A nice way to learn it is with an LLM that has the DSL loaded as project context. <a href="https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md" target="_blank" rel="noopener noreferrer">docs/AGENTS_PATCHBAY.md</a> is a self-contained, agent-neutral prompt that teaches Codex and other coding agents Patchbay. Append it to your project's <code>AGENTS.md</code> so compatible tools pick it up automatically when editing <code>.edn</code> rule files:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md &gt;&gt; ./AGENTS.md</code></pre></figure>
+<p>For Claude Code, append the same file to <code>CLAUDE.md</code> instead. Once loaded, describe the stream you have and the stream you want.</p>
+<p>For some elaborate generated demos, see <a href="https://github.com/lexvicacom/monoblok/tree/main/advanced-examples" target="_blank" rel="noopener noreferrer"><code>advanced-examples/</code></a>. They are intentionally a bit over the top, but they give a feel for what is possible.</p>
+<p>Two generated patchbays of this kind are walked through in <a href="examples-large.html">Large patchbays</a>.</p>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="running.html"><small>Previous</small>Install and run</a><a class="next" href="forms.html"><small>Next</small>Forms reference</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

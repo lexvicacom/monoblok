@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>monoblok documentation | monoblok docs</title>
+<meta name="description" content="What monoblok is, the three ways to run it, and a five-minute first rule.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Introduction</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html" aria-current="page">Introduction</a><ul class="toc"><li><a href="#the-problem-it-solves">The problem it solves</a></li><li><a href="#three-ways-to-run-it">Three ways to run it</a></li><li><a href="#five-minute-start">Five-minute start</a></li><li><a href="#where-to-go-next">Where to go next</a></li><li><a href="#why-put-this-at-the-broker">Why put this at the broker</a></li><li><a href="#when-it-is-not-the-right-tool">When it is not the right tool</a></li><li><a href="#more-reading">More reading</a></li></ul></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Start</p>
+<h1>monoblok documentation</h1>
+<p class="lede">monoblok is a small NATS-compatible message processor. It rounds, dedupes, smooths, demuxes and routes messages in flight, using rules written in a small language called patchbay, so subscribers do not have to.</p>
+<h2 id="the-problem-it-solves">The problem it solves<a class="anchor" href="#the-problem-it-solves" aria-label="Link to this section">#</a></h2>
+<p>A car publishes its engine RPM ten times a second. A market data feed ticks on every quote. A cheap temperature sensor posts a fresh reading every two seconds, mostly identical to the last one. Data moves quickly, but most of it is noise: a publisher that does not know what its subscribers care about, and a fleet of subscribers each writing the same defensive code to round, debounce, and ignore the boring readings.</p>
+<p>Many systems grow small <em>caretaker</em> services to deal with this. Each one subscribes to a raw subject, tidies it and republishes it. They work, but each is another program to write, deploy and keep in step with the others.</p>
+<p>monoblok does that work once, before a message reaches any subscriber. The cleanup logic is declared once, as rules, instead of being re-implemented in every consumer:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Round to 1dp, drop duplicates, emit on the .stable sub-subject.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))</code></pre></figure>
+<p>Subscribers that want the conditioned value listen to <code>sensors.*.stable</code>. The raw stream stays available for anyone who needs it. Here is that rule fed seven jittery readings:</p>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/sensors.edn" target="_blank" rel="noopener noreferrer">examples/sensors.edn</a></span></figcaption><pre><code><span class="sc-in">in   sensors.temp  42.01</span>
+<span class="sc-out">out  sensors.temp.stable  42</span>
+<span class="sc-in">in   sensors.temp  42.04</span>
+<span class="sc-in">in   sensors.temp  42.08</span>
+<span class="sc-out">out  sensors.temp.stable  42.1</span>
+<span class="sc-in">in   sensors.temp  42.12</span>
+<span class="sc-in">in   sensors.temp  43.00</span>
+<span class="sc-out">out  sensors.temp.stable  43</span>
+<span class="sc-in">in   sensors.temp  43.00</span>
+<span class="sc-in">in   sensors.temp  43.01</span></code></pre></figure>
+<h2 id="three-ways-to-run-it">Three ways to run it<a class="anchor" href="#three-ways-to-run-it" aria-label="Link to this section">#</a></h2>
+<p>monoblok speaks the NATS protocol, so existing clients connect without changes.</p>
+<ul><li><strong>Tap into existing NATS.</strong> monoblok subscribes to selected subjects on your NATS environment, treats them as private patchbay input, then emits back only the cleaned or derived subjects your rules choose. See <a href="bridge.html#import">import</a>.</li><li><strong>Signal conditioning front door.</strong> Publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a NATS cluster. See <a href="bridge.html#export">export</a>.</li><li><strong>Standalone broker.</strong> NATS clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.</li></ul>
+<p>The front door pattern needs no code changes: publishers PUB to monoblok instead of directly to NATS, using the exact same NATS client. monoblok does the conditioning, then forwards the tidy subjects to your real cluster. Consumers of the processed subjects are none the wiser; they connect to the same production NATS environment as before.</p>
+<h2 id="five-minute-start">Five-minute start<a class="anchor" href="#five-minute-start" aria-label="Link to this section">#</a></h2>
+<p>Install the binary (macOS or Linux), or use the container image. <a href="running.html">Install and run</a> has the details.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
+./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn</code></pre></figure>
+<p>With the <a href="https://github.com/nats-io/natscli" target="_blank" rel="noopener noreferrer">NATS CLI</a> in two more terminals, subscribe and publish:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>nats -s nats://127.0.0.1:14222 sub <span class="tok-str">'sensors.&gt;'</span>
+nats -s nats://127.0.0.1:14222 pub sensors.temp 21.04
+nats -s nats://127.0.0.1:14222 pub sensors.temp 21.01
+nats -s nats://127.0.0.1:14222 pub sensors.temp 21.42</code></pre></figure>
+<p>You can try rules without a server or a NATS client at all. <code>--soundcheck</code> reads <code>SUBJECT|payload</code> rows on stdin and prints what the rules publish:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>printf <span class="tok-str">'sensors.temp|31\n'</span> | monoblok --soundcheck examples/sensors.edn</code></pre></figure>
+<p>No install at all: a <a href="https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md" target="_blank" rel="noopener noreferrer">public demo server</a> runs on <code>demo.monoblok.host:4222</code>, and the <a href="../demo.html">live demo</a> page drives it from the browser.</p>
+<h2 id="where-to-go-next">Where to go next<a class="anchor" href="#where-to-go-next" aria-label="Link to this section">#</a></h2>
+<ul class="cards">
+<li><a href="patchbay.html"><strong>Patchbay guide</strong><span>The rule language: syntax, threading, state, and the EDN, YAML and JSON spellings.</span></a></li>
+<li><a href="forms.html"><strong>Forms reference</strong><span>Every form with its arguments, behaviour and a worked snippet.</span></a></li>
+<li><a href="examples.html"><strong>Examples</strong><span>Runnable patchbays from a five-line sensor rule to a market data firehose.</span></a></li>
+<li><a href="state.html"><strong>LVC, stats and snapshots</strong><span>Last-value streams for late joiners, live counters, and warm restarts.</span></a></li>
+<li><a href="clients.html"><strong>NATS clients, auth and HTTP</strong><span>Protocol coverage, tokens, TLS, and the HTTP/SSE adapter for browsers.</span></a></li>
+<li><a href="bridge.html"><strong>Export, import and JetStream</strong><span>Pairing monoblok with a real NATS cluster, including JetStream replay.</span></a></li>
+</ul>
+<h2 id="why-put-this-at-the-broker">Why put this at the broker<a class="anchor" href="#why-put-this-at-the-broker" aria-label="Link to this section">#</a></h2>
+<p>The conventional logic is "broker moves bytes, application does logic." That is fine and largely correct, but there is a category of logic, signal conditioning, that you could argue belongs at the broker. It is stateless from the application's point of view, it is the same boring code reimplemented in every consumer, and it benefits enormously from being applied once, centrally, before fan-out.</p>
+<p>Putting a small DSL at the broker for this kind of work is a nice middle ground. It is not trying to be Flink, Beam or Kafka Streams. It is a few primitives, declared once, that turn raw sensor noise into something useful before it ever leaves the broker. The last-value cache then makes late-joining subscribers a non-event, which is the other thing every realtime app ends up reinventing.</p>
+<p>Swap office temperature sensors for market data ticks where you want to deadband out the noise and only emit on meaningful moves, fleet telemetry from a few thousand vehicles where most of the GPS jitter is uninteresting, IoT estates with flaky sensors that need smoothing before anyone trusts the readings, or dashboards where late-joining clients should not have to wait for the next event to see current state. Same primitives, different domains.</p>
+<h2 id="when-it-is-not-the-right-tool">When it is not the right tool<a class="anchor" href="#when-it-is-not-the-right-tool" aria-label="Link to this section">#</a></h2>
+<p>monoblok is a core NATS server with rules, not a replacement for a cluster. It has no JetStream storage, no clustering and no message headers on its own listener. It can read from JetStream consumers and forward subjects to a real NATS cluster, which is how the two are meant to be paired.</p>
+<p>If plain publish and subscribe is all you need, nats-server is the better choice.</p>
+<h2 id="more-reading">More reading<a class="anchor" href="#more-reading" aria-label="Link to this section">#</a></h2>
+<ul><li><a href="https://alexjreid.dev/posts/monoblok/" target="_blank" rel="noopener noreferrer">The introductory blog post</a> covers where the idea came from, and there are <a href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">more posts about monoblok</a> on the blog.</li><li><a href="https://github.com/lexvicacom/tinyblok" target="_blank" rel="noopener noreferrer">tinyblok</a> runs a subset of patchbay on <a href="../esp32.html">ESP32 boards</a>, relaying cleaned sensor data into NATS.</li><li>The Markdown docs these pages are built from live in the <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">repository</a>.</li></ul>
+<nav class="pager" aria-label="Previous and next page"><a class="next" href="running.html"><small>Next</small>Install and run</a></nav>
+<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>
