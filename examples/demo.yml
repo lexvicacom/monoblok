@@ -84,7 +84,7 @@ on:
   #    "alert" is copied to `demo.alerts`. Subject-token demo too:
   #    `(subject-token 2)` is the third dot-separated token.
   - sub: "demo.log.*"
-    when: [contains?, $payload, "alert"]
+    when: ["contains?", $payload, "alert"]
     form: [publish!, "demo.alerts", [str-concat, "[", [subject-token, 1], "] ", $payload]]
 
   # 9. Count: a running tally of threshold crossings, not raw samples.

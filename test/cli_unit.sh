@@ -292,8 +292,8 @@ every_yaml_when="$tmp/every-when.yml"
 cat > "$every_yaml_when" <<'EOF'
 every:
   - ms: 500
-    when: [not, $replaying?]
-    form: [publish!, "tick", [contains?, [vector, 1, 2, 3], 2]]
+    when: [not, $replaying]
+    form: [publish!, "tick", ["contains?", [vector, 1, 2, 3], 2]]
 EOF
 "$bin" --validate "$every_yaml_when" > "$tmp/every-when.out" 2> "$tmp/every-when.err"
 grep ': ok (1 rule)' "$tmp/every-when.out" >/dev/null
@@ -339,7 +339,7 @@ expect_load_error bad-body.yml 'use form' 'on:
 expect_load_error bad-when-map.yml 'map form was removed' 'on:
   - sub: "a"
     when:
-      test: [not, $replaying?]
+      test: [not, $replaying]
       then: [publish!, "x"]'
 expect_load_error bad-unknown-form.yml 'unknown form: bogus' 'on:
   - sub: "a"

@@ -108,7 +108,7 @@ That lowers to the same AST as:
 
 Within expression arrays, the first item is a form symbol. A `$name`
 (`$payload`, `$payload-float`, `$payload-int`, `$payload-bool`,
-`$subject`, `$replaying?`, `$reply-to`) lowers to the bound symbol, and
+`$subject`, `$replaying`, `$reply-to`) lowers to the bound symbol, and
 a bare option word (`ms`, `dp`, `subject`, ...) lowers to the keyword
 (`:ms`, `:dp`). Every other string in a rule body must be quoted; an
 unquoted word that is not a number, boolean, null, binding or option is
@@ -229,7 +229,7 @@ on:
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, $payload-float]]]
       - [bar!, ms, 1000, $payload-float]
-      - [if, $replaying?, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
+      - [if, $replaying, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
 ```
 
 JetStream import is consumer-only: monoblok does not serve JetStream to local

@@ -68,7 +68,7 @@ In rule bodies, an unquoted scalar must be exactly one of:
 | `123`, `12.5`, `-5` | number |
 | `true` / `false` | boolean |
 | `null` / `nil` / `~` | nil |
-| `$subject`, `$payload`, `$payload-float`, `$payload-int`, `$payload-bool`, `$replaying?`, `$reply-to` | bound symbol (the `$` is dropped) |
+| `$subject`, `$payload`, `$payload-float`, `$payload-int`, `$payload-bool`, `$replaying`, `$reply-to` | bound symbol (`$replaying` maps to `replaying?`; otherwise `$` is dropped) |
 | an option word such as `ms` or `dp` | keyword (`:ms`, `:dp`) |
 | the first item of a flow array | operator name |
 
@@ -102,6 +102,11 @@ export:
   export:
     - "clean.>"
 ```
+
+For compatibility with older libyaml (including Ubuntu 22.04), use
+`$replaying` in YAML; it lowers to the `replaying?` binding. The original
+`$replaying?` spelling remains accepted by monoblok, but older standard YAML
+parsers reject it inside flow arrays. Quoting a binding makes it literal text.
 
 ## Options
 
@@ -262,7 +267,7 @@ import:
 
 `catch-up: true` replays the durable consumer to the stream's startup high-water
 sequence before monoblok opens its listener. During that loading phase, rule
-bodies can branch on `$replaying?`. Multiple stream entries catch up serially in
+bodies can branch on `$replaying`. Multiple stream entries catch up serially in
 config order.
 
 Small JetStream replay example:
@@ -294,10 +299,10 @@ on:
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, $payload-float]]]
       - [bar!, ms, 1000, $payload-float]
-      - [if, $replaying?, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
+      - [if, $replaying, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
 
   - sub: "js.sensors.temp"
-    when: [not, $replaying?]
+    when: [not, $replaying]
     thread:
       - $payload-float
       - [deadband, 0.25]
@@ -325,8 +330,9 @@ do not see them unless a rule republishes them.
 ## Operators That Need Quotes
 
 The first item of a flow array is the operator. Operator names that start with
-a letter are written bare: `[round, 1]`, `[publish!, "out"]`. Operators made of
-punctuation must be quoted, because they are YAML indicator characters and a
+a letter are written bare: `[round, 1]`, `[publish!, "out"]`. Quote operators
+containing `?`, such as `["contains?", $payload, "alert"]`, for older libyaml.
+Operators made of punctuation must be quoted, because they are YAML indicator characters and a
 standard YAML parser rejects or misreads them bare:
 
 | write | not |
@@ -462,7 +468,7 @@ Use `form` when the rule body is already one expression.
 ```yaml
 on:
   - sub: "logs.*"
-    form: [when, [contains?, $payload, "alert"], [publish!, "alerts.log", $payload]]
+    form: [when, ["contains?", $payload, "alert"], [publish!, "alerts.log", $payload]]
 ```
 
 ## Vectors
@@ -473,9 +479,9 @@ a call):
 ```yaml
 on:
   - sub: "sensors.*"
-    form: [when, [contains?, [vector, "temp", "hum", "batt"], [subject-token, 1]], [publish!, "seen", $subject]]
+    form: [when, ["contains?", [vector, "temp", "hum", "batt"], [subject-token, 1]], [publish!, "seen", $subject]]
   - sub: "sensors.nums"
-    form: [when, [contains?, [vector, 1, 2, 3], $payload-int], [publish!, [subject-with, [vector, "n", $subject]], $payload]]
+    form: [when, ["contains?", [vector, 1, 2, 3], $payload-int], [publish!, [subject-with, [vector, "n", $subject]], $payload]]
 ```
 
 ## Expression Arrays
@@ -550,7 +556,7 @@ For literal text that starts with `$`, write `{"str": "$text"}`. Config forms
 
 | old | new |
 |-----|-----|
-| `payload-float`, `payload`, `subject`, `replaying?`, `reply-to` | `$payload-float`, `$payload`, `$subject`, `$replaying?`, `$reply-to` |
+| `payload-float`, `payload`, `subject`, `replaying?`, `reply-to` | `$payload-float`, `$payload`, `$subject`, `$replaying`, `$reply-to` |
 | `:ms`, `:dp`, `:subject` | `ms`, `dp`, `subject` |
 | `[>, a, b]`, `[*, a, b]`, `[->, a, b]` | `[">", a, b]`, `["*", a, b]`, `["->", a, b]` |
 | unquoted text such as `alert` | `"alert"` |

@@ -688,6 +688,10 @@ static bool lower_expr_scalar(y_lower *L, y_node *n, pb_value *out) {
     const pb_slice w = n->text;
     if (w.len > 0 && w.ptr[0] == '$') {
         const pb_slice name = {.ptr = w.ptr + 1, .len = w.len - 1};
+        // Older libyaml rejects `?` in flow scalars; keep a portable YAML alias.
+        if (slice_eq_lit(name, "replaying")) {
+            return arena_text_lit(L, PB_SYMBOL, "replaying?", out);
+        }
         if (word_is_binding(name)) {
             return arena_text(L, PB_SYMBOL, name, out);
         }

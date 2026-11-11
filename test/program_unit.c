@@ -352,6 +352,37 @@ static void test_missing_config_env_fails(void) {
     pb_program_free(&program);
 }
 
+static void test_yaml_replaying_alias(void) {
+    const char *spellings[] = {"$replaying", "$replaying?"};
+    for (size_t i = 0; i < sizeof spellings / sizeof spellings[0]; i += 1) {
+        char src[512];
+        snprintf(src, sizeof src,
+                 "on:\n"
+                 "  - sub: \"foo\"\n"
+                 "    do:\n"
+                 "      - [if, %s, [publish!, \"replay.foo\", $payload], [publish!, \"live.foo\", $payload]]\n"
+                 "      - [publish!, \"literal\", \"$replaying\"]\n", spellings[i]);
+        pb_program program = {0};
+        CHECK(pb_program_load_source(&program, "replaying.yml", src, strlen(src)));
+        mb_router router;
+        mb_router_init(&router);
+        mb_router_conn conn = {0};
+        CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+        CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("x"), 0, 0, (pb_program_eval_options){0}));
+        CHECK(buf_contains(&conn.out, "MSG live.foo 1 1\r\nx\r\n"));
+        CHECK(!buf_contains(&conn.out, "MSG replay.foo 1 1\r\nx\r\n"));
+        CHECK(buf_contains(&conn.out, "MSG literal 1 10\r\n$replaying\r\n"));
+        mb_buf_clear(&conn.out);
+        CHECK(pb_program_eval_publish(&program, &router, lit("foo"), lit("x"), 0, 0,
+                                      (pb_program_eval_options){.replaying = true}));
+        CHECK(buf_contains(&conn.out, "MSG replay.foo 1 1\r\nx\r\n"));
+        CHECK(!buf_contains(&conn.out, "MSG live.foo 1 1\r\nx\r\n"));
+        mb_buf_free(&conn.out);
+        mb_router_free(&router);
+        pb_program_free(&program);
+    }
+}
+
 static void test_yaml_config_env_values_load(void) {
     CHECK(setenv("MB_TEST_PB_YAML_SERVER", "nats://yaml:4222", 1) == 0);
     CHECK(setenv("MB_TEST_PB_YAML_EXPORT", "yaml.>", 1) == 0);
@@ -1045,6 +1076,7 @@ TEST_MAIN(program,
           test_config_env_values_load,
           test_config_negative_and_absent_remote_values,
           test_missing_config_env_fails,
+          test_yaml_replaying_alias,
           test_yaml_config_env_values_load,
           test_deprecated_bridge_config_loads,
           test_export_requires_servers,
