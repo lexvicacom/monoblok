@@ -6,8 +6,6 @@ Signal conditioning, transformation, and routing in a NATS-native message proces
 >
 >Point existing publishers at it or have it subscribe to existing subjects. Declare the processing rules you need, and monoblok republishes clean, actionable subjects for subscribers.
 >
-> _Rounding. Deadbands. Squelch. Aggregation. Moving averages. OHLC. Derived alerts._
->
 > Fix noisy raw streams once, not in every subscriber.
 
 ## Rationale
