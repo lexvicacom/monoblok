@@ -1,7 +1,5 @@
 // Forms: squelch, deadband, changed?, hold-off, rising-edge, falling-edge,
 // delta, count!, count.
-// Per-rule state forms that store numbers or bytes in pb_eval_state_entry.
-// Included by pb_forms.c; keep helpers static and chunk-local.
 
 #include "pb_form_chunk.h"
 

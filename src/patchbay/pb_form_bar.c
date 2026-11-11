@@ -1,6 +1,4 @@
 // Forms: bar!, bar.
-// Bar/OHLC forms and time-based bar ticking.
-// Included by pb_forms.c; keep helpers static and chunk-local.
 
 #include "pb_form_chunk.h"
 

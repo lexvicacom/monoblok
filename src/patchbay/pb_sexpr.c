@@ -103,7 +103,7 @@ static pb_parse_error parse_seq(parser *p, char close, char wrong_close, pb_valu
         if (c == close) {
             p->pos += 1;
             const size_t count = items.len;
-            pb_value *frozen = pb_arena_alloc(p->arena, count * sizeof frozen[0], _Alignof(pb_value));
+            pb_value *frozen = pb_arena_alloc(p->arena, count * sizeof frozen[0], alignof(pb_value));
             if (frozen == NULL && count != 0) {
                 free(items.items);
                 return PB_PARSE_OOM;
@@ -267,7 +267,7 @@ pb_parse_result pb_parse_all(pb_arena *arena, const char *src, size_t len) {
         skip_ws(&p);
         if (p.pos >= p.len) {
             const size_t count = forms.len;
-            pb_value *items = pb_arena_alloc(arena, count * sizeof items[0], _Alignof(pb_value));
+            pb_value *items = pb_arena_alloc(arena, count * sizeof items[0], alignof(pb_value));
             if (items == NULL && count != 0) {
                 free(forms.items);
                 return (pb_parse_result){.err = PB_PARSE_OOM, .err_offset = p.pos};

@@ -1,6 +1,4 @@
 // Forms: json-get, json-demux!.
-// JSON lookup and demux forms backed by yyjson.
-// Included by pb_forms.c; keep helpers static and chunk-local.
 
 #include "pb_form_chunk.h"
 
@@ -80,11 +78,11 @@ static bool json_path_valid(pb_slice path) {
 }
 
 static void *json_arena_malloc(void *ctx, size_t size) {
-    return pb_arena_alloc(ctx, size == 0 ? 1 : size, _Alignof(max_align_t));
+    return pb_arena_alloc(ctx, size == 0 ? 1 : size, alignof(max_align_t));
 }
 
 static void *json_arena_realloc(void *ctx, void *ptr, size_t old_size, size_t size) {
-    void *next = pb_arena_alloc(ctx, size == 0 ? 1 : size, _Alignof(max_align_t));
+    void *next = pb_arena_alloc(ctx, size == 0 ? 1 : size, alignof(max_align_t));
     if (next == NULL) {
         return NULL;
     }

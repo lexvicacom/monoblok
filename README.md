@@ -72,7 +72,8 @@ cmake --build build
 ./build/monoblok --port 14222 --patchbay patchbay.edn
 ```
 
-Compiles cleanly on macOS and Linux. Dependencies are vendored. System `openssl` required.
+Requires CMake 3.22+, a compiler with C23 mode (GCC 11+ or current Apple Clang),
+and system OpenSSL. Vendored dependencies keep their own language settings.
 
 ## Running tests
 

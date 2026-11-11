@@ -1,7 +1,5 @@
 // Forms: moving-avg, moving-sum, moving-max, moving-min, median, percentile,
 // stddev, variance, rate, throttle.
-// Ring-window forms: moving stats, percentile, rate, and throttle.
-// Included by pb_forms.c; keep helpers static and chunk-local.
 
 #include "pb_form_chunk.h"
 
@@ -240,7 +238,7 @@ static pb_eval_result call_percentile(pb_eval_ctx *ctx, pb_values args, bool med
     if (slot == NULL || !window_push(slot, time_window, count, ms, ctx->now_ms, x)) {
         return fail(PB_EVAL_OOM);
     }
-    double *copy = pb_arena_alloc(ctx->arena, slot->ring_len * sizeof copy[0], _Alignof(double));
+    double *copy = pb_arena_alloc(ctx->arena, slot->ring_len * sizeof copy[0], alignof(double));
     if (copy == NULL) {
         return fail(PB_EVAL_OOM);
     }

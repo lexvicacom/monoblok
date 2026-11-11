@@ -1,7 +1,5 @@
 // Forms: str-concat, contains?, starts-with?, ends-with?, subject-append,
 // subject-token, subject-with, print!, publish!, publish, publish-to!, publish-to.
-// Text, subject, and publish forms.
-// Included by pb_forms.c; keep helpers static and chunk-local.
 
 #include "pb_form_chunk.h"
 
@@ -173,7 +171,7 @@ static pb_eval_result call_subject_with(pb_eval_ctx *ctx, pb_values args) {
         return fail(PB_EVAL_ARITY);
     }
 
-    pb_slice *parts = pb_arena_alloc(ctx->arena, toks.len * sizeof parts[0], _Alignof(pb_slice));
+    pb_slice *parts = pb_arena_alloc(ctx->arena, toks.len * sizeof parts[0], alignof(pb_slice));
     if (parts == NULL) {
         return fail(PB_EVAL_OOM);
     }

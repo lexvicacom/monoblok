@@ -75,18 +75,12 @@ bool mb_write_file_atomic(const char *path, mb_slice bytes) {
         ok = false;
     }
 
+    if (ok) {
+        ok = rename(tmp_path, path) == 0;
+    }
     if (!ok) {
         remove(tmp_path);
-        free(tmp_path);
-        return false;
     }
-
-    if (rename(tmp_path, path) != 0) {
-        remove(tmp_path);
-        free(tmp_path);
-        return false;
-    }
-
     free(tmp_path);
-    return true;
+    return ok;
 }

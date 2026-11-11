@@ -1,6 +1,4 @@
 // Forms: now, not, =, >, <, >=, <=, +, -, *, /, round, quantize, clamp, min, max, abs, sign.
-// Numeric, boolean, comparison, arithmetic, and wall-clock forms.
-// Included by pb_forms.c; keep helpers static and chunk-local.
 
 #include "pb_form_chunk.h"
 

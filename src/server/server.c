@@ -15,6 +15,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
+// Owns snapshot bytes until the worker's completion callback on the loop thread.
 struct mb_snapshot_job {
     uv_work_t req;
     mb_server *server;
@@ -54,21 +55,22 @@ static SSL_CTX *tls_ctx_create(const char *cert_path, const char *key_path) {
     SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
     if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) != 1) {
         tls_log_error("load certificate", cert_path);
-        SSL_CTX_free(ctx);
-        return NULL;
+        goto fail;
     }
     if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
         tls_log_error("load private key", key_path);
-        SSL_CTX_free(ctx);
-        return NULL;
+        goto fail;
     }
     if (SSL_CTX_check_private_key(ctx) != 1) {
         tls_log_error("check private key", key_path);
-        SSL_CTX_free(ctx);
-        return NULL;
+        goto fail;
     }
     fprintf(stderr, "info: tls: enabled cert=%s key=%s\n", cert_path, key_path);
     return ctx;
+
+fail:
+    SSL_CTX_free(ctx);
+    return NULL;
 }
 
 static bool secret_matches_slice(const char *expected, mb_slice got) {
@@ -374,6 +376,13 @@ static void make_server_id(char out[35]) {
     out[34] = '\0';
 }
 
+static void close_startup_handle(uv_handle_t *handle, void *arg) {
+    (void)arg;
+    if (!uv_is_closing(handle)) {
+        uv_close(handle, NULL);
+    }
+}
+
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
                     uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,
@@ -394,7 +403,7 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
     if (tls_cert_path != NULL || tls_key_path != NULL) {
         server->tls_ctx = tls_ctx_create(tls_cert_path, tls_key_path);
         if (server->tls_ctx == NULL) {
-            return false;
+            goto fail;
         }
         server->tls_enabled = true;
     }
@@ -404,7 +413,7 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
     if (lvc_enabled && program != NULL && program->lvc.len != 0) {
         mb_slice *filters = calloc(program->lvc.len, sizeof filters[0]);
         if (filters == NULL) {
-            return false;
+            goto fail;
         }
         for (size_t i = 0; i < program->lvc.len; i += 1) {
             filters[i] = (mb_slice){.ptr = (const uint8_t *)program->lvc.filters[i].ptr,
@@ -413,7 +422,7 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
         const bool ok = mb_router_configure_lvc(&server->router, filters, program->lvc.len);
         free(filters);
         if (!ok) {
-            return false;
+            goto fail;
         }
     } else {
         mb_router_disable_lvc(&server->router);
@@ -421,51 +430,50 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
     if (snapshot_path != NULL) {
         mb_snapshot_counts counts = {0};
         if (!mb_snapshot_load(snapshot_path, &server->router, program, &counts)) {
-            mb_router_free(&server->router);
-            return false;
+            goto fail;
         }
         fprintf(stderr, "info: snapshot: loaded %zu lvc / %zu rule-state entries from %s\n",
                 counts.lvc, counts.rule_state, snapshot_path);
     }
     if (uv_loop_init(&server->loop) != 0) {
-        return false;
+        goto fail;
     }
     if (uv_tcp_init(&server->loop, &server->listener) != 0) {
-        return false;
+        goto fail_loop;
     }
     server->listener.data = server;
     if (uv_signal_init(&server->loop, &server->sigint) != 0) {
-        return false;
+        goto fail_loop;
     }
     server->sigint.data = server;
     if (uv_signal_start(&server->sigint, on_signal, SIGINT) != 0) {
-        return false;
+        goto fail_loop;
     }
     server->sigint_started = true;
     if (uv_signal_init(&server->loop, &server->sigterm) != 0) {
-        return false;
+        goto fail_loop;
     }
     server->sigterm.data = server;
     if (uv_signal_start(&server->sigterm, on_signal, SIGTERM) != 0) {
-        return false;
+        goto fail_loop;
     }
     server->sigterm_started = true;
     if (program != NULL && program->uses_clock_timer) {
         if (uv_timer_init(&server->loop, &server->patchbay_timer) != 0) {
-            return false;
+            goto fail_loop;
         }
         server->patchbay_timer.data = server;
         server->patchbay_timer_started = true;
     }
     if (uv_timer_init(&server->loop, &server->stats_timer) != 0) {
-        return false;
+        goto fail_loop;
     }
     server->stats_timer.data = server;
     server->stats_timer_started = true;
     (void)uv_timer_start(&server->stats_timer, on_stats_timer, server->stats_tick_ms, server->stats_tick_ms);
     if (snapshot_path != NULL && snapshot_every_ms != 0) {
         if (uv_timer_init(&server->loop, &server->snapshot_timer) != 0) {
-            return false;
+            goto fail_loop;
         }
         server->snapshot_timer.data = server;
         server->snapshot_timer_started = true;
@@ -476,17 +484,32 @@ bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_p
     const int ip_rc = uv_ip4_addr(host, (int)port, &addr);
     if (ip_rc != 0) {
         fprintf(stderr, "invalid address %s:%u: %s\n", host, port, uv_strerror(ip_rc));
-        return false;
+        goto fail_loop;
     }
     const int bind_rc = uv_tcp_bind(&server->listener, (const struct sockaddr *)&addr, 0);
     if (bind_rc != 0) {
         fprintf(stderr, "bind failed: %s\n", uv_strerror(bind_rc));
-        return false;
+        goto fail_loop;
     }
     if (!listen_immediately) {
         return true;
     }
-    return mb_server_listen(server);
+    if (!mb_server_listen(server)) {
+        goto fail_loop;
+    }
+    return true;
+
+fail_loop:
+    // Only this loop's startup handles exist; close even those not yet started.
+    uv_walk(&server->loop, close_startup_handle, NULL);
+    uv_run(&server->loop, UV_RUN_DEFAULT);
+    uv_loop_close(&server->loop);
+fail:
+    SSL_CTX_free(server->tls_ctx);
+    server->tls_ctx = NULL;
+    server->tls_enabled = false;
+    mb_router_free(&server->router);
+    return false;
 }
 
 bool mb_server_listen(mb_server *server) {

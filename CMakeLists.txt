@@ -34,7 +34,7 @@ if(NOT MB_BUILD_TYPE)
 endif()
 set(MB_BUILD_INFO "${MB_BUILD_PLATFORM}/${MB_BUILD_ARCH} ${MB_BUILD_COMPILER} ${MB_BUILD_TYPE}")
 
-set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
@@ -114,6 +114,7 @@ set(PB_FORM_FRAGMENTS
 set_source_files_properties(${PB_FORM_FRAGMENTS} PROPERTIES HEADER_FILE_ONLY TRUE)
 
 add_library(yyjson STATIC vendor/yyjson/src/yyjson.c)
+set_target_properties(yyjson PROPERTIES C_STANDARD 17)
 target_include_directories(yyjson PUBLIC vendor/yyjson/src)
 
 add_library(monoblok_core STATIC ${MB_CORE})
@@ -179,6 +180,8 @@ add_test(NAME program COMMAND program-tests)
 add_test(NAME snapshot COMMAND snapshot-tests)
 add_test(NAME bridge COMMAND bridge-tests)
 
+# Keep dependency builds on their existing language baseline.
+set(CMAKE_C_STANDARD 17)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libuv/CMakeLists.txt")
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -204,6 +207,8 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/nats.c/CMakeLists.txt")
 else()
   set(MB_NATS_TARGET "")
 endif()
+
+set(CMAKE_C_STANDARD 23)
 
 add_executable(importer-tests test/importer_unit.c test/fake_nats.c src/importer.c src/nats_common.c)
 target_include_directories(importer-tests PRIVATE test/fakes src/patchbay)

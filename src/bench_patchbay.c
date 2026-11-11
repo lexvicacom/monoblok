@@ -204,6 +204,7 @@ int main(int argc, char **argv) {
         source_ok = build_source(mode, n, &source, &source_len);
     }
     if (!source_ok) {
+        mb_buf_free(&file_source);
         return 1;
     }
 

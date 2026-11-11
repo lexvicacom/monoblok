@@ -585,7 +585,7 @@ static bool arena_text_lit(pb_arena *arena, pb_value_kind kind, const char *lit,
 }
 
 static bool freeze_pb_vec(pb_arena *arena, pb_build_vec *v, pb_value_kind kind, pb_value *out) {
-    pb_value *items = pb_arena_alloc(arena, v->len * sizeof items[0], _Alignof(pb_value));
+    pb_value *items = pb_arena_alloc(arena, v->len * sizeof items[0], alignof(pb_value));
     if (items == NULL && v->len != 0) {
         return false;
     }
@@ -990,7 +990,7 @@ static bool lower_root(pb_arena *arena, y_node *root, pb_values *out) {
             return false;
         }
     }
-    pb_value *items = pb_arena_alloc(arena, forms.len * sizeof items[0], _Alignof(pb_value));
+    pb_value *items = pb_arena_alloc(arena, forms.len * sizeof items[0], alignof(pb_value));
     if (items == NULL && forms.len != 0) {
         free(forms.items);
         return false;

@@ -99,6 +99,7 @@ typedef struct mb_server {
     bool tls_enabled;
 } mb_server;
 
+// Failure releases startup resources; call mb_server_close only after success.
 bool mb_server_init(mb_server *server, const char *host, unsigned int port, pb_program *program,
                     bool lvc_enabled, const char *snapshot_path, uint64_t snapshot_every_ms,
                     uint64_t stats_tick_ms, bool client_pubs_enabled, bool trace,

@@ -450,6 +450,7 @@ bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, 
             return true;
         }
         perror(path);
+        mb_buf_free(&file);
         return false;
     }
 

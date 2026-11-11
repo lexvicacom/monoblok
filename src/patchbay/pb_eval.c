@@ -461,7 +461,7 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
         }
         return fail(PB_EVAL_UNKNOWN_SYMBOL);
     case PB_VECTOR: {
-        pb_value *items = pb_arena_alloc(ctx->arena, expr.seq.len * sizeof items[0], _Alignof(pb_value));
+        pb_value *items = pb_arena_alloc(ctx->arena, expr.seq.len * sizeof items[0], alignof(pb_value));
         if (items == NULL && expr.seq.len != 0) {
             return fail(PB_EVAL_OOM);
         }
@@ -481,7 +481,7 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
 }
 
 static pb_eval_result eval_args(pb_eval_ctx *ctx, pb_values raw, pb_values *out) {
-    pb_value *items = pb_arena_alloc(ctx->arena, raw.len * sizeof items[0], _Alignof(pb_value));
+    pb_value *items = pb_arena_alloc(ctx->arena, raw.len * sizeof items[0], alignof(pb_value));
     if (items == NULL && raw.len != 0) {
         return fail(PB_EVAL_OOM);
     }
@@ -576,7 +576,7 @@ static pb_eval_result eval_call_with_threaded(pb_eval_ctx *ctx, pb_value form, p
         return fail(PB_EVAL_TYPE);
     }
 
-    pb_value *items = pb_arena_alloc(ctx->arena, (form.seq.len + 1) * sizeof items[0], _Alignof(pb_value));
+    pb_value *items = pb_arena_alloc(ctx->arena, (form.seq.len + 1) * sizeof items[0], alignof(pb_value));
     if (items == NULL) {
         return fail(PB_EVAL_OOM);
     }
@@ -697,4 +697,28 @@ const char *pb_eval_error_name(pb_eval_error err) {
     case PB_EVAL_PUBLISH_FAILED: return "publish failed";
     }
     return "unknown eval error";
+}
+
+bool pb_eval_state_deadline(const pb_eval_state_entry *entry, uint64_t *out_ms) {
+    if (entry->kind == PB_EVAL_STATE_RING && entry->ring_time_window && entry->ring_len > 0) {
+        const size_t idx = entry->ring_start;
+        uint64_t deadline = UINT64_MAX;
+        if (entry->ring_times_ms[idx] <= UINT64_MAX - entry->ring_window_ms) {
+            deadline = entry->ring_times_ms[idx] + entry->ring_window_ms;
+            if (deadline < UINT64_MAX) {
+                deadline += 1;
+            }
+        }
+        *out_ms = deadline;
+        return true;
+    }
+    if (entry->kind == PB_EVAL_STATE_BAR && entry->bar_time_window && entry->bar_count > 0) {
+        *out_ms = entry->bar_window_start_ms + entry->bar_window_ms;
+        return true;
+    }
+    if (entry->kind == PB_EVAL_STATE_CLOCK && entry->clock_armed) {
+        *out_ms = entry->clock_deadline_ms;
+        return true;
+    }
+    return false;
 }

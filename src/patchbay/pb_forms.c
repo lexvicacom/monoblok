@@ -4,15 +4,7 @@
 
 #define PB_FORM_JOINED 1
 
-// Form chunks share one translation unit so helpers stay file-local without
-// growing pb_eval_internal.h for organizational splits.
-//
-// To add a form: add the enum in pb_eval_internal.h, add its public name in
-// pb_eval.c, put the implementation in the closest chunk below, then wire the
-// dispatch switch in this file.
-//
-// Special forms with raw argument evaluation live in pb_eval.c:
-// do, if, when, and, or, ->, transition, dropout.
+// Fragments share file-local helpers; see README.md for the form registry.
 #include "pb_form_numbers.c"
 #include "pb_form_text.c"
 #include "pb_form_state.c"

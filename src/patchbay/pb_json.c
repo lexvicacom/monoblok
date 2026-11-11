@@ -54,7 +54,7 @@ static pb_value string_value(json_conv *c, yyjson_val *v) {
 }
 
 static bool freeze_vec(json_conv *c, value_vec *v, pb_value_kind kind, pb_value *out) {
-    pb_value *items = pb_arena_alloc(c->arena, v->len * sizeof items[0], _Alignof(pb_value));
+    pb_value *items = pb_arena_alloc(c->arena, v->len * sizeof items[0], alignof(pb_value));
     if (items == NULL && v->len != 0) {
         c->err = PB_PARSE_OOM;
         return false;
@@ -291,7 +291,7 @@ static pb_parse_result parse_json_patchbay(pb_arena *arena, const char *src, siz
         free(forms.items);
         return (pb_parse_result){.err = c.err, .err_offset = 0};
     }
-    pb_value *items = pb_arena_alloc(arena, forms.len * sizeof items[0], _Alignof(pb_value));
+    pb_value *items = pb_arena_alloc(arena, forms.len * sizeof items[0], alignof(pb_value));
     if (items == NULL && forms.len != 0) {
         free(forms.items);
         return (pb_parse_result){.err = PB_PARSE_OOM};

@@ -386,19 +386,18 @@ static bool validate_on_form(pb_value form, size_t *rule_count) {
 }
 
 int pb_validate_file(const char *path) {
+    int rc = 1;
     mb_buf source = {0};
+    pb_arena arena = {0};
     if (!mb_read_file(path, &source)) {
         perror(path);
-        return 1;
+        goto cleanup;
     }
 
-    pb_arena arena = {0};
     const pb_parse_result parsed = pb_parse_patchbay_source(&arena, path, (const char *)source.ptr, source.len);
     if (parsed.err != PB_PARSE_OK) {
         fprintf(stderr, "validate: parse error: %s at byte %zu\n", pb_parse_error_name(parsed.err), parsed.err_offset);
-        pb_arena_free(&arena);
-        mb_buf_free(&source);
-        return 1;
+        goto cleanup;
     }
 
     bool ok = true;
@@ -413,7 +412,9 @@ int pb_validate_file(const char *path) {
         printf("%s: ok (%zu rule%s)\n", path, rules, rules == 1 ? "" : "s");
     }
 
+    rc = ok ? 0 : 1;
+cleanup:
     pb_arena_free(&arena);
     mb_buf_free(&source);
-    return ok ? 0 : 1;
+    return rc;
 }

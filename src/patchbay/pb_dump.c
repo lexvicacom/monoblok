@@ -43,19 +43,18 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    int rc = 1;
     mb_buf src = {0};
+    pb_arena arena = {0};
     if (!mb_read_file(argv[1], &src)) {
         perror(argv[1]);
-        return 1;
+        goto cleanup;
     }
 
-    pb_arena arena = {0};
     const pb_parse_result r = pb_parse_patchbay_source(&arena, argv[1], (const char *)src.ptr, src.len);
     if (r.err != PB_PARSE_OK) {
         fprintf(stderr, "%s at byte %zu\n", pb_parse_error_name(r.err), r.err_offset);
-        pb_arena_free(&arena);
-        mb_buf_free(&src);
-        return 1;
+        goto cleanup;
     }
 
     printf("forms len=%zu\n", r.forms.len);
@@ -63,7 +62,9 @@ int main(int argc, char **argv) {
         dump_value(&r.forms.items[i], 0);
     }
 
+    rc = 0;
+cleanup:
     pb_arena_free(&arena);
     mb_buf_free(&src);
-    return 0;
+    return rc;
 }

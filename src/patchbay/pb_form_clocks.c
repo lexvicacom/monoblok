@@ -1,6 +1,4 @@
 // Forms: debounce!, sample!, aggregate!. Special forms: on-silence, dropout.
-// Clocked publish forms and tick handling for delayed/time-bucketed effects.
-// Included by pb_forms.c; keep helpers static and chunk-local.
 
 #include "pb_form_chunk.h"
 

@@ -1001,6 +1001,7 @@ bool pb_program_load_file(pb_program *program, const char *path) {
     mb_buf source = {0};
     if (!mb_read_file(path, &source)) {
         perror(path);
+        mb_buf_free(&source);
         *program = (pb_program){0};
         return false;
     }
@@ -1239,30 +1240,6 @@ bool pb_program_tick_until(pb_program *program, mb_router *router, uint64_t now_
     return ok;
 }
 
-static bool entry_deadline(const pb_eval_state_entry *entry, uint64_t *out_ms) {
-    if (entry->kind == PB_EVAL_STATE_RING && entry->ring_time_window && entry->ring_len > 0) {
-        const size_t idx = entry->ring_start;
-        uint64_t deadline = UINT64_MAX;
-        if (entry->ring_times_ms[idx] <= UINT64_MAX - entry->ring_window_ms) {
-            deadline = entry->ring_times_ms[idx] + entry->ring_window_ms;
-            if (deadline < UINT64_MAX) {
-                deadline += 1;
-            }
-        }
-        *out_ms = deadline;
-        return true;
-    }
-    if (entry->kind == PB_EVAL_STATE_BAR && entry->bar_time_window && entry->bar_count > 0) {
-        *out_ms = entry->bar_window_start_ms + entry->bar_window_ms;
-        return true;
-    }
-    if (entry->kind == PB_EVAL_STATE_CLOCK && entry->clock_armed) {
-        *out_ms = entry->clock_deadline_ms;
-        return true;
-    }
-    return false;
-}
-
 bool pb_program_next_clock_deadline(const pb_program *program, uint64_t *out_ms) {
     bool found = false;
     uint64_t best = 0;
@@ -1273,7 +1250,7 @@ bool pb_program_next_clock_deadline(const pb_program *program, uint64_t *out_ms)
         const pb_rule *rule = &program->rules[rule_idx];
         for (size_t state_idx = 0; state_idx < rule->state.len; state_idx += 1) {
             uint64_t deadline = 0;
-            if (entry_deadline(&rule->state.items[state_idx], &deadline) && (!found || deadline < best)) {
+            if (pb_eval_state_deadline(&rule->state.items[state_idx], &deadline) && (!found || deadline < best)) {
                 best = deadline;
                 found = true;
             }

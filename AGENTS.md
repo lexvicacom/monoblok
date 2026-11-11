@@ -4,7 +4,7 @@ Guidance for coding agents working in this C/libuv monoblok tree.
 
 ## Shape
 
-Monoblok is a compact C17 NATS-like daemon with a patchbay routing DSL,
+Monoblok is a compact C23 NATS-like daemon with a patchbay routing DSL,
 optional LVC, snapshots, JSON helpers, NATS bridge/core import, and
 consumer-only JetStream import through vendored `nats.c`.
 
@@ -249,11 +249,15 @@ ignored. `+OK` is never sent.
 
 ## C style
 
-- Project-owned code currently targets C17. The root CMake config sets
-  `CMAKE_C_STANDARD 17`, requires that standard, and disables compiler
-  extensions. Do not introduce C23 constructs, compiler-specific extensions,
-  non-portable tricks, or exotic language features without asking first and
-  making a serious case for the tradeoff.
+- Project-owned code targets C23 with compiler extensions disabled. Vendored
+  dependencies keep their own language settings. Use features supported by the
+  Linux and macOS build toolchains; keep `<stdbool.h>` and `<stdalign.h>` for
+  older C23-mode compilers.
+- C23 has no standard destructors or `defer`. Use zero-initialized owners and
+  explicit cleanup labels for functions acquiring several resources. Release
+  import workers before draining the libuv loop, and keep callbacks' borrowed
+  state alive until the loop drains. Avoid cleanup attributes and scope macros
+  that hide control flow or assume synchronous destruction.
 - The root `.clang-format` intentionally uses `ColumnLimit: 0` to avoid
   save-on-format churn in generated-looking compact C. Do not run broad
   mechanical formatting unless explicitly requested.

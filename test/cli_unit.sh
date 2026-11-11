@@ -158,4 +158,16 @@ if printf 'sensors.temp|31\n' | "$bin" --soundcheck "$bad_parse" > "$tmp/soundch
 fi
 grep 'soundcheck: parse error' "$tmp/soundcheck-bad-parse.err" >/dev/null
 
+# Failed startup must drain initialized handles without writing a snapshot.
+rc=0
+"$bin" --host invalid --port 0 --patchbay "$valid" --snapshot "$tmp/startup.snapshot" \
+    > "$tmp/startup.out" 2> "$tmp/startup.err" || rc=$?
+test "$rc" -eq 1
+grep 'invalid address' "$tmp/startup.err" >/dev/null
+test ! -e "$tmp/startup.snapshot"
+if grep -E 'ERROR: (AddressSanitizer|LeakSanitizer)|runtime error:' "$tmp/startup.err" >/dev/null; then
+    cat "$tmp/startup.err" >&2
+    exit 1
+fi
+
 printf 'cli tests passed\n'

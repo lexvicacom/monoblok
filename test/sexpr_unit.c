@@ -21,7 +21,7 @@ static size_t arena_retained_cap(const pb_arena *arena) {
 
 static void test_arena_trim(void) {
     pb_arena arena = {0};
-    CHECK(pb_arena_alloc(&arena, 32, _Alignof(double)) != NULL);
+    CHECK(pb_arena_alloc(&arena, 32, alignof(double)) != NULL);
     CHECK(pb_arena_alloc(&arena, 128 * 1024, 1) != NULL);
 
     pb_arena_reset(&arena);
@@ -29,7 +29,7 @@ static void test_arena_trim(void) {
     CHECK(arena.head != NULL);
     CHECK(arena_retained_cap(&arena) <= 4096);
 
-    CHECK(pb_arena_alloc(&arena, 16, _Alignof(double)) != NULL);
+    CHECK(pb_arena_alloc(&arena, 16, alignof(double)) != NULL);
     pb_arena_trim(&arena, 0);
     CHECK(arena.head != NULL);
 

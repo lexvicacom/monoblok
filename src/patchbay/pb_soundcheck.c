@@ -3,7 +3,7 @@
 #include "pb_soundcheck.h"
 
 #include "fs.h"
-#include "pb_eval.h"
+#include "pb_eval_internal.h"
 #include "pb_json.h"
 #include "router.h"
 
@@ -14,6 +14,7 @@
 #include <string.h>
 #include <time.h>
 
+// Output options borrowed by evaluator publish callbacks.
 typedef struct soundcheck_out {
     bool label;
 } soundcheck_out;
@@ -103,36 +104,12 @@ static bool eval_on_form(pb_value form, size_t rule_id, pb_eval_state *state,
     return true;
 }
 
-static bool state_entry_deadline(const pb_eval_state_entry *entry, uint64_t *out_ms) {
-    if (entry->kind == PB_EVAL_STATE_RING && entry->ring_time_window && entry->ring_len > 0) {
-        const size_t idx = entry->ring_start;
-        uint64_t deadline = UINT64_MAX;
-        if (entry->ring_times_ms[idx] <= UINT64_MAX - entry->ring_window_ms) {
-            deadline = entry->ring_times_ms[idx] + entry->ring_window_ms;
-            if (deadline < UINT64_MAX) {
-                deadline += 1;
-            }
-        }
-        *out_ms = deadline;
-        return true;
-    }
-    if (entry->kind == PB_EVAL_STATE_BAR && entry->bar_time_window && entry->bar_count > 0) {
-        *out_ms = entry->bar_window_start_ms + entry->bar_window_ms;
-        return true;
-    }
-    if (entry->kind == PB_EVAL_STATE_CLOCK && entry->clock_armed) {
-        *out_ms = entry->clock_deadline_ms;
-        return true;
-    }
-    return false;
-}
-
 static bool next_deadline(const pb_eval_state *state, uint64_t *out_ms) {
     bool found = false;
     uint64_t best = 0;
     for (size_t i = 0; i < state->len; i += 1) {
         uint64_t deadline = 0;
-        if (state_entry_deadline(&state->items[i], &deadline) && (!found || deadline < best)) {
+        if (pb_eval_state_deadline(&state->items[i], &deadline) && (!found || deadline < best)) {
             best = deadline;
             found = true;
         }
@@ -149,7 +126,7 @@ static bool tick_due_once(pb_eval_state *state, uint64_t now_ms, int64_t wall_ms
     for (size_t i = 0; i < state->len; i += 1) {
         pb_eval_state_entry *entry = &state->items[i];
         uint64_t deadline = 0;
-        if (!state_entry_deadline(entry, &deadline) || deadline > now_ms) {
+        if (!pb_eval_state_deadline(entry, &deadline) || deadline > now_ms) {
             continue;
         }
         pb_eval_ctx ctx = {
@@ -216,28 +193,27 @@ static bool linger(pb_eval_state *state, uint64_t linger_ms, soundcheck_out *out
 }
 
 int pb_soundcheck_run(const char *path, pb_soundcheck_options opts) {
+    int rc = 1;
     mb_buf source = {0};
+    pb_arena parse_arena = {0};
+    pb_eval_state state = {0};
+    char *line = NULL;
     if (!mb_read_file(path, &source)) {
         perror(path);
-        return 1;
+        goto cleanup;
     }
 
-    pb_arena parse_arena = {0};
     const pb_parse_result parsed = pb_parse_patchbay_source(&parse_arena, path, (const char *)source.ptr, source.len);
     if (parsed.err != PB_PARSE_OK) {
         fprintf(stderr, "soundcheck: parse error: %s at byte %zu\n",
                 pb_parse_error_name(parsed.err), parsed.err_offset);
-        pb_arena_free(&parse_arena);
-        mb_buf_free(&source);
-        return 1;
+        goto cleanup;
     }
 
     soundcheck_out out = {.label = opts.label};
-    pb_eval_state state = {0};
-    char *line = NULL;
     size_t cap = 0;
     ssize_t n = 0;
-    int rc = 0;
+    rc = 0;
     while ((n = getline(&line, &cap, stdin)) >= 0) {
         while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
             n -= 1;
@@ -276,6 +252,7 @@ int pb_soundcheck_run(const char *path, pb_soundcheck_options opts) {
         rc = 1;
     }
 
+cleanup:
     free(line);
     pb_eval_state_free(&state);
     pb_arena_free(&parse_arena);

@@ -483,6 +483,7 @@ int main(int argc, char **argv) {
     import_totals import_stats = {0};
 
     mb_server server;
+    int rc = 1;
     const bool client_pubs_enabled = !program.importer.present;
     const bool listen_immediately = program.importer.streams_len == 0;
     if (!mb_server_init(&server, host, (unsigned int)port, program_ptr, lvc_runtime_enabled, snapshot_path,
@@ -494,9 +495,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "info: client pubs: %s\n", client_pubs_enabled ? "enabled" : "disabled (import mode)");
     if (program.bridge.present) {
         if (!mb_bridge_start(&bridge, &program.bridge)) {
-            mb_server_close(&server);
-            pb_program_free(&program);
-            return 1;
+            goto cleanup;
         }
         server.router.bridge_ctx = &bridge;
         server.router.bridge_fn = mb_bridge_publish_with_options;
@@ -510,11 +509,7 @@ int main(int argc, char **argv) {
     }
     if (program.importer.streams_len != 0) {
         if (!mb_js_importer_start(&js_importer, &server.loop, &program.importer, jetstream_ingress, &server)) {
-            mb_js_importer_close(&js_importer);
-            mb_server_close(&server);
-            mb_bridge_close(&bridge);
-            pb_program_free(&program);
-            return 1;
+            goto cleanup;
         }
         uv_update_time(&server.loop);
         const int64_t wall_now = mb_wall_clock_ms();
@@ -528,23 +523,14 @@ int main(int argc, char **argv) {
                                     (pb_program_eval_options){.replaying = true});
         fprintf(stderr, "info: patchbay clock: JetStream replay event-time complete; live timers now use wall-clock deadlines\n");
         if (!mb_server_listen(&server) || !mb_js_importer_start_live(&js_importer)) {
-            mb_js_importer_close(&js_importer);
-            mb_server_close(&server);
-            mb_bridge_close(&bridge);
-            pb_program_free(&program);
-            return 1;
+            goto cleanup;
         }
         fprintf(stderr, "info: jetstream import: connected to NATS (%zu stream source%s, serial catch-up complete)\n",
                 program.importer.streams_len, program.importer.streams_len == 1 ? "" : "s");
     }
     if (program.importer.cores_len != 0) {
         if (!import_group_start(&imports, &server.loop, &program.importer, import_ingress, &server)) {
-            import_group_close(&imports);
-            mb_js_importer_close(&js_importer);
-            mb_server_close(&server);
-            mb_bridge_close(&bridge);
-            pb_program_free(&program);
-            return 1;
+            goto cleanup;
         }
         size_t subject_filters = 0;
         for (size_t i = 0; i < program.importer.cores_len; i += 1) {
@@ -569,18 +555,13 @@ int main(int argc, char **argv) {
     }
     if (http_port != 0 &&
         !mb_http_listen(&server, http_host, (unsigned int)http_port)) {
-        import_group_close(&imports);
-        mb_js_importer_close(&js_importer);
-        mb_server_close(&server);
-        mb_bridge_close(&bridge);
-        pb_program_free(&program);
-        return 1;
+        goto cleanup;
     }
 
-    // block
-    const int rc = mb_server_run(&server);
+    rc = mb_server_run(&server);
 
-    // bye
+cleanup:
+    // Workers stop before the loop drains; callbacks still borrow bridge and program.
     import_group_close(&imports);
     mb_js_importer_close(&js_importer);
     mb_server_close(&server);

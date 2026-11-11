@@ -2,6 +2,7 @@
 #define PB_ARENA_H
 
 #include <stddef.h>
+#include <stdalign.h>
 
 // Arena-owned allocation block; allocations bump `used` and are freed as a group.
 typedef struct pb_arena_block {
@@ -17,8 +18,8 @@ typedef struct pb_arena {
 } pb_arena;
 
 // Returned pointers remain valid until reset/free of the same arena.
-void *pb_arena_alloc(pb_arena *arena, size_t size, size_t align);
-void *pb_arena_memdup(pb_arena *arena, const void *src, size_t len);
+[[nodiscard]] void *pb_arena_alloc(pb_arena *arena, size_t size, size_t align);
+[[nodiscard]] void *pb_arena_memdup(pb_arena *arena, const void *src, size_t len);
 void pb_arena_reset(pb_arena *arena);
 // Free unused blocks above `keep_cap` bytes; call after reset to drop high-water scratch.
 void pb_arena_trim(pb_arena *arena, size_t keep_cap);
