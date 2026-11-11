@@ -2,7 +2,7 @@ description: Install monoblok from a binary, container or source, then run, depl
 
 # Install and run
 
-{lede} monoblok is a single binary for Linux (x64 or ARM64) and macOS on Apple Silicon, and a multi-arch container image. There is no cluster to form and no storage to provision.
+{lede} monoblok ships as a single binary for Linux (x64 or ARM64) or macOS on Apple Silicon, and as a multi-arch container image. There is no cluster to form, and the only disk it uses is an optional [snapshot](state.html#snapshots) file for warm start.
 
 ## Install
 
@@ -12,10 +12,17 @@ description: Install monoblok from a binary, container or source, then run, depl
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
 ```
 
-The [release helper](https://github.com/lexvicacom/monoblok/blob/main/scripts/start.sh) downloads the latest monoblok (macOS/Linux) and extracts it into the current directory. To run the unpacked binary:
+The [release helper](https://github.com/lexvicacom/monoblok/blob/main/scripts/start.sh) downloads the latest monoblok (macOS/Linux) and extracts it into the current directory. To try it out, run the unpacked binary in place:
 
 ```sh
 ./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
+```
+
+To install it on Linux, run the bundled installer and start the [systemd](#systemd) service:
+
+```sh
+sudo bash ./monoblok-*/install-systemd.sh
+sudo systemctl enable --now monoblok
 ```
 
 Release binaries require the OpenSSL 3 runtime libraries. On macOS, install them with `brew install openssl@3` before running monoblok. On Linux, install your distribution's OpenSSL 3 runtime package. Container images include these libraries.

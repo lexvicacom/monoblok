@@ -28,12 +28,15 @@
 <article class="docs-article">
 <p class="kicker">Start</p>
 <h1>Install and run</h1>
-<p class="lede">monoblok is a single binary for Linux (x64 or ARM64) and macOS on Apple Silicon, and a multi-arch container image. There is no cluster to form and no storage to provision.</p>
+<p class="lede">monoblok ships as a single binary for Linux (x64 or ARM64) or macOS on Apple Silicon, and as a multi-arch container image. There is no cluster to form, and the only disk it uses is an optional <a href="state.html#snapshots">snapshot</a> file for warm start.</p>
 <h2 id="install">Install<a class="anchor" href="#install" aria-label="Link to this section">#</a></h2>
 <h3 id="binary">Binary<a class="anchor" href="#binary" aria-label="Link to this section">#</a></h3>
 <figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash</code></pre></figure>
-<p>The <a href="https://github.com/lexvicacom/monoblok/blob/main/scripts/start.sh" target="_blank" rel="noopener noreferrer">release helper</a> downloads the latest monoblok (macOS/Linux) and extracts it into the current directory. To run the unpacked binary:</p>
+<p>The <a href="https://github.com/lexvicacom/monoblok/blob/main/scripts/start.sh" target="_blank" rel="noopener noreferrer">release helper</a> downloads the latest monoblok (macOS/Linux) and extracts it into the current directory. To try it out, run the unpacked binary in place:</p>
 <figure class="code"><figcaption><span>shell</span></figcaption><pre><code>./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn</code></pre></figure>
+<p>To install it on Linux, run the bundled installer and start the <a href="#systemd">systemd</a> service:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>sudo bash ./monoblok-*/install-systemd.sh
+sudo systemctl enable --now monoblok</code></pre></figure>
 <p>Release binaries require the OpenSSL 3 runtime libraries. On macOS, install them with <code>brew install openssl@3</code> before running monoblok. On Linux, install your distribution's OpenSSL 3 runtime package. Container images include these libraries.</p>
 <p>The unpacked directory contains the runnable <a href="examples.html">examples</a>. Run the <code>.sh</code> files.</p>
 <h3 id="container">Container<a class="anchor" href="#container" aria-label="Link to this section">#</a></h3>
