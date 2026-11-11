@@ -1,0 +1,190 @@
+{
+  "source": "https://flash.monoblok.host/",
+  "installer": {
+    "package": "esp-web-tools",
+    "version": "10.4.0"
+  },
+  "files": [
+    {
+      "path": "FIRMWARE_LICENSE.txt",
+      "sha256": "3aba05b353ee8ce4579ac32777897d2a6f5df23178e35f1c49d8dadc144aa93c",
+      "bytes": 1496
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.txt",
+      "sha256": "586127985fb283eff0a516e6a954c67835e29921f68072a81b42dacae1c05b6b",
+      "bytes": 57076
+    },
+    {
+      "path": "captive.png",
+      "sha256": "a1df3101afa8e12c26f0a4f52e7bf9e8085277d6d4bc08525ab3a0afcd05306b",
+      "bytes": 529804
+    },
+    {
+      "path": "firmware/latest/bootloader.bin",
+      "sha256": "53b30091781c9140682bdec701e369b47526889f8300c43560a1dd4666304aee",
+      "bytes": 22560
+    },
+    {
+      "path": "firmware/latest/partition-table.bin",
+      "sha256": "5e71c3c890e04714daa03b21a0d23953a2dadf9fdf15eec02b886f7b6e9f8c81",
+      "bytes": 3072
+    },
+    {
+      "path": "firmware/latest/tinyblok.bin",
+      "sha256": "91596d6bb351d2ce85de23bf91274bde73debc7e8932c6f01fe62d9200a90369",
+      "bytes": 1302240
+    },
+    {
+      "path": "install.png",
+      "sha256": "c1afe577013f6518825950af11f5f34c9d1bab6dd1fa865d068b74a0217e0394",
+      "bytes": 27376
+    },
+    {
+      "path": "manifest.json",
+      "sha256": "13de7738d2397de4186ea1fd88d4c8d5cc10551764ef876d9359616111899611",
+      "bytes": 506
+    },
+    {
+      "path": "port.png",
+      "sha256": "d99583e93488757d2fa7abbec16c7c64e84d25858170a62e7848746bcc266b88",
+      "bytes": 67953
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32-DNPRK0Ay.js",
+      "sha256": "ec2dd4fca5b46a9655b153312d2d1183b2a7fbaec4073955839a4a0432df04d0",
+      "bytes": 3416
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32c2-CQ3ns5Nm.js",
+      "sha256": "46daa5633a1088e35b1185f046e1fa0612f163391f2be9f4f2ba51d24ee1e7ae",
+      "bytes": 2166
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32c3-2tchr35W.js",
+      "sha256": "814afa136c90d2645e9094d0a4ab78dd00ccbd622e5e635c238d86023818d00b",
+      "bytes": 2752
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32c5-CeCSizBL.js",
+      "sha256": "796a1a410b8bfffefa6068b2f78fdd547542d9b8d45d1338bfb1125bb804e395",
+      "bytes": 5319
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32c6-DolpfL0e.js",
+      "sha256": "ac8db86eb42c223fe47d3e74e5d03422eb9a45cc54d31df18a5bb2f38c28048e",
+      "bytes": 2021
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32c61-C8HktcOt.js",
+      "sha256": "c1090dce2ed0ac6909945ec1cdf73ee199821b592e9c748f28c0b029baf1cc60",
+      "bytes": 3065
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32h2-L0n5WuSo.js",
+      "sha256": "e7c3be1c07192fa678a46eea6d480e8c5a73098c1cceaa4097ef3c44052e9594",
+      "bytes": 2425
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32p4-MR0ikcda.js",
+      "sha256": "7648a93d8edcfb3898aad0799c8103c8f855f088b7cb2d3dc1415a14392f3d29",
+      "bytes": 8892
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32s2-w9SUkb7o.js",
+      "sha256": "5b0c5ca43181096c044ce6280fc9cf616e161e566390ba10997c5a6cc97d53c4",
+      "bytes": 5596
+    },
+    {
+      "path": "vendor/esp-web-tools/esp32s3-DQt_R3ZE.js",
+      "sha256": "6a874d98e77dba5602100660c1c0cf1d3b3e6c0bc7b07ce3959d77c6106cef66",
+      "bytes": 3868
+    },
+    {
+      "path": "vendor/esp-web-tools/index-Dt9w-IG1.js",
+      "sha256": "1967f0ef76d492c982284c15c48f5c5022a37137786bc16a1e2d012cf69a2166",
+      "bytes": 6163
+    },
+    {
+      "path": "vendor/esp-web-tools/install-button.js",
+      "sha256": "46128e030adf46ce3876ac28ca2103ee842cc50526e49409e8430e3b4c795f79",
+      "bytes": 2815
+    },
+    {
+      "path": "vendor/esp-web-tools/install-dialog-im156JnI.js",
+      "sha256": "6dcfc30fb4bbf18e19a141c5eb9a694edafc5d4480b45762c221173f47effdb5",
+      "bytes": 310659
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32-BLbsWvxO.js",
+      "sha256": "57581b04181316599594acb500b7a36316e9861f244508fb3c9efe0ccad9f27e",
+      "bytes": 5150
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32c2-wLQhZItC.js",
+      "sha256": "dae20b50bc4b5d54982204fd86f7aace42c8e2a0953938e0fe3516fc544a4cd2",
+      "bytes": 4954
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32c3-DmSvHQKL.js",
+      "sha256": "3f37f501942572fdec58c8cc3550ad558c931a9469b3e65fb88c9b016c1a39a7",
+      "bytes": 5606
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32c5-D1WK4DyB.js",
+      "sha256": "221fa5ffb15094c439ee4dcb53157b3f7cd1dec7383297a6185b1d1b5cd60a9f",
+      "bytes": 7014
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32c6-ZuxjUVr4.js",
+      "sha256": "8c936767aafb82e5e1e61cc965ace311f89182b1335737f1cd3bf2ac7573f014",
+      "bytes": 5502
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32c61-DeKkw9vN.js",
+      "sha256": "7720d8b83e696520fa80e46829b0e5aa6ea88596dee6d448a5b1d8d8fef55715",
+      "bytes": 5502
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32h2-CZ4EIL3w.js",
+      "sha256": "a6724fc931e0bb9153c9b104cfe128b66ab0e71e405c10d529951debb31387d8",
+      "bytes": 5502
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32p4-CpHBYEwI.js",
+      "sha256": "fcf4cb2317525fd942210df8be84064b631ffe208f11aec81b53c8ccb6e359e2",
+      "bytes": 7678
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32p4rc1-DyGqUAeZ.js",
+      "sha256": "d032d82b4188867dd2951b1f02bd5bcf8a7669e16184bbda87b67b757d7ec352",
+      "bytes": 7470
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32s2-CrsP1231.js",
+      "sha256": "61bf5c06933184007050bb9fa6c93d0577e42208b5212cda7e806ac614b0e14a",
+      "bytes": 6374
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_32s3-CiJyd6Fk.js",
+      "sha256": "7c05cb1dc75da8ebca5199e53de474e037f82ce5bf1978330a35354e40e87494",
+      "bytes": 7622
+    },
+    {
+      "path": "vendor/esp-web-tools/stub_flasher_8266-CQFcqJ_a.js",
+      "sha256": "7ca214be908aacff37fd937188f55042c9aeae8af30da7141d634ef68778fc79",
+      "bytes": 12254
+    },
+    {
+      "path": "vendor/esp-web-tools/styles-sT2V1cOw.js",
+      "sha256": "ad32b41ad8507aed4f7241178d9a472457355ecf0282faaa655de3ea37809c9a",
+      "bytes": 59522
+    },
+    {
+      "path": "breadboard.jpg",
+      "source": "https://raw.githubusercontent.com/lexvicacom/tinyblok/main/docs/breadboard.jpg",
+      "sha256": "d09e7f2cf8a1d703d04f07595d968cdaa505cba988f5ac912e9b7911afbc4b5e",
+      "bytes": 633473
+    }
+  ]
+}

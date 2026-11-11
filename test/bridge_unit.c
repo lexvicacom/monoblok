@@ -20,8 +20,7 @@ static void check_cstr(const char *got, const char *want) {
 
 static pb_bridge_config basic_config(pb_slice *servers, size_t servers_len, pb_slice *exports, size_t exports_len) {
     return (pb_bridge_config){
-        .servers = servers,
-        .servers_len = servers_len,
+        .remote = {.servers = servers, .servers_len = servers_len},
         .exports = exports,
         .exports_len = exports_len,
         .present = true,
@@ -237,8 +236,7 @@ static void test_bridge_start_config_failure_leaves_bridge_closed(void) {
     pb_slice servers[] = {pbs("nats://127.0.0.1:4222")};
     pb_slice exports[] = {pbs("telemetry.>")};
     pb_bridge_config config = basic_config(servers, 1, exports, 1);
-    config.has_user = true;
-    config.user = pbs("user");
+    config.remote.user = pbs("user");
     mb_bridge bridge = {0};
 
     CHECK(!mb_bridge_start(&bridge, &config));

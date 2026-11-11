@@ -10,6 +10,9 @@ subscribe 'clocked.sensor.temp.debounced' debounced.txt
 subscribe 'clocked.sensor.temp.sampled'   sampled.txt
 subscribe 'clocked.sensor.temp.avg5s'     avg5s.txt
 subscribe 'clocked.sensor.temp.rate5s'    rate5s.txt
+subscribe 'clocked.heartbeat'             heartbeat.txt
+subscribe 'clocked.all.count'             allcount.txt
+subscribe 'clocked.all.avg5s'             allavg.txt
 settle 0.3
 
 for v in 20 21 22 23 24; do
@@ -28,7 +31,9 @@ note \
     "debounce! emits the final value after 250ms of quiet." \
     "sample! emits the latest value once per second." \
     "aggregate! emits 5-second average/rate values from the clock." \
-    "dropout marks the subject stale after 5 seconds without input, then clears it on recovery."
+    "dropout marks the subject stale after 5 seconds without input, then clears it on recovery." \
+    "every publishes a heartbeat every 2 seconds, with no input at all." \
+    "A re-entrant rule funnels every clocked.sensor.* reading onto clocked.all, where count! and aggregate! keep one shared total and average."
 show "publishes"          _pubs.log
 show "raw input"          raw.txt
 show "stale flag"         stale.txt
@@ -36,3 +41,6 @@ show "debounced latest"   debounced.txt
 show "sampled latest"     sampled.txt
 show "5s average"         avg5s.txt
 show "5s event rate"      rate5s.txt
+show "heartbeat"          heartbeat.txt
+show "funnel count"       allcount.txt
+show "funnel 5s average"  allavg.txt

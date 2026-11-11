@@ -1,5 +1,6 @@
 // Forms: str-concat, contains?, starts-with?, ends-with?, subject-append,
-// subject-token, subject-with, print!, publish!, publish, publish-to!, publish-to.
+// subject-token, subject-with, last, print!, publish!, publish, publish-to!,
+// publish-to, reply!.
 
 #include "pb_form_chunk.h"
 
@@ -202,6 +203,32 @@ static pb_eval_result call_subject_with(pb_eval_ctx *ctx, pb_values args) {
     return ok((pb_value){.kind = PB_STRING, .text = {.ptr = out, .len = total}});
 }
 
+// (last SUBJECT): latest payload published on a literal SUBJECT, as a string
+// copied into the eval arena, or nil when the host has no last-value source or
+// SUBJECT has no value. Wildcards and malformed subjects are invalid subjects.
+static pb_eval_result call_last(pb_eval_ctx *ctx, pb_values args) {
+    if (args.len != 1) {
+        return fail(PB_EVAL_ARITY);
+    }
+    pb_slice subject = {0};
+    if ((args.items[0].kind != PB_STRING && args.items[0].kind != PB_SYMBOL) || !as_string(args.items[0], &subject)) {
+        return fail(PB_EVAL_TYPE);
+    }
+    const mb_slice mb_subject = {.ptr = (const uint8_t *)subject.ptr, .len = subject.len};
+    if (!mb_proto_subject_valid(mb_subject, false)) {
+        return fail(PB_EVAL_INVALID_SUBJECT);
+    }
+    pb_slice found = {0};
+    if (ctx->last == NULL || !ctx->last(ctx->last_ctx, subject, &found)) {
+        return nil();
+    }
+    char *copy = pb_arena_memdup(ctx->arena, found.ptr, found.len);
+    if (copy == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+    return ok((pb_value){.kind = PB_STRING, .text = {.ptr = copy, .len = found.len}});
+}
+
 static void print_slice(FILE *out, pb_slice s) {
     (void)fwrite(s.ptr, 1, s.len, out);
 }
@@ -310,4 +337,25 @@ static pb_eval_result call_publish(pb_eval_ctx *ctx, pb_values args) {
         return fail(PB_EVAL_PUBLISH_FAILED);
     }
     return nil();
+}
+
+// (reply! VALUE) / (reply! :dp N VALUE): publish! to the reply subject of the
+// message being handled. A silent no-op, counted as suppressed, when there is no
+// reply subject or VALUE is nil. Goes through call_publish, so the subject is
+// validated like any other publish.
+static pb_eval_result call_reply(pb_eval_ctx *ctx, pb_values args) {
+    if (args.len != 1 && args.len != 3) {
+        return fail(PB_EVAL_ARITY);
+    }
+    if (ctx->reply_to.len == 0 || args.items[args.len - 1].kind == PB_NIL) {
+        note_suppressed(ctx);
+        return nil();
+    }
+    pb_value *items = pb_arena_alloc(ctx->arena, (args.len + 1) * sizeof items[0], alignof(pb_value));
+    if (items == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+    items[0] = (pb_value){.kind = PB_STRING, .text = ctx->reply_to};
+    memcpy(items + 1, args.items, args.len * sizeof items[0]);
+    return call_publish(ctx, (pb_values){.items = items, .len = args.len + 1});
 }

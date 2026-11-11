@@ -38,6 +38,7 @@ cleanup() {
     [ "${srv_pid:-}" ] && kill "$srv_pid" 2>/dev/null
     [ "${tls_srv_pid:-}" ] && kill "$tls_srv_pid" 2>/dev/null
     [ "${auth_pid:-}" ] && kill "$auth_pid" 2>/dev/null
+    [ "${rr_pid:-}" ] && kill "$rr_pid" 2>/dev/null
     rm -rf "$tmp"
 }
 trap cleanup EXIT INT TERM
@@ -316,5 +317,72 @@ PY
 kill "$auth_pid" 2>/dev/null || true
 wait "$auth_pid" 2>/dev/null || true
 unset auth_pid
+
+# Request-reply (reply!/reply-to) and every over real sockets, raw NATS protocol.
+rr_port="${MONOBLOK_RR_PORT:-42430}"
+rr_patchbay="$tmp/reply.edn"
+rr_srv_out="$tmp/reply-server.out"
+cat > "$rr_patchbay" <<'EOF'
+(lvc ["temp.*"])
+(every :ms 100 (publish! "heartbeat" "beat"))
+(on "q.avg" (reply! (last "temp.kitchen")))
+(on "q.who" (publish! "who" (if reply-to reply-to "none")))
+EOF
+"$bin" "$rr_patchbay" --host 127.0.0.1 --port "$rr_port" --stats-tick-ms 100000 >"$rr_srv_out" 2>&1 &
+rr_pid=$!
+sleep 0.2
+python3 - "$rr_port" <<'PY'
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+
+def recv_until(needle, timeout=5.0):
+    deadline = time.time() + timeout
+    data = recv_until.buf
+    while needle not in data:
+        left = deadline - time.time()
+        if left <= 0:
+            raise RuntimeError(f"timeout waiting for {needle!r}: {data!r}")
+        sock.settimeout(left)
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError(f"eof waiting for {needle!r}: {data!r}")
+        data += chunk
+    recv_until.buf = data
+    return data
+
+recv_until.buf = b""
+recv_until(b"\r\n")  # INFO
+sock.sendall(b"CONNECT {}\r\nSUB _INBOX.1 1\r\nSUB heartbeat 2\r\nSUB who 3\r\nPUB temp.kitchen 4\r\n21.5\r\n")
+sock.sendall(b"PUB q.avg _INBOX.1 0\r\n\r\n")
+recv_until(b"MSG _INBOX.1 1 4\r\n21.5\r\n")
+# Without a reply subject the rule is a silent no-op: next is the PONG, never a reply.
+sock.sendall(b"PUB q.avg 0\r\n\r\nPING\r\n")
+recv_until(b"PONG\r\n")
+if recv_until.buf.count(b"MSG _INBOX.1") != 1:
+    raise RuntimeError(f"unexpected extra reply: {recv_until.buf!r}")
+sock.sendall(b"PUB q.who _INBOX.9 0\r\n\r\n")
+recv_until(b"MSG who 3 8\r\n_INBOX.9\r\n")
+sock.sendall(b"PUB q.who 0\r\n\r\n")
+recv_until(b"MSG who 3 4\r\nnone\r\n")
+# The every rule fires on its own, with no publishes driving the timer.
+beat = b"MSG heartbeat 2 4\r\nbeat\r\n"
+deadline = time.time() + 5
+while recv_until.buf.count(beat) < 2:
+    left = deadline - time.time()
+    if left <= 0:
+        raise RuntimeError(f"every did not fire repeatedly: {recv_until.buf!r}")
+    sock.settimeout(left)
+    chunk = sock.recv(4096)
+    if not chunk:
+        raise RuntimeError("eof waiting for heartbeats")
+    recv_until.buf += chunk
+sock.close()
+PY
+kill "$rr_pid" 2>/dev/null || true
+wait "$rr_pid" 2>/dev/null || true
 
 printf 'smoke passed\n'

@@ -1,9 +1,12 @@
 #include "pb_yaml.h"
 
 #include "array.h"
+#include "pb_eval_internal.h"
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -33,6 +36,7 @@ struct y_node {
     y_node_kind kind;
     size_t offset;
     y_scalar_kind scalar_kind;
+    bool quoted; // text came from a quoted scalar: always a string
     pb_slice text;
     double number;
     bool boolean;
@@ -63,6 +67,7 @@ typedef struct y_parse {
     size_t err_offset;
 } y_parse;
 
+// Temporary growable value list; freed after freezing into the arena.
 typedef struct pb_build_vec {
     pb_value *items;
     size_t len;
@@ -280,6 +285,7 @@ static y_node *scalar_from_slice(y_parse *p, pb_slice raw, size_t offset) {
     if (raw.len >= 2 && ((raw.ptr[0] == '"' && raw.ptr[raw.len - 1] == '"') ||
                          (raw.ptr[0] == '\'' && raw.ptr[raw.len - 1] == '\''))) {
         n->text = (pb_slice){.ptr = raw.ptr + 1, .len = raw.len - 2};
+        n->quoted = true;
         return n;
     }
     if (slice_eq_lit(raw, "null") || slice_eq_lit(raw, "nil") || slice_eq_lit(raw, "~")) {
@@ -562,32 +568,60 @@ static y_pair *map_find(y_node *map, const char *key) {
     return NULL;
 }
 
-static bool pb_vec_push(pb_build_vec *v, pb_value item) {
+// Lowering state: arena for output values plus the first error with its detail message.
+typedef struct y_lower {
+    pb_arena *arena;
+    pb_parse_error err;
+    size_t err_offset;
+    char msg[192];
+} y_lower;
+
+static bool lower_fail(y_lower *L, size_t offset, const char *fmt, ...) {
+    if (L->err == PB_PARSE_OK) {
+        L->err = PB_PARSE_INVALID_YAML;
+        L->err_offset = offset;
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(L->msg, sizeof L->msg, fmt, ap);
+        va_end(ap);
+    }
+    return false;
+}
+
+static bool lower_oom(y_lower *L, size_t offset) {
+    if (L->err == PB_PARSE_OK) {
+        L->err = PB_PARSE_OOM;
+        L->err_offset = offset;
+    }
+    return false;
+}
+
+static bool vec_push(y_lower *L, pb_build_vec *v, pb_value item) {
     if (!mb_array_reserve((void **)&v->items, &v->cap, v->len + 1, sizeof v->items[0], 8)) {
-        return false;
+        return lower_oom(L, 0);
     }
     v->items[v->len] = item;
     v->len += 1;
     return true;
 }
 
-static bool arena_text(pb_arena *arena, pb_value_kind kind, pb_slice text, pb_value *out) {
-    char *owned = pb_arena_memdup(arena, text.ptr, text.len);
+static bool arena_text(y_lower *L, pb_value_kind kind, pb_slice text, pb_value *out) {
+    char *owned = pb_arena_memdup(L->arena, text.ptr, text.len);
     if (owned == NULL) {
-        return false;
+        return lower_oom(L, 0);
     }
     *out = (pb_value){.kind = kind, .text = {.ptr = owned, .len = text.len}};
     return true;
 }
 
-static bool arena_text_lit(pb_arena *arena, pb_value_kind kind, const char *lit, pb_value *out) {
-    return arena_text(arena, kind, (pb_slice){.ptr = lit, .len = strlen(lit)}, out);
+static bool arena_text_lit(y_lower *L, pb_value_kind kind, const char *lit, pb_value *out) {
+    return arena_text(L, kind, (pb_slice){.ptr = lit, .len = strlen(lit)}, out);
 }
 
-static bool freeze_pb_vec(pb_arena *arena, pb_build_vec *v, pb_value_kind kind, pb_value *out) {
-    pb_value *items = pb_arena_alloc(arena, v->len * sizeof items[0], alignof(pb_value));
+static bool freeze_pb_vec(y_lower *L, pb_build_vec *v, pb_value_kind kind, pb_value *out) {
+    pb_value *items = pb_arena_alloc(L->arena, v->len * sizeof items[0], alignof(pb_value));
     if (items == NULL && v->len != 0) {
-        return false;
+        return lower_oom(L, 0);
     }
     if (v->len != 0) {
         memcpy(items, v->items, v->len * sizeof items[0]);
@@ -596,15 +630,31 @@ static bool freeze_pb_vec(pb_arena *arena, pb_build_vec *v, pb_value_kind kind, 
     return true;
 }
 
-static bool scalar_is_bound(pb_slice s) {
-    return slice_eq_lit(s, "subject") ||
-           slice_eq_lit(s, "payload") ||
-           slice_eq_lit(s, "payload-float") ||
-           slice_eq_lit(s, "payload-int") ||
-           slice_eq_lit(s, "replaying?");
+// Frees the scratch vector and reports whether lowering is still healthy.
+static bool vec_done(pb_build_vec *v, bool ok) {
+    free(v->items);
+    v->items = NULL;
+    return ok;
 }
 
-static bool lower_scalar(pb_arena *arena, y_node *n, bool expr, pb_value *out) {
+// Keyword option words allowed unquoted in YAML rule bodies; they lower to :word.
+// Keep in sync with the keyword comparisons in the pb_form_*.c implementations.
+static const char *const OPTION_WORDS[] = {
+    "ms", "dp", "subject", "lost", "found", "leaf", "date", "hour", "minute",
+    "avg", "sum", "min", "max", "count", "rate", "reentrant",
+};
+
+static bool is_option_word(pb_slice s) {
+    for (size_t i = 0; i < sizeof OPTION_WORDS / sizeof OPTION_WORDS[0]; i += 1) {
+        if (slice_eq_lit(s, OPTION_WORDS[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Config positions (lvc, export, import): unquoted words are strings, ":word" is a keyword.
+static bool lower_config_scalar(y_lower *L, y_node *n, pb_value *out) {
     if (n->scalar_kind == Y_NULL) {
         *out = (pb_value){.kind = PB_NIL};
         return true;
@@ -617,390 +667,414 @@ static bool lower_scalar(pb_arena *arena, y_node *n, bool expr, pb_value *out) {
         *out = (pb_value){.kind = PB_NUMBER, .number = n->number};
         return true;
     }
-    if (n->text.len > 1 && n->text.ptr[0] == ':') {
-        return arena_text(arena, PB_KEYWORD, (pb_slice){.ptr = n->text.ptr + 1, .len = n->text.len - 1}, out);
+    if (!n->quoted && n->text.len > 1 && n->text.ptr[0] == ':') {
+        return arena_text(L, PB_KEYWORD, (pb_slice){.ptr = n->text.ptr + 1, .len = n->text.len - 1}, out);
     }
-    return arena_text(arena, expr && scalar_is_bound(n->text) ? PB_SYMBOL : PB_STRING, n->text, out);
+    return arena_text(L, PB_STRING, n->text, out);
 }
 
-static bool lower_expr(pb_arena *arena, y_node *n, pb_value *out);
-static bool lower_body(pb_arena *arena, y_node *n, pb_value *out);
+static bool word_is_binding(pb_slice w) {
+    return pb_binding_lookup(w) != 0;
+}
 
-static bool lower_call(pb_arena *arena, y_node *n, pb_value *out) {
-    if (n->kind != Y_LIST || n->len == 0 || n->items[0]->kind != Y_SCALAR || n->items[0]->scalar_kind != Y_TEXT) {
-        return false;
+// Rule-body scalar: number, bool, null, quoted string, $binding, or option word.
+static bool lower_expr_scalar(y_lower *L, y_node *n, pb_value *out) {
+    if (n->scalar_kind != Y_TEXT) {
+        return lower_config_scalar(L, n, out);
+    }
+    if (n->quoted) {
+        return arena_text(L, PB_STRING, n->text, out);
+    }
+    const pb_slice w = n->text;
+    if (w.len > 0 && w.ptr[0] == '$') {
+        const pb_slice name = {.ptr = w.ptr + 1, .len = w.len - 1};
+        if (word_is_binding(name)) {
+            return arena_text(L, PB_SYMBOL, name, out);
+        }
+        char list[160] = "";
+        size_t used = 0;
+        for (size_t i = 0; pb_binding_name(i) != NULL && used < sizeof list; i += 1) {
+            used += (size_t)snprintf(list + used, sizeof list - used, "%s$%s", i == 0 ? "" : ", ", pb_binding_name(i));
+        }
+        return lower_fail(L, n->offset, "unknown binding $%.*s (known: %s)", (int)name.len, name.ptr, list);
+    }
+    if (w.len > 1 && w.ptr[0] == ':') {
+        return lower_fail(L, n->offset, "keyword \"%.*s\" is not valid in YAML; write the option without the colon: %.*s (quote it to publish the text)",
+                          (int)w.len, w.ptr, (int)w.len - 1, w.ptr + 1);
+    }
+    if (is_option_word(w)) {
+        return arena_text(L, PB_KEYWORD, w, out);
+    }
+    if (word_is_binding(w)) {
+        return lower_fail(L, n->offset, "unquoted word \"%.*s\" in a rule body; use $%.*s for the bound value, or quote it for the text",
+                          (int)w.len, w.ptr, (int)w.len, w.ptr);
+    }
+    return lower_fail(L, n->offset, "unquoted word \"%.*s\" in a rule body; quote it to use it as text (\"%.*s\"), or fix the typo if it was meant as an option",
+                      (int)w.len, w.ptr, (int)w.len, w.ptr);
+}
+
+static bool lower_expr(y_lower *L, y_node *n, pb_value *out);
+static bool lower_body_map(y_lower *L, y_node *n, const char *rule_key, pb_value *out);
+
+static bool lower_vector(y_lower *L, y_node *n, pb_value *out) {
+    pb_build_vec v = {0};
+    for (size_t i = 1; i < n->len; i += 1) {
+        pb_value item = {0};
+        if (!lower_expr(L, n->items[i], &item) || !vec_push(L, &v, item)) {
+            return vec_done(&v, false);
+        }
+    }
+    const bool ok = freeze_pb_vec(L, &v, PB_VECTOR, out);
+    return vec_done(&v, ok);
+}
+
+static bool lower_call(y_lower *L, y_node *n, pb_value *out) {
+    if (n->len == 0) {
+        return lower_fail(L, n->offset, "empty list; the first item must be an operator name");
+    }
+    y_node *h = n->items[0];
+    if (h->kind != Y_SCALAR || h->scalar_kind != Y_TEXT) {
+        return lower_fail(L, h->offset, "the first item of a list must be an operator name (or the word vector)");
+    }
+    if (!h->quoted) {
+        const pb_slice w = h->text;
+        if (w.ptr[0] == '$') {
+            return lower_fail(L, h->offset, "a bound value cannot be the first item of a list; the first item is the operator");
+        }
+        if (!isalpha((unsigned char)w.ptr[0])) {
+            return lower_fail(L, h->offset, "operator \"%.*s\" must be quoted in YAML: [\"%.*s\", ...]", (int)w.len, w.ptr, (int)w.len, w.ptr);
+        }
+    }
+    if (slice_eq_lit(h->text, "vector")) {
+        return lower_vector(L, n, out);
     }
     pb_build_vec v = {0};
     pb_value head = {0};
-    if (!arena_text(arena, PB_SYMBOL, n->items[0]->text, &head) || !pb_vec_push(&v, head)) {
-        free(v.items);
-        return false;
+    if (!arena_text(L, PB_SYMBOL, h->text, &head) || !vec_push(L, &v, head)) {
+        return vec_done(&v, false);
     }
     for (size_t i = 1; i < n->len; i += 1) {
         pb_value item = {0};
-        if (!lower_expr(arena, n->items[i], &item) || !pb_vec_push(&v, item)) {
-            free(v.items);
-            return false;
+        // A bare `subject` is the :subject option, which only count! takes right
+        // after the operator. As the last item an option has no value. The usual
+        // mistake is [publish!, subject, ...] when $subject was meant.
+        y_node *arg = n->items[i];
+        if (arg->kind == Y_SCALAR && arg->scalar_kind == Y_TEXT && !arg->quoted && slice_eq_lit(arg->text, "subject") &&
+            (i == n->len - 1 || (i == 1 && !slice_eq_lit(h->text, "count!")))) {
+            vec_done(&v, false);
+            return lower_fail(L, arg->offset, "bare \"subject\" here is the :subject option, which has no value in this position; use $subject for the bound value, or quote it for the text");
+        }
+        if (!lower_expr(L, n->items[i], &item) || !vec_push(L, &v, item)) {
+            return vec_done(&v, false);
         }
     }
-    const bool ok = freeze_pb_vec(arena, &v, PB_LIST, out);
-    free(v.items);
-    return ok;
+    const bool ok = freeze_pb_vec(L, &v, PB_LIST, out);
+    return vec_done(&v, ok);
 }
 
-static bool lower_thread(pb_arena *arena, y_node *n, pb_value *out) {
-    y_node *from = NULL;
-    y_node *steps = NULL;
-    if (n->kind == Y_LIST) {
-        if (n->len == 0) {
-            return false;
-        }
-        from = n->items[0];
-    } else if (n->kind == Y_MAP) {
-        y_pair *from_pair = map_find(n, "from");
-        y_pair *steps_pair = map_find(n, "steps");
-        if (from_pair == NULL || steps_pair == NULL || steps_pair->value->kind != Y_LIST) {
-            return false;
-        }
-        from = from_pair->value;
-        steps = steps_pair->value;
-    } else {
-        return false;
+static bool lower_thread(y_lower *L, y_node *n, pb_value *out) {
+    if (n->kind == Y_MAP) {
+        return lower_fail(L, n->offset, "thread: the from/steps map form was removed; write a list whose first item is the start value and the rest are steps");
     }
-
+    if (n->kind != Y_LIST || n->len == 0) {
+        return lower_fail(L, n->offset, "thread must be a non-empty list: the start value, then the steps");
+    }
     pb_build_vec v = {0};
     pb_value head = {0};
-    pb_value seed = {0};
-    if (!arena_text_lit(arena, PB_SYMBOL, "->", &head) ||
-        !pb_vec_push(&v, head) ||
-        !lower_expr(arena, from, &seed) ||
-        !pb_vec_push(&v, seed)) {
-        free(v.items);
-        return false;
+    if (!arena_text_lit(L, PB_SYMBOL, "->", &head) || !vec_push(L, &v, head)) {
+        return vec_done(&v, false);
     }
-    if (steps == NULL) {
-        steps = n;
-        for (size_t i = 1; i < steps->len; i += 1) {
-            pb_value step = {0};
-            if (!lower_expr(arena, steps->items[i], &step) || !pb_vec_push(&v, step)) {
-                free(v.items);
-                return false;
-            }
-        }
-    } else {
-        for (size_t i = 0; i < steps->len; i += 1) {
-            pb_value step = {0};
-            if (!lower_expr(arena, steps->items[i], &step) || !pb_vec_push(&v, step)) {
-                free(v.items);
-                return false;
-            }
+    for (size_t i = 0; i < n->len; i += 1) {
+        pb_value item = {0};
+        if (!lower_expr(L, n->items[i], &item) || !vec_push(L, &v, item)) {
+            return vec_done(&v, false);
         }
     }
-    const bool ok = freeze_pb_vec(arena, &v, PB_LIST, out);
-    free(v.items);
-    return ok;
+    const bool ok = freeze_pb_vec(L, &v, PB_LIST, out);
+    return vec_done(&v, ok);
 }
 
-static bool lower_when(pb_arena *arena, y_node *n, pb_value *out) {
-    if (n->kind != Y_MAP) {
+static bool lower_do(y_lower *L, y_node *n, pb_value *out) {
+    if (n->kind != Y_LIST || n->len == 0) {
+        return lower_fail(L, n->offset, "do must be a non-empty list of bodies");
+    }
+    pb_build_vec v = {0};
+    pb_value head = {0};
+    if (!arena_text_lit(L, PB_SYMBOL, "do", &head) || !vec_push(L, &v, head)) {
+        return vec_done(&v, false);
+    }
+    for (size_t i = 0; i < n->len; i += 1) {
+        pb_value item = {0};
+        const bool lowered = n->items[i]->kind == Y_MAP ? lower_body_map(L, n->items[i], NULL, &item)
+                                                         : lower_expr(L, n->items[i], &item);
+        if (!lowered || !vec_push(L, &v, item)) {
+            return vec_done(&v, false);
+        }
+    }
+    const bool ok = freeze_pb_vec(L, &v, PB_LIST, out);
+    return vec_done(&v, ok);
+}
+
+// Expression position: scalars and flow arrays only; maps are bodies and live in body positions.
+static bool lower_expr(y_lower *L, y_node *n, pb_value *out) {
+    if (n->kind == Y_SCALAR) {
+        return lower_expr_scalar(L, n, out);
+    }
+    if (n->kind == Y_LIST) {
+        return lower_call(L, n, out);
+    }
+    return lower_fail(L, n->offset, "a map is not an expression; use a list such as [operator, args...]");
+}
+
+// A body map: optional `when` guard plus exactly one of thread, do, form. At rule level
+// the caller owns reentrant and rule_key ("sub" for on, "ms" for every); nested bodies pass NULL.
+static bool lower_body_map(y_lower *L, y_node *n, const char *rule_key, pb_value *out) {
+    y_pair *when = NULL;
+    y_pair *body = NULL;
+    size_t bodies = 0;
+    for (size_t i = 0; i < n->pair_len; i += 1) {
+        y_pair *p = &n->pairs[i];
+        if (slice_eq_lit(p->key, "when")) {
+            when = p;
+        } else if (slice_eq_lit(p->key, "thread") || slice_eq_lit(p->key, "do") || slice_eq_lit(p->key, "form")) {
+            body = p;
+            bodies += 1;
+        } else if (slice_eq_lit(p->key, "body")) {
+            return lower_fail(L, p->value->offset, "the body key was removed; use form");
+        } else if (rule_key != NULL && (slice_eq_lit(p->key, rule_key) || slice_eq_lit(p->key, "reentrant"))) {
+            continue;
+        } else {
+            return lower_fail(L, p->value->offset, "unknown key \"%.*s\" in a rule body (expected when, thread, do or form)", (int)p->key.len, p->key.ptr);
+        }
+    }
+    if (when != NULL && when->value->kind == Y_MAP) {
+        return lower_fail(L, when->value->offset, "the when: {test, then} map form was removed; write `when: EXPR` beside one body key (thread, do or form)");
+    }
+    if (bodies != 1) {
+        return lower_fail(L, n->offset, "expected exactly one of thread, do or form (found %zu)", bodies);
+    }
+    pb_value inner = {0};
+    bool ok;
+    if (slice_eq_lit(body->key, "thread")) {
+        ok = lower_thread(L, body->value, &inner);
+    } else if (slice_eq_lit(body->key, "do")) {
+        ok = lower_do(L, body->value, &inner);
+    } else {
+        ok = lower_expr(L, body->value, &inner);
+    }
+    if (!ok) {
         return false;
     }
-    y_pair *test_pair = map_find(n, "test");
-    y_pair *then_pair = map_find(n, "then");
-    if (test_pair == NULL || then_pair == NULL) {
-        return false;
+    if (when == NULL) {
+        *out = inner;
+        return true;
     }
     pb_build_vec v = {0};
     pb_value head = {0};
     pb_value test = {0};
-    pb_value then_body = {0};
-    if (!arena_text_lit(arena, PB_SYMBOL, "when", &head) ||
-        !pb_vec_push(&v, head) ||
-        !lower_expr(arena, test_pair->value, &test) ||
-        !pb_vec_push(&v, test) ||
-        !lower_body(arena, then_pair->value, &then_body) ||
-        !pb_vec_push(&v, then_body)) {
-        free(v.items);
-        return false;
+    if (!arena_text_lit(L, PB_SYMBOL, "when", &head) || !vec_push(L, &v, head) ||
+        !lower_expr(L, when->value, &test) || !vec_push(L, &v, test) || !vec_push(L, &v, inner)) {
+        return vec_done(&v, false);
     }
-    const bool ok = freeze_pb_vec(arena, &v, PB_LIST, out);
-    free(v.items);
-    return ok;
+    ok = freeze_pb_vec(L, &v, PB_LIST, out);
+    return vec_done(&v, ok);
 }
 
-static bool lower_do(pb_arena *arena, y_node *n, pb_value *out) {
-    if (n->kind != Y_LIST) {
-        return false;
-    }
-    pb_build_vec v = {0};
-    pb_value head = {0};
-    if (!arena_text_lit(arena, PB_SYMBOL, "do", &head) || !pb_vec_push(&v, head)) {
-        free(v.items);
-        return false;
-    }
-    for (size_t i = 0; i < n->len; i += 1) {
-        pb_value item = {0};
-        if (!lower_body(arena, n->items[i], &item) || !pb_vec_push(&v, item)) {
-            free(v.items);
-            return false;
-        }
-    }
-    const bool ok = freeze_pb_vec(arena, &v, PB_LIST, out);
-    free(v.items);
-    return ok;
-}
-
-static bool lower_body(pb_arena *arena, y_node *n, pb_value *out) {
-    if (n->kind == Y_MAP) {
-        y_pair *p = NULL;
-        if ((p = map_find(n, "thread")) != NULL) {
-            return lower_thread(arena, p->value, out);
-        }
-        if ((p = map_find(n, "when")) != NULL) {
-            return lower_when(arena, p->value, out);
-        }
-        if ((p = map_find(n, "do")) != NULL) {
-            return lower_do(arena, p->value, out);
-        }
-        if ((p = map_find(n, "form")) != NULL || (p = map_find(n, "body")) != NULL) {
-            return lower_expr(arena, p->value, out);
-        }
-        return false;
-    }
-    return lower_expr(arena, n, out);
-}
-
-static bool lower_expr(pb_arena *arena, y_node *n, pb_value *out) {
-    if (n->kind == Y_SCALAR) {
-        return lower_scalar(arena, n, true, out);
-    }
-    if (n->kind == Y_LIST) {
-        return lower_call(arena, n, out);
-    }
-    return lower_body(arena, n, out);
-}
-
-static bool lower_env_config_value(pb_arena *arena, y_node *n, pb_value *out) {
-    if (n->kind != Y_MAP || n->pair_len != 1) {
-        return false;
-    }
+static bool lower_env_config_value(y_lower *L, y_node *n, pb_value *out) {
     y_pair *p = map_find(n, "env");
-    if (p == NULL || p->value->kind != Y_SCALAR || p->value->scalar_kind != Y_TEXT || p->value->text.len == 0) {
-        return false;
+    if (n->pair_len != 1 || p == NULL || p->value->kind != Y_SCALAR || p->value->scalar_kind != Y_TEXT || p->value->text.len == 0) {
+        return lower_fail(L, n->offset, "env must be a single `env: NAME` entry");
     }
-
     pb_build_vec form = {0};
     pb_value head = {0};
     pb_value name = {0};
-    if (!arena_text_lit(arena, PB_SYMBOL, "env", &head) ||
-        !arena_text(arena, PB_STRING, p->value->text, &name) ||
-        !pb_vec_push(&form, head) ||
-        !pb_vec_push(&form, name)) {
-        free(form.items);
-        return false;
+    if (!arena_text_lit(L, PB_SYMBOL, "env", &head) ||
+        !arena_text(L, PB_STRING, p->value->text, &name) ||
+        !vec_push(L, &form, head) ||
+        !vec_push(L, &form, name)) {
+        return vec_done(&form, false);
     }
-    const bool ok = freeze_pb_vec(arena, &form, PB_LIST, out);
-    free(form.items);
-    return ok;
+    const bool ok = freeze_pb_vec(L, &form, PB_LIST, out);
+    return vec_done(&form, ok);
 }
 
-static bool lower_config_value(pb_arena *arena, y_node *n, pb_value *out) {
+static bool lower_config_value(y_lower *L, y_node *n, pb_value *out) {
     if (n->kind == Y_MAP) {
         if (n->pair_len == 1 && map_find(n, "env") != NULL) {
-            return lower_env_config_value(arena, n, out);
+            return lower_env_config_value(L, n, out);
         }
         pb_build_vec v = {0};
         for (size_t i = 0; i < n->pair_len; i += 1) {
             pb_value key = {0};
             pb_value value = {0};
-            if (!arena_text(arena, PB_KEYWORD, n->pairs[i].key, &key) ||
-                !lower_config_value(arena, n->pairs[i].value, &value) ||
-                !pb_vec_push(&v, key) ||
-                !pb_vec_push(&v, value)) {
-                free(v.items);
-                return false;
+            if (!arena_text(L, PB_KEYWORD, n->pairs[i].key, &key) ||
+                !lower_config_value(L, n->pairs[i].value, &value) ||
+                !vec_push(L, &v, key) ||
+                !vec_push(L, &v, value)) {
+                return vec_done(&v, false);
             }
         }
-        const bool ok = freeze_pb_vec(arena, &v, PB_VECTOR, out);
-        free(v.items);
-        return ok;
+        const bool ok = freeze_pb_vec(L, &v, PB_VECTOR, out);
+        return vec_done(&v, ok);
     }
     if (n->kind == Y_LIST) {
         pb_build_vec v = {0};
         for (size_t i = 0; i < n->len; i += 1) {
             pb_value item = {0};
-            if (!lower_config_value(arena, n->items[i], &item) || !pb_vec_push(&v, item)) {
-                free(v.items);
-                return false;
+            if (!lower_config_value(L, n->items[i], &item) || !vec_push(L, &v, item)) {
+                return vec_done(&v, false);
             }
         }
-        const bool ok = freeze_pb_vec(arena, &v, PB_VECTOR, out);
-        free(v.items);
-        return ok;
+        const bool ok = freeze_pb_vec(L, &v, PB_VECTOR, out);
+        return vec_done(&v, ok);
     }
-    if (n->kind != Y_SCALAR) {
-        return false;
-    }
-    return lower_scalar(arena, n, false, out);
+    return lower_config_scalar(L, n, out);
 }
 
-static bool lower_lvc(pb_arena *arena, y_node *n, pb_value *out) {
+static bool lower_lvc(y_lower *L, y_node *n, pb_value *out) {
     pb_build_vec form = {0};
     pb_value head = {0};
-    if (!arena_text_lit(arena, PB_SYMBOL, "lvc", &head) || !pb_vec_push(&form, head)) {
-        free(form.items);
-        return false;
+    pb_value arg = {0};
+    if (!arena_text_lit(L, PB_SYMBOL, "lvc", &head) || !vec_push(L, &form, head) ||
+        !lower_config_value(L, n, &arg) || !vec_push(L, &form, arg)) {
+        return vec_done(&form, false);
     }
-    if (n->kind == Y_LIST) {
-        pb_value vec = {0};
-        if (!lower_config_value(arena, n, &vec) || !pb_vec_push(&form, vec)) {
-            free(form.items);
-            return false;
-        }
-    } else {
-        pb_value one = {0};
-        if (!lower_config_value(arena, n, &one) || !pb_vec_push(&form, one)) {
-            free(form.items);
-            return false;
-        }
-    }
-    const bool ok = freeze_pb_vec(arena, &form, PB_LIST, out);
-    free(form.items);
-    return ok;
+    const bool ok = freeze_pb_vec(L, &form, PB_LIST, out);
+    return vec_done(&form, ok);
 }
 
-static bool lower_config_form(pb_arena *arena, const char *name, y_node *n, pb_value *out) {
+static bool lower_config_form(y_lower *L, const char *name, y_node *n, pb_value *out) {
     if (n->kind != Y_MAP) {
-        return false;
+        return lower_fail(L, n->offset, "%s must be a map", name);
     }
     pb_build_vec form = {0};
     pb_value head = {0};
-    if (!arena_text_lit(arena, PB_SYMBOL, name, &head) || !pb_vec_push(&form, head)) {
-        free(form.items);
-        return false;
+    if (!arena_text_lit(L, PB_SYMBOL, name, &head) || !vec_push(L, &form, head)) {
+        return vec_done(&form, false);
     }
     for (size_t i = 0; i < n->pair_len; i += 1) {
         pb_value key = {0};
         pb_value value = {0};
-        if (!arena_text(arena, PB_KEYWORD, n->pairs[i].key, &key) ||
-            !lower_config_value(arena, n->pairs[i].value, &value) ||
-            !pb_vec_push(&form, key) ||
-            !pb_vec_push(&form, value)) {
-            free(form.items);
-            return false;
+        if (!arena_text(L, PB_KEYWORD, n->pairs[i].key, &key) ||
+            !lower_config_value(L, n->pairs[i].value, &value) ||
+            !vec_push(L, &form, key) ||
+            !vec_push(L, &form, value)) {
+            return vec_done(&form, false);
         }
     }
-    const bool ok = freeze_pb_vec(arena, &form, PB_LIST, out);
-    free(form.items);
-    return ok;
+    const bool ok = freeze_pb_vec(L, &form, PB_LIST, out);
+    return vec_done(&form, ok);
 }
 
-static bool lower_on_rule(pb_arena *arena, y_node *n, pb_value *out) {
+// Lowers one `on` item to (on "SUB" [:reentrant B] BODY), or, with every set, one
+// `every` item to (every :ms N [:reentrant B] BODY).
+static bool lower_rule(y_lower *L, y_node *n, bool every, pb_value *out) {
     if (n->kind != Y_MAP) {
-        return false;
+        return lower_fail(L, n->offset, "each %s item must be a map", every ? "every" : "on");
     }
-    y_pair *sub = map_find(n, "sub");
-    if (sub == NULL || sub->value->kind != Y_SCALAR || sub->value->scalar_kind != Y_TEXT) {
-        return false;
-    }
-
     pb_build_vec form = {0};
     pb_value head = {0};
-    pb_value filter = {0};
-    if (!arena_text_lit(arena, PB_SYMBOL, "on", &head) ||
-        !pb_vec_push(&form, head) ||
-        !arena_text(arena, PB_STRING, sub->value->text, &filter) ||
-        !pb_vec_push(&form, filter)) {
-        free(form.items);
-        return false;
+    if (!arena_text_lit(L, PB_SYMBOL, every ? "every" : "on", &head) || !vec_push(L, &form, head)) {
+        return vec_done(&form, false);
+    }
+    if (every) {
+        y_pair *ms = map_find(n, "ms");
+        pb_value key = {0};
+        if (ms == NULL || ms->value->kind != Y_SCALAR || ms->value->scalar_kind != Y_NUMBER) {
+            vec_done(&form, false);
+            return lower_fail(L, ms != NULL ? ms->value->offset : n->offset, "every item needs `ms: NUMBER`");
+        }
+        if (!arena_text_lit(L, PB_KEYWORD, "ms", &key) || !vec_push(L, &form, key) ||
+            !vec_push(L, &form, (pb_value){.kind = PB_NUMBER, .number = ms->value->number})) {
+            return vec_done(&form, false);
+        }
+    } else {
+        y_pair *sub = map_find(n, "sub");
+        pb_value filter = {0};
+        if (sub == NULL || sub->value->kind != Y_SCALAR || sub->value->scalar_kind != Y_TEXT) {
+            vec_done(&form, false);
+            return lower_fail(L, sub != NULL ? sub->value->offset : n->offset, "on item needs `sub: \"SUBJECT\"`");
+        }
+        if (!arena_text(L, PB_STRING, sub->value->text, &filter) || !vec_push(L, &form, filter)) {
+            return vec_done(&form, false);
+        }
     }
 
     y_pair *reentrant = map_find(n, "reentrant");
     if (reentrant != NULL) {
         if (reentrant->value->kind != Y_SCALAR || reentrant->value->scalar_kind != Y_BOOL) {
-            free(form.items);
-            return false;
+            vec_done(&form, false);
+            return lower_fail(L, reentrant->value->offset, "reentrant must be true or false");
         }
         pb_value key = {0};
         pb_value value = {.kind = PB_BOOL, .boolean = reentrant->value->boolean};
-        if (!arena_text_lit(arena, PB_KEYWORD, "reentrant", &key) ||
-            !pb_vec_push(&form, key) ||
-            !pb_vec_push(&form, value)) {
-            free(form.items);
-            return false;
+        if (!arena_text_lit(L, PB_KEYWORD, "reentrant", &key) ||
+            !vec_push(L, &form, key) ||
+            !vec_push(L, &form, value)) {
+            return vec_done(&form, false);
         }
     }
 
     pb_value body = {0};
-    if (!lower_body(arena, n, &body) || !pb_vec_push(&form, body)) {
-        free(form.items);
-        return false;
+    if (!lower_body_map(L, n, every ? "ms" : "sub", &body) || !vec_push(L, &form, body)) {
+        return vec_done(&form, false);
     }
-    const bool ok = freeze_pb_vec(arena, &form, PB_LIST, out);
-    free(form.items);
-    return ok;
+    const bool ok = freeze_pb_vec(L, &form, PB_LIST, out);
+    return vec_done(&form, ok);
 }
 
-static bool lower_on(pb_arena *arena, y_node *n, pb_build_vec *forms) {
+static bool lower_rules(y_lower *L, y_node *n, bool every, pb_build_vec *forms) {
     if (n->kind != Y_LIST) {
-        return false;
+        return lower_fail(L, n->offset, "%s must be a list of rule maps", every ? "every" : "on");
     }
     for (size_t i = 0; i < n->len; i += 1) {
         pb_value form = {0};
-        if (!lower_on_rule(arena, n->items[i], &form) || !pb_vec_push(forms, form)) {
+        if (!lower_rule(L, n->items[i], every, &form) || !vec_push(L, forms, form)) {
             return false;
         }
     }
     return true;
 }
 
-static bool lower_root(pb_arena *arena, y_node *root, pb_values *out) {
-    if (root->kind != Y_MAP) {
-        return false;
+static bool lower_root(y_lower *L, y_node *root, pb_values *out) {
+    if (root == NULL || root->kind != Y_MAP) {
+        return lower_fail(L, root != NULL ? root->offset : 0, "the root must be a map with lvc, on, every, export or import");
     }
     pb_build_vec forms = {0};
     for (size_t i = 0; i < root->pair_len; i += 1) {
         y_pair *p = &root->pairs[i];
-        if (slice_eq_lit(p->key, "on")) {
-            if (!lower_on(arena, p->value, &forms)) {
-                free(forms.items);
-                return false;
+        if (slice_eq_lit(p->key, "on") || slice_eq_lit(p->key, "every")) {
+            if (!lower_rules(L, p->value, slice_eq_lit(p->key, "every"), &forms)) {
+                return vec_done(&forms, false);
             }
         } else if (slice_eq_lit(p->key, "lvc")) {
             pb_value form = {0};
-            if (!lower_lvc(arena, p->value, &form) || !pb_vec_push(&forms, form)) {
-                free(forms.items);
-                return false;
+            if (!lower_lvc(L, p->value, &form) || !vec_push(L, &forms, form)) {
+                return vec_done(&forms, false);
             }
         } else if (slice_eq_lit(p->key, "export") || slice_eq_lit(p->key, "bridge") || slice_eq_lit(p->key, "import")) {
             char name[16];
-            if (p->key.len >= sizeof name) {
-                free(forms.items);
-                return false;
-            }
             memcpy(name, p->key.ptr, p->key.len);
             name[p->key.len] = '\0';
             pb_value form = {0};
-            if (!lower_config_form(arena, name, p->value, &form) || !pb_vec_push(&forms, form)) {
-                free(forms.items);
-                return false;
+            if (!lower_config_form(L, name, p->value, &form) || !vec_push(L, &forms, form)) {
+                return vec_done(&forms, false);
             }
         } else {
-            free(forms.items);
-            return false;
+            vec_done(&forms, false);
+            return lower_fail(L, p->value->offset, "unknown top-level key \"%.*s\" (expected lvc, on, every, export or import)", (int)p->key.len, p->key.ptr);
         }
     }
-    pb_value *items = pb_arena_alloc(arena, forms.len * sizeof items[0], alignof(pb_value));
+    pb_value *items = pb_arena_alloc(L->arena, forms.len * sizeof items[0], alignof(pb_value));
     if (items == NULL && forms.len != 0) {
-        free(forms.items);
-        return false;
+        vec_done(&forms, false);
+        return lower_oom(L, 0);
     }
     if (forms.len != 0) {
         memcpy(items, forms.items, forms.len * sizeof items[0]);
     }
     *out = (pb_values){.items = items, .len = forms.len};
-    free(forms.items);
-    return true;
+    return vec_done(&forms, true);
 }
 
 pb_parse_result pb_parse_yaml_patchbay(pb_arena *arena, const char *src, size_t len) {
@@ -1018,14 +1092,17 @@ pb_parse_result pb_parse_yaml_patchbay(pb_arena *arena, const char *src, size_t 
         set_err(&p, p.lines[p.pos].offset);
     }
     pb_values forms = {0};
-    if (p.err == PB_PARSE_OK && !lower_root(arena, root, &forms)) {
-        p.err = PB_PARSE_INVALID_YAML;
-        p.err_offset = root != NULL ? root->offset : 0;
+    y_lower lower = {.arena = arena, .err = PB_PARSE_OK};
+    if (p.err == PB_PARSE_OK && !lower_root(&lower, root, &forms)) {
+        p.err = lower.err != PB_PARSE_OK ? lower.err : PB_PARSE_INVALID_YAML;
+        p.err_offset = lower.err != PB_PARSE_OK ? lower.err_offset : (root != NULL ? root->offset : 0);
     }
     node_free(root);
     free(p.lines);
     if (p.err != PB_PARSE_OK) {
-        return (pb_parse_result){.err = p.err, .err_offset = p.err_offset};
+        pb_parse_result r = {.err = p.err, .err_offset = p.err_offset};
+        memcpy(r.err_msg, lower.msg, sizeof r.err_msg);
+        return r;
     }
     return (pb_parse_result){.err = PB_PARSE_OK, .forms = forms};
 }

@@ -1,4 +1,5 @@
 // Forms: debounce!, sample!, aggregate!. Special forms: on-silence, dropout.
+// Also the clock slot of top-level (every :ms N BODY) rules.
 
 #include "pb_form_chunk.h"
 
@@ -186,6 +187,48 @@ pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args) {
     return nil();
 }
 
+bool pb_eval_every_arm(pb_eval_state *state, size_t rule_id, uint64_t ms, pb_value *body) {
+    pb_eval_ctx ctx = {.state = state, .rule_id = rule_id};
+    pb_eval_state_entry *slot = state_slot(&ctx, "every");
+    if (slot == NULL) {
+        return false;
+    }
+    slot->kind = PB_EVAL_STATE_CLOCK;
+    slot->clock_kind = PB_EVAL_CLOCK_EVERY;
+    slot->clock_interval_ms = ms;
+    slot->clock_armed = true;
+    slot->clock_deadline_ms = 0; // 0 means "not yet scheduled"; the first tick sets now + ms
+    slot->clock_body = (pb_values){.items = body, .len = 1};
+    return true;
+}
+
+// Fires an (every ...) body: `subject`, `payload` and `reply-to` are empty/nil,
+// so slots created inside have the empty subject as identity. The slot is advanced
+// before the body runs because the body may add slots and move the state array.
+static pb_eval_result tick_every(pb_eval_ctx *ctx, pb_eval_state_entry *entry) {
+    if (entry->clock_deadline_ms == 0) {
+        entry->clock_deadline_ms = ctx->now_ms + entry->clock_interval_ms;
+        return nil();
+    }
+    if (ctx->now_ms - entry->clock_deadline_ms >= entry->clock_interval_ms) {
+        entry->clock_deadline_ms = ctx->now_ms + entry->clock_interval_ms; // missed intervals: fire once, no burst
+    } else {
+        entry->clock_deadline_ms += entry->clock_interval_ms;
+    }
+    const pb_values body = entry->clock_body;
+    const pb_slice saved_subject = ctx->subject;
+    const pb_slice saved_payload = ctx->payload;
+    const pb_slice saved_reply = ctx->reply_to;
+    ctx->subject = (pb_slice){.ptr = "", .len = 0};
+    ctx->payload = (pb_slice){.ptr = "", .len = 0};
+    ctx->reply_to = (pb_slice){.ptr = "", .len = 0};
+    const pb_eval_result r = eval_clock_body(ctx, body);
+    ctx->subject = saved_subject;
+    ctx->payload = saved_payload;
+    ctx->reply_to = saved_reply;
+    return r;
+}
+
 static pb_eval_result call_clock_form(pb_eval_ctx *ctx, pb_form form, pb_values args) {
     switch (form) {
     case PB_FORM_DEBOUNCE: return call_debounce(ctx, args);
@@ -253,6 +296,8 @@ static pb_eval_result tick_clock_state_entry(pb_eval_ctx *ctx, pb_eval_state_ent
         entry->clock_deadline_ms += entry->clock_interval_ms;
         return clock_publish(ctx, entry);
     }
+    case PB_EVAL_CLOCK_EVERY:
+        return tick_every(ctx, entry);
     case PB_EVAL_CLOCK_NONE:
         break;
     }

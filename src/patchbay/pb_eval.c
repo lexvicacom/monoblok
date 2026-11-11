@@ -1,4 +1,5 @@
-#include "pb_eval_internal.h"
+#define PB_EVAL_C 1
+#include "pb_form_chunk.h"
 
 #include "array.h"
 
@@ -36,7 +37,7 @@ bool as_number(pb_value v, double *out) {
     if (v.kind != PB_STRING && v.kind != PB_SYMBOL) {
         return false;
     }
-    if (v.text.len >= 128) {
+    if (v.text.len == 0 || v.text.len >= 128) {
         return false;
     }
 
@@ -128,13 +129,7 @@ void pb_eval_note_suppressed(pb_eval_ctx *ctx) {
     }
 }
 
-static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call);
-
-typedef struct pb_form_entry {
-    const char *name;
-    pb_form form;
-    bool special;
-} pb_form_entry;
+static pb_eval_result eval_call(pb_eval_ctx *ctx, uint32_t site, pb_values call);
 
 static const pb_form_entry FORMS[] = {
     // Special forms evaluate raw arguments in pb_eval.c.
@@ -144,9 +139,9 @@ static const pb_form_entry FORMS[] = {
     {.name = "and", .form = PB_FORM_AND, .special = true},
     {.name = "or", .form = PB_FORM_OR, .special = true},
     {.name = "->", .form = PB_FORM_THREAD, .special = true},
-    {.name = "transition", .form = PB_FORM_TRANSITION, .special = true},
-    {.name = "on-silence", .form = PB_FORM_ON_SILENCE, .special = true},
-    {.name = "dropout", .form = PB_FORM_DROPOUT, .special = true},
+    {.name = "transition", .form = PB_FORM_TRANSITION, .special = true, .stateful = true},
+    {.name = "on-silence", .form = PB_FORM_ON_SILENCE, .special = true, .stateful = true, .clocked = true},
+    {.name = "dropout", .form = PB_FORM_DROPOUT, .special = true, .stateful = true, .clocked = true},
 
     // Numeric, boolean, comparison, arithmetic, and wall-clock forms.
     {.name = "now", .form = PB_FORM_NOW},
@@ -176,11 +171,13 @@ static const pb_form_entry FORMS[] = {
     {.name = "subject-append", .form = PB_FORM_SUBJECT_APPEND},
     {.name = "subject-token", .form = PB_FORM_SUBJECT_TOKEN},
     {.name = "subject-with", .form = PB_FORM_SUBJECT_WITH},
+    {.name = "last", .form = PB_FORM_LAST},
     {.name = "print!", .form = PB_FORM_PRINT},
     {.name = "publish!", .form = PB_FORM_PUBLISH},
     {.name = "publish", .form = PB_FORM_PUBLISH},
     {.name = "publish-to!", .form = PB_FORM_PUBLISH},
     {.name = "publish-to", .form = PB_FORM_PUBLISH},
+    {.name = "reply!", .form = PB_FORM_REPLY},
 
 #if PB_ENABLE_JSON
     // JSON forms.
@@ -190,45 +187,86 @@ static const pb_form_entry FORMS[] = {
 #endif
 
     // Per-rule state forms.
-    {.name = "squelch", .form = PB_FORM_SQUELCH},
-    {.name = "deadband", .form = PB_FORM_DEADBAND},
-    {.name = "changed?", .form = PB_FORM_CHANGED},
-    {.name = "hold-off", .form = PB_FORM_HOLD_OFF},
-    {.name = "rising-edge", .form = PB_FORM_RISING_EDGE},
-    {.name = "falling-edge", .form = PB_FORM_FALLING_EDGE},
-    {.name = "delta", .form = PB_FORM_DELTA},
-    {.name = "count!", .form = PB_FORM_COUNT},
-    {.name = "count", .form = PB_FORM_COUNT},
+    {.name = "squelch", .form = PB_FORM_SQUELCH, .stateful = true},
+    {.name = "deadband", .form = PB_FORM_DEADBAND, .stateful = true},
+    {.name = "changed?", .form = PB_FORM_CHANGED, .stateful = true},
+    {.name = "hold-off", .form = PB_FORM_HOLD_OFF, .stateful = true},
+    {.name = "rising-edge", .form = PB_FORM_RISING_EDGE, .stateful = true},
+    {.name = "falling-edge", .form = PB_FORM_FALLING_EDGE, .stateful = true},
+    {.name = "delta", .form = PB_FORM_DELTA, .stateful = true},
+    {.name = "hysteresis", .form = PB_FORM_HYSTERESIS, .stateful = true},
+    {.name = "ewma", .form = PB_FORM_EWMA, .stateful = true},
+    {.name = "count!", .form = PB_FORM_COUNT, .stateful = true},
+    {.name = "count", .form = PB_FORM_COUNT, .stateful = true},
 
     // Ring-window forms.
-    {.name = "moving-avg", .form = PB_FORM_MOVING_AVG},
-    {.name = "moving-sum", .form = PB_FORM_MOVING_SUM},
-    {.name = "moving-max", .form = PB_FORM_MOVING_MAX},
-    {.name = "moving-min", .form = PB_FORM_MOVING_MIN},
-    {.name = "median", .form = PB_FORM_MEDIAN},
-    {.name = "percentile", .form = PB_FORM_PERCENTILE},
-    {.name = "stddev", .form = PB_FORM_STDDEV},
-    {.name = "variance", .form = PB_FORM_VARIANCE},
-    {.name = "rate", .form = PB_FORM_RATE},
-    {.name = "throttle", .form = PB_FORM_THROTTLE},
+    {.name = "moving-avg", .form = PB_FORM_MOVING_AVG, .stateful = true, .clocked_ms = true},
+    {.name = "moving-sum", .form = PB_FORM_MOVING_SUM, .stateful = true, .clocked_ms = true},
+    {.name = "moving-max", .form = PB_FORM_MOVING_MAX, .stateful = true, .clocked_ms = true},
+    {.name = "moving-min", .form = PB_FORM_MOVING_MIN, .stateful = true, .clocked_ms = true},
+    {.name = "median", .form = PB_FORM_MEDIAN, .stateful = true, .clocked_ms = true},
+    {.name = "percentile", .form = PB_FORM_PERCENTILE, .stateful = true, .clocked_ms = true},
+    {.name = "stddev", .form = PB_FORM_STDDEV, .stateful = true, .clocked_ms = true},
+    {.name = "variance", .form = PB_FORM_VARIANCE, .stateful = true, .clocked_ms = true},
+    {.name = "rate", .form = PB_FORM_RATE, .stateful = true, .clocked_ms = true},
+    {.name = "throttle", .form = PB_FORM_THROTTLE, .stateful = true, .clocked_ms = true},
 
     // Clocked publish forms.
-    {.name = "debounce!", .form = PB_FORM_DEBOUNCE},
-    {.name = "sample!", .form = PB_FORM_SAMPLE},
-    {.name = "aggregate!", .form = PB_FORM_AGGREGATE},
+    {.name = "debounce!", .form = PB_FORM_DEBOUNCE, .stateful = true, .clocked = true},
+    {.name = "sample!", .form = PB_FORM_SAMPLE, .stateful = true, .clocked = true},
+    {.name = "aggregate!", .form = PB_FORM_AGGREGATE, .stateful = true, .clocked = true},
 
     // Bar/OHLC forms.
-    {.name = "bar!", .form = PB_FORM_BAR},
-    {.name = "bar", .form = PB_FORM_BAR},
+    {.name = "bar!", .form = PB_FORM_BAR, .stateful = true, .clocked_ms = true},
+    {.name = "bar", .form = PB_FORM_BAR, .stateful = true, .clocked_ms = true},
 };
 
-static const pb_form_entry *find_form(pb_slice name) {
-    for (size_t i = 0; i < sizeof FORMS / sizeof FORMS[0]; i += 1) {
+#define FORM_COUNT (sizeof FORMS / sizeof FORMS[0])
+
+// Returns the table index of `name`, or FORM_COUNT.
+static size_t form_index(pb_slice name) {
+    for (size_t i = 0; i < FORM_COUNT; i += 1) {
         if (text_eq(name, FORMS[i].name)) {
-            return &FORMS[i];
+            return i;
         }
     }
-    return NULL;
+    return FORM_COUNT;
+}
+
+const pb_form_entry *pb_form_lookup(pb_slice name) {
+    const size_t i = form_index(name);
+    return i < FORM_COUNT ? &FORMS[i] : NULL;
+}
+
+// Head symbol of a call: use the resolved tag, else look the name up.
+static const pb_form_entry *head_form(pb_value head) {
+    if (head.tag != 0 && head.tag <= FORM_COUNT) {
+        return &FORMS[head.tag - 1];
+    }
+    return pb_form_lookup(head.text);
+}
+
+// Op names are the form name without a trailing '!', optionally followed by
+// "/t" or "/m" for window forms.
+static bool op_names_match(const char *form_name, pb_slice op) {
+    size_t n = strlen(form_name);
+    if (n > 0 && form_name[n - 1] == '!') {
+        n -= 1;
+    }
+    size_t base = 0;
+    while (base < op.len && op.ptr[base] != '/') {
+        base += 1;
+    }
+    return base == n && memcmp(op.ptr, form_name, n) == 0;
+}
+
+bool pb_form_owns_op(const pb_form_entry *entry, pb_slice op) {
+    for (size_t i = 0; i < FORM_COUNT; i += 1) {
+        if (FORMS[i].form == entry->form && op_names_match(FORMS[i].name, op)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void state_entry_free(pb_eval_state_entry *e) {
@@ -259,17 +297,18 @@ static uint64_t state_hash_update(uint64_t h, const void *ptr, size_t len) {
     return h;
 }
 
-static uint64_t state_key_hash(size_t rule_id, pb_slice op, pb_slice subject) {
+static uint64_t state_key_hash(size_t rule_id, uint32_t site, pb_slice op, pb_slice subject) {
     uint64_t h = 1469598103934665603ULL;
     h = state_hash_update(h, &rule_id, sizeof rule_id);
+    h = state_hash_update(h, &site, sizeof site);
     h = state_hash_update(h, op.ptr, op.len);
     h ^= 0xff;
     h *= 1099511628211ULL;
     return state_hash_update(h, subject.ptr, subject.len);
 }
 
-static bool state_key_eq(const pb_eval_state_entry *e, size_t rule_id, pb_slice op, pb_slice subject) {
-    return e->rule_id == rule_id &&
+static bool state_key_eq(const pb_eval_state_entry *e, size_t rule_id, uint32_t site, pb_slice op, pb_slice subject) {
+    return e->rule_id == rule_id && e->site == site &&
            pb_slice_eq((pb_slice){.ptr = e->op, .len = e->op_len}, op) &&
            pb_slice_eq((pb_slice){.ptr = e->subject, .len = e->subject_len}, subject);
 }
@@ -313,7 +352,7 @@ static bool state_index_rebuild(pb_eval_state *state, size_t needed) {
         const pb_eval_state_entry *e = &state->items[i];
         const pb_slice op = {.ptr = e->op, .len = e->op_len};
         const pb_slice subject = {.ptr = e->subject, .len = e->subject_len};
-        state_index_insert(index, cap, state_key_hash(e->rule_id, op, subject), i);
+        state_index_insert(index, cap, state_key_hash(e->rule_id, e->site, op, subject), i);
     }
     free(state->index);
     state->index = index;
@@ -321,7 +360,7 @@ static bool state_index_rebuild(pb_eval_state *state, size_t needed) {
     return true;
 }
 
-static pb_eval_state_entry *state_index_find(pb_eval_state *state, size_t rule_id, pb_slice op, pb_slice subject, uint64_t hash) {
+static pb_eval_state_entry *state_index_find(pb_eval_state *state, size_t rule_id, uint32_t site, pb_slice op, pb_slice subject, uint64_t hash) {
     if (state->index_cap == 0) {
         return NULL;
     }
@@ -332,7 +371,7 @@ static pb_eval_state_entry *state_index_find(pb_eval_state *state, size_t rule_i
             return NULL;
         }
         pb_eval_state_entry *candidate = &state->items[entry->index];
-        if (entry->hash == hash && state_key_eq(candidate, rule_id, op, subject)) {
+        if (entry->hash == hash && state_key_eq(candidate, rule_id, site, op, subject)) {
             return candidate;
         }
         slot = (slot + 1) & (state->index_cap - 1);
@@ -350,23 +389,28 @@ static bool heap_dup_slice(pb_slice s, char **out, size_t *out_len) {
     return true;
 }
 
+static pb_eval_state_entry *state_slot_find_or_add(pb_eval_ctx *ctx, const char *op_lit, pb_slice subject);
+
 pb_eval_state_entry *state_slot(pb_eval_ctx *ctx, const char *op_lit) {
     if (ctx->state == NULL) {
         return NULL;
     }
+    return state_slot_find_or_add(ctx, op_lit, ctx->subject);
+}
 
+static pb_eval_state_entry *state_slot_find_or_add(pb_eval_ctx *ctx, const char *op_lit, pb_slice subject) {
     const pb_slice op = {.ptr = op_lit, .len = strlen(op_lit)};
-    const uint64_t hash = state_key_hash(ctx->rule_id, op, ctx->subject);
+    const uint64_t hash = state_key_hash(ctx->rule_id, ctx->site, op, subject);
     if (ctx->state->index_cap == 0 && ctx->state->len >= 8) {
         (void)state_index_rebuild(ctx->state, ctx->state->len);
     }
-    pb_eval_state_entry *found = state_index_find(ctx->state, ctx->rule_id, op, ctx->subject, hash);
+    pb_eval_state_entry *found = state_index_find(ctx->state, ctx->rule_id, ctx->site, op, subject, hash);
     if (found != NULL) {
         return found;
     }
     if (ctx->state->index_cap == 0) {
         for (size_t i = 0; i < ctx->state->len; i += 1) {
-            if (state_key_eq(&ctx->state->items[i], ctx->rule_id, op, ctx->subject)) {
+            if (state_key_eq(&ctx->state->items[i], ctx->rule_id, ctx->site, op, subject)) {
                 return &ctx->state->items[i];
             }
         }
@@ -382,9 +426,9 @@ pb_eval_state_entry *state_slot(pb_eval_ctx *ctx, const char *op_lit) {
     }
 
     pb_eval_state_entry *e = &ctx->state->items[ctx->state->len];
-    *e = (pb_eval_state_entry){.rule_id = ctx->rule_id};
+    *e = (pb_eval_state_entry){.rule_id = ctx->rule_id, .site = ctx->site};
     if (!heap_dup_slice(op, &e->op, &e->op_len) ||
-        !heap_dup_slice(ctx->subject, &e->subject, &e->subject_len)) {
+        !heap_dup_slice(subject, &e->subject, &e->subject_len)) {
         state_entry_free(e);
         return NULL;
     }
@@ -424,6 +468,65 @@ bool state_set_emit_subject(pb_eval_state_entry *e, pb_slice bytes) {
     return true;
 }
 
+// Bound-symbol tags written by pb_resolve_rule (0 = unresolved, match by name).
+enum {
+    SYM_SUBJECT = 1,
+    SYM_PAYLOAD,
+    SYM_REPLAYING,
+    SYM_PAYLOAD_FLOAT,
+    SYM_PAYLOAD_INT,
+    SYM_REPLY_TO,
+    SYM_PAYLOAD_BOOL,
+};
+
+// Single source of truth for bound names; the YAML and JSON adapters look names up here.
+static const struct {
+    const char *name;
+    uint32_t tag;
+} BINDINGS[] = {
+    {"subject", SYM_SUBJECT},
+    {"payload", SYM_PAYLOAD},
+    {"replaying?", SYM_REPLAYING},
+    {"payload-float", SYM_PAYLOAD_FLOAT},
+    {"payload-int", SYM_PAYLOAD_INT},
+    {"payload-bool", SYM_PAYLOAD_BOOL},
+    {"reply-to", SYM_REPLY_TO},
+};
+
+static uint32_t bound_symbol_tag(pb_slice name) {
+    for (size_t i = 0; i < sizeof BINDINGS / sizeof BINDINGS[0]; i += 1) {
+        if (text_eq(name, BINDINGS[i].name)) {
+            return BINDINGS[i].tag;
+        }
+    }
+    return 0;
+}
+
+uint32_t pb_binding_lookup(pb_slice name) {
+    return bound_symbol_tag(name);
+}
+
+const char *pb_binding_name(size_t index) {
+    return index < sizeof BINDINGS / sizeof BINDINGS[0] ? BINDINGS[index].name : NULL;
+}
+
+static bool ascii_ieq(pb_slice s, const char *lit) {
+    const size_t n = strlen(lit);
+    if (s.len != n) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i += 1) {
+        char c = s.ptr[i];
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        if (c != lit[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
     switch (expr.kind) {
     case PB_NIL:
@@ -432,26 +535,40 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
     case PB_STRING:
     case PB_KEYWORD:
         return ok(expr);
-    case PB_SYMBOL:
-        if (text_eq(expr.text, "subject")) {
-            return ok((pb_value){.kind = PB_STRING, .text = ctx->subject});
-        }
-        if (text_eq(expr.text, "payload")) {
-            return ok((pb_value){.kind = PB_STRING, .text = ctx->payload});
-        }
-        if (text_eq(expr.text, "replaying?")) {
-            return ok(bool_value(ctx->replaying));
-        }
-        if (text_eq(expr.text, "payload-float") || text_eq(expr.text, "payload-int")) {
+    case PB_SYMBOL: {
+        const uint32_t sym = expr.tag != 0 ? expr.tag : bound_symbol_tag(expr.text);
+        switch (sym) {
+        case SYM_SUBJECT: return ok((pb_value){.kind = PB_STRING, .text = ctx->subject});
+        case SYM_PAYLOAD: return ok((pb_value){.kind = PB_STRING, .text = ctx->payload});
+        case SYM_REPLAYING: return ok(bool_value(ctx->replaying));
+        case SYM_REPLY_TO:
+            if (ctx->reply_to.len == 0) {
+                return nil();
+            }
+            return ok((pb_value){.kind = PB_STRING, .text = ctx->reply_to});
+        case SYM_PAYLOAD_FLOAT:
+        case SYM_PAYLOAD_INT: {
             pb_value payload = {.kind = PB_STRING, .text = ctx->payload};
             double n = 0;
             if (!as_number(payload, &n)) {
                 return fail(PB_EVAL_TYPE);
             }
-            if (text_eq(expr.text, "payload-int") && floor(n) != n) {
+            if (sym == SYM_PAYLOAD_INT && floor(n) != n) {
                 return fail(PB_EVAL_TYPE);
             }
             return ok((pb_value){.kind = PB_NUMBER, .number = n});
+        }
+        case SYM_PAYLOAD_BOOL: {
+            const pb_slice p = ctx->payload;
+            if (ascii_ieq(p, "true") || ascii_ieq(p, "1") || ascii_ieq(p, "on")) {
+                return ok(bool_value(true));
+            }
+            if (ascii_ieq(p, "false") || ascii_ieq(p, "0") || ascii_ieq(p, "off")) {
+                return ok(bool_value(false));
+            }
+            return fail(PB_EVAL_TYPE);
+        }
+        default: break;
         }
         if (ctx->user_symbol != NULL) {
             pb_eval_result user = {0};
@@ -460,6 +577,7 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
             }
         }
         return fail(PB_EVAL_UNKNOWN_SYMBOL);
+    }
     case PB_VECTOR: {
         pb_value *items = pb_arena_alloc(ctx->arena, expr.seq.len * sizeof items[0], alignof(pb_value));
         if (items == NULL && expr.seq.len != 0) {
@@ -475,7 +593,7 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
         return ok((pb_value){.kind = PB_VECTOR, .seq = {.items = items, .len = expr.seq.len}});
     }
     case PB_LIST:
-        return eval_list(ctx, expr.seq);
+        return eval_call(ctx, expr.tag, expr.seq);
     }
     return fail(PB_EVAL_TYPE);
 }
@@ -567,12 +685,29 @@ static pb_eval_result eval_or(pb_eval_ctx *ctx, pb_values args) {
     return nil();
 }
 
+// Threading a value into on-silence or dropout would make it a trailing body
+// form that lives in scratch memory the timer outlives, so it is refused.
+static bool form_rejects_thread(const pb_form_entry *entry) {
+    return entry->form == PB_FORM_ON_SILENCE || entry->form == PB_FORM_DROPOUT;
+}
+
+static bool threadable_head(pb_value head) {
+    const pb_form_entry *entry = head_form(head);
+    return entry == NULL || !form_rejects_thread(entry);
+}
+
+// The rewritten call keeps the step's call-site id (form.tag) and head tag, so
+// state slots stay stable across publishes.
 static pb_eval_result eval_call_with_threaded(pb_eval_ctx *ctx, pb_value form, pb_value threaded) {
     if (form.kind == PB_SYMBOL) {
+        if (!threadable_head(form)) {
+            return fail(PB_EVAL_TYPE);
+        }
         pb_value items[2] = {form, threaded};
-        return eval_list(ctx, (pb_values){.items = items, .len = 2});
+        return eval_call(ctx, 0, (pb_values){.items = items, .len = 2});
     }
-    if (form.kind != PB_LIST || form.seq.len == 0 || form.seq.items[0].kind != PB_SYMBOL) {
+    if (form.kind != PB_LIST || form.seq.len == 0 || form.seq.items[0].kind != PB_SYMBOL ||
+        !threadable_head(form.seq.items[0])) {
         return fail(PB_EVAL_TYPE);
     }
 
@@ -582,7 +717,7 @@ static pb_eval_result eval_call_with_threaded(pb_eval_ctx *ctx, pb_value form, p
     }
     memcpy(items, form.seq.items, form.seq.len * sizeof items[0]);
     items[form.seq.len] = threaded;
-    return eval_list(ctx, (pb_values){.items = items, .len = form.seq.len + 1});
+    return eval_call(ctx, form.tag, (pb_values){.items = items, .len = form.seq.len + 1});
 }
 
 static pb_eval_result eval_thread(pb_eval_ctx *ctx, pb_values args) {
@@ -644,10 +779,10 @@ static pb_eval_result eval_transition(pb_eval_ctx *ctx, pb_values args) {
     return nil();
 }
 
-static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
+static pb_eval_result dispatch_call(pb_eval_ctx *ctx, pb_values call) {
     const pb_slice head = call.items[0].text;
     const pb_values raw_args = {.items = call.items + 1, .len = call.len - 1};
-    const pb_form_entry *entry = find_form(head);
+    const pb_form_entry *entry = head_form(call.items[0]);
     if (entry == NULL) {
         if (ctx->user_call != NULL) {
             pb_values args = {0};
@@ -686,6 +821,16 @@ static pb_eval_result eval_list(pb_eval_ctx *ctx, pb_values call) {
     return pb_eval_call_form(ctx, entry->form, args);
 }
 
+// Runs one call with ctx->site set to its call-site id, then restores the
+// caller's site so state slots inside nested calls get their own identity.
+static pb_eval_result eval_call(pb_eval_ctx *ctx, uint32_t site, pb_values call) {
+    const uint32_t saved_site = ctx->site;
+    ctx->site = site;
+    const pb_eval_result r = dispatch_call(ctx, call);
+    ctx->site = saved_site;
+    return r;
+}
+
 const char *pb_eval_error_name(pb_eval_error err) {
     switch (err) {
     case PB_EVAL_OK: return "ok";
@@ -721,4 +866,147 @@ bool pb_eval_state_deadline(const pb_eval_state_entry *entry, uint64_t *out_ms) 
         return true;
     }
     return false;
+}
+
+// Walk state for pb_resolve_rule; lives on the caller's stack for one rule.
+typedef struct resolver {
+    pb_arena *arena;
+    uint32_t next_site;
+    bool allow_user_call;
+    bool allow_user_symbol;
+    char *err;
+    size_t err_cap;
+} resolver;
+
+static bool resolve_fail(resolver *r, const char *what, pb_slice name) {
+    if (r->err != NULL && r->err_cap != 0) {
+        snprintf(r->err, r->err_cap, "%s: %.*s", what, (int)name.len, name.ptr);
+    }
+    return false;
+}
+
+static bool resolve_value(resolver *r, pb_value *v);
+
+// `step` is a `->` step: it must be threadable and a bare symbol step is
+// rewritten to a one-element call so it gets its own call-site id.
+static bool resolve_thread_step(resolver *r, pb_value *step) {
+    if (step->kind == PB_SYMBOL) {
+        const pb_form_entry *entry = pb_form_lookup(step->text);
+        if (entry == NULL && r->allow_user_call) {
+            return true;
+        }
+        pb_value *items = pb_arena_alloc(r->arena, sizeof items[0], alignof(pb_value));
+        if (items == NULL) {
+            return resolve_fail(r, "out of memory", (pb_slice){0});
+        }
+        items[0] = *step;
+        *step = (pb_value){.kind = PB_LIST, .seq = {.items = items, .len = 1}};
+    }
+    if (step->kind != PB_LIST) {
+        return resolve_fail(r, "-> step must be a form or a symbol", (pb_slice){0});
+    }
+    if (step->seq.len != 0 && step->seq.items[0].kind == PB_SYMBOL) {
+        const pb_form_entry *entry = pb_form_lookup(step->seq.items[0].text);
+        if (entry != NULL && form_rejects_thread(entry)) {
+            return resolve_fail(r, "cannot be a -> step", step->seq.items[0].text);
+        }
+    }
+    return resolve_value(r, step);
+}
+
+static bool resolve_list(resolver *r, pb_value *v) {
+    if (v->seq.len == 0 || v->seq.items[0].kind != PB_SYMBOL) {
+        return resolve_fail(r, "call form must be headed by a symbol", (pb_slice){0});
+    }
+    pb_value *head = &v->seq.items[0];
+    if (text_eq(head->text, "every")) {
+        return resolve_fail(r, "top-level form not allowed in a rule body", head->text);
+    }
+    v->tag = ++r->next_site;
+    const size_t idx = form_index(head->text);
+    if (idx == FORM_COUNT) {
+        if (!r->allow_user_call) {
+            return resolve_fail(r, "unknown form", head->text);
+        }
+    } else {
+        head->tag = (uint32_t)idx + 1;
+    }
+    const bool is_thread = idx != FORM_COUNT && FORMS[idx].form == PB_FORM_THREAD;
+    for (size_t i = 1; i < v->seq.len; i += 1) {
+        const bool ok_item = is_thread && i > 1 ? resolve_thread_step(r, &v->seq.items[i])
+                                                : resolve_value(r, &v->seq.items[i]);
+        if (!ok_item) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool resolve_value(resolver *r, pb_value *v) {
+    switch (v->kind) {
+    case PB_SYMBOL: {
+        const uint32_t tag = bound_symbol_tag(v->text);
+        if (tag == 0) {
+            return r->allow_user_symbol ? true : resolve_fail(r, "unknown symbol", v->text);
+        }
+        v->tag = tag;
+        return true;
+    }
+    case PB_VECTOR:
+        for (size_t i = 0; i < v->seq.len; i += 1) {
+            if (!resolve_value(r, &v->seq.items[i])) {
+                return false;
+            }
+        }
+        return true;
+    case PB_LIST:
+        return resolve_list(r, v);
+    case PB_NIL:
+    case PB_BOOL:
+    case PB_NUMBER:
+    case PB_KEYWORD:
+    case PB_STRING:
+        return true;
+    }
+    return true;
+}
+
+bool pb_resolve_rule(pb_arena *arena, pb_value *body, bool allow_user_call, bool allow_user_symbol,
+                     char *err, size_t err_cap) {
+    resolver r = {
+        .arena = arena,
+        .allow_user_call = allow_user_call,
+        .allow_user_symbol = allow_user_symbol,
+        .err = err,
+        .err_cap = err_cap,
+    };
+    return resolve_value(&r, body);
+}
+
+// Preorder search for the list with call-site id `site`.
+static const pb_value *find_site(const pb_value *v, uint32_t site) {
+    if (v->kind != PB_LIST && v->kind != PB_VECTOR) {
+        return NULL;
+    }
+    if (v->kind == PB_LIST && v->tag == site) {
+        return v;
+    }
+    for (size_t i = 0; i < v->seq.len; i += 1) {
+        const pb_value *found = find_site(&v->seq.items[i], site);
+        if (found != NULL) {
+            return found;
+        }
+    }
+    return NULL;
+}
+
+const pb_form_entry *pb_form_at_site(pb_value body, uint32_t site) {
+    if (site == 0) {
+        return NULL;
+    }
+    const pb_value *call = find_site(&body, site);
+    if (call == NULL || call->seq.len == 0 || call->seq.items[0].kind != PB_SYMBOL) {
+        return NULL;
+    }
+    return head_form(call->seq.items[0]);
 }

@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
 
     const pb_parse_result r = pb_parse_patchbay_source(&arena, argv[1], (const char *)src.ptr, src.len);
     if (r.err != PB_PARSE_OK) {
-        fprintf(stderr, "%s at byte %zu\n", pb_parse_error_name(r.err), r.err_offset);
+        fprintf(stderr, "%s%s%s at byte %zu\n", pb_parse_error_name(r.err), r.err_msg[0] != '\0' ? ": " : "", r.err_msg, r.err_offset);
         goto cleanup;
     }
 

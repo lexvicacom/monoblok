@@ -16,7 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENT
 ```
 
 Codex discovers repository-scoped `AGENTS.md` automatically when it
-runs in that tree. For other tools, paste or reference this file in
+runs in that tree. For Claude Code, append to `./CLAUDE.md` (or
+`~/.claude/CLAUDE.md`) instead, or reference `@docs/AGENTS_PATCHBAY.md`
+inline in a prompt. For other tools, paste or reference this file in
 the equivalent project instruction area: Cursor rules, Aider
 conventions, ChatGPT project instructions, or another agent-specific
 memory file. For one-off use, reference `docs/AGENTS_PATCHBAY.md` in
@@ -55,6 +57,9 @@ you genuinely want a multi-stage pipeline (e.g. `json-demux!` head rule
 emitting scalars that downstream rules condition); otherwise leave it
 off.
 
+Monoblok also has a top-level `(every :ms N [:reentrant BOOL] BODY...)` form that
+runs BODY on a fixed period instead of on a publish (see "Heartbeats" below).
+
 In full monoblok there are also top-level config forms: `(lvc ["filter"
 ...])` opts matching subjects into `$LVC.*` last-value streams, and optional
 `(export ...)` forwards local publishes to a remote NATS cluster. Deprecated
@@ -83,7 +88,9 @@ comparison, string, subject, state, window, clock, edge, bar, and `publish!`
 forms. This subset works for both runtimes unless a local build disables a form.
 
 Alert the user before using or recommending full monoblok-only features for a
-Tinyblok file. This includes top-level `(lvc ...)` and `(export ...)`, daemon
+Tinyblok file. This includes top-level `(every ...)`, `(lvc ...)` and `(export ...)`,
+`hysteresis`, `ewma`, `last`, the funnel pattern, monoblok's `reply!` (see
+"Request-reply" below; Tinyblok's `reply!` is different), daemon
 or `(import ...)`, daemon flags such as `--snapshot`, runtime patch/config
 loading, dynamic graph edits, server-side subscriptions beyond Tinyblok's fixed
 request subjects, inbound/outbound bridges, LVC/snapshot policy, and
@@ -115,7 +122,9 @@ boot. It supports normal `(on ...)` rules plus these Tinyblok-specific forms:
 - `(on-req "subject" BODY)` registers a fixed NATS request subject. Tinyblok
   subscribes to it after each broker connect, evaluates `BODY`, and sends
   replies to the requester's reply inbox.
-- `(reply! VALUE)` sends a request reply from inside `on-req`. In a pipeline,
+- `(reply! VALUE)` sends a request reply from inside `on-req` (Tinyblok only;
+  full monoblok uses `reply!` inside ordinary `(on ...)` rules, see
+  "Request-reply"). In a pipeline,
   `(-> uptime-s (reply!))` replies with the threaded value. With no argument,
   `reply!` replies with the original request payload.
 
@@ -163,7 +172,7 @@ comparison. The compact schema is:
   quoted or unquoted scalars, numbers, booleans, `null` / `nil` / `~`, and `#`
   comments outside quoted text and flow arrays. Do not use flow maps, anchors,
   aliases, tags, or multiline strings.
-- The root document is a map. Supported top-level keys are `on`, `lvc`,
+- The root document is a map. Supported top-level keys are `on`, `every`, `lvc`,
   `export`, deprecated `bridge`, and `import`.
 - `lvc` accepts one string-like value, one `env: "NAME"` value, or a list of
   those values.
@@ -177,22 +186,53 @@ comparison. The compact schema is:
 - In top-level config string positions, `env: "NAME"` lowers to `(env "NAME")`.
   Do not use it inside rule bodies.
 - `on` is a list of rule maps. Each rule requires `sub`, may include
-  `reentrant: true`, and must include exactly one body shape: `thread`, `when`,
-  `do`, `form`, or `body`.
-- `thread` lowers to `->`. It can be a list (`[payload-float, [round, 1],
-  [publish!, "clean.temp"]]`) or a map with `from` and `steps`.
-- `when` lowers to `(when TEST BODY)` and has `test` plus `then`.
+  `reentrant: true` and a `when: EXPR` guard, and must include exactly one body
+  key: `thread`, `do`, or `form`. `every` is the same with `ms: N` in place of
+  `sub`. There is no `body`, `from`, `steps`, `test`, or `then`.
+- `thread` is a block list and lowers to `->`: the start value first, then the
+  steps, as in the example below.
+- `when: EXPR` sits beside the body key and lowers to `(when EXPR BODY)`.
 - `do` is a list of bodies and lowers to `(do BODY...)`.
-- `form` and `body` are direct expressions for cases such as `transition`,
-  `count!`, or `bar!`.
+- `form` is one direct expression for cases such as `transition`, `count!`, or
+  `bar!`.
 - Flow arrays in expression positions are call forms, with the operator as the
-  first element: `[publish!, [subject-append, "stable"]]`.
-- In expression positions only `subject`, `payload`, `payload-float`, and
-  `payload-int` become bound symbols; other string-like scalars become strings
-  unless they are numbers, booleans, nulls, or keywords such as `:ms`, `:dp`,
-  or `:subject`. In examples and ports, leave operators/bound symbols/keywords
-  bare, but quote actual string literals such as subjects, URLs, env names, and
-  payload strings.
+  first element: `[publish!, [subject-append, "stable"]]`. Operators that are
+  YAML indicators must be quoted: `[">", $payload-float, 80]`, `["*", a, b]`,
+  `["->", ...]`. `[vector, 1, 2, 3]` is a literal vector.
+- `$name` is a bound value: `$subject`, `$payload`, `$payload-float`,
+  `$payload-int`, `$payload-bool`, `$replaying?`, `$reply-to`. Bare `payload`
+  without the `$` is a load error.
+- A bare word that is an option (`ms`, `dp`, `subject`, `lost`, `found`, `leaf`,
+  `date`, `hour`, `minute`, `avg`, `sum`, `min`, `max`, `count`, `rate`,
+  `reentrant`) lowers to the keyword (`:ms`). Never write the colon form.
+- Every other string in a rule body must be quoted (`"clean.temp"`, `"hot"`).
+  An unquoted word that is not a number, boolean, null, `$binding`, or option
+  is a load error.
+- Files are valid standard YAML, so check them with a normal parser as well as
+  `monoblok --validate`.
+
+```yaml
+lvc:
+  - "temp.>"
+
+on:
+  - sub: "temp.*"
+    when: [">", $payload-float, 20]
+    thread:
+      - $payload-float
+      - [round, 1]
+      - [squelch]
+      - [publish!, [subject-append, "stable"], dp, 1]
+
+every:
+  - ms: 5000
+    form: [publish!, "monoblok.heartbeat", "alive"]
+```
+
+JSON patchbays follow the same ideas: arrays are call forms, bound values are
+strings with a leading `$` (`"$payload"`, `"$payload-float"`), and vector data
+is `{"vector": [...]}`. A plain `"payload"` string in JSON is just text, not an
+error, so always write `"$payload"`. Do not use `{"vec": [...]}`.
 
 Validate YAML ports with `monoblok --validate file.yml`. When behavior matters,
 compare the original and ported files with `--soundcheck` using the same input
@@ -203,6 +243,14 @@ rows.
 - `subject` (string), `payload` (string bytes)
 - `payload-float` (f64, errors if payload is not numeric)
 - `payload-int` (signed int, errors on non-integer input)
+- `payload-bool` (`true`/`1`/`on` is true, `false`/`0`/`off` is false, ASCII
+  case-insensitive; anything else is a type error)
+- `reply-to` (the request's reply subject, or nil when the message had none)
+- `replaying?` (true during JetStream catch-up)
+
+An empty payload is not the number 0: `payload-float`, `payload-int`, and
+`payload-bool` on an empty payload are type errors. Unknown forms and unknown
+symbols are rejected at load and by `--validate`, in every branch.
 
 ## Operator cheat sheet
 
@@ -238,7 +286,7 @@ Forms whose entire purpose is to emit (terminal effect, return nil) carry a trai
 
 - `(publish! SUBJECT VALUE)` validates SUBJECT, coerces VALUE (numbers stringified canonically, booleans -> "true"/"false"), enqueues. `(publish! SUBJECT :dp N VALUE)` formats numeric VALUE with exactly N decimal places at the output boundary, with N in 0-15; in a thread use `(-> payload-float (moving-avg 10) (publish! "out.avg" :dp 1))`. No-op if VALUE is nil so a suppressed gate upstream self-terminates the chain. Returns nil.
 
-Idempotent filters (per-rule, per-subject state; first sight always passes / is treated as "no prior"):
+Idempotent filters (state is per call site and subject, so two uses of the same form in one rule keep separate state; first sight always passes / is treated as "no prior"):
 
 - `(round N X)`, `(quantize STEP X)` pure
 - `(squelch X)` pass iff X differs from last X, else nil
@@ -252,9 +300,10 @@ Windows (used as the first arg(s) of windowed ops):
 - bare integer `N`: last N samples; ring is fixed-cap, allocated once
 - `:ms N`: last N ms of wall-clock time (ingress timestamp); samples evict by age, active slots expose deadlines, and the server keeps one rescheduled timer pointed at the earliest active deadline so quiet streams don't keep stale data
 
-Windowed aggregates (per `(rule, subject, op, window-kind)` slot; tick and time variants on the same rule + subject keep distinct state):
+Windowed aggregates (per call site, subject, and window kind; tick and time variants keep distinct state):
 
 - `(moving-avg WINDOW X)`, `(moving-sum WINDOW X)`, `(moving-max WINDOW X)`, `(moving-min WINDOW X)`. WINDOW is `N` (ticks) or `:ms N` (time). Tick form is O(1) per update; time form is O(n) over the live window.
+- `(ewma ALPHA X)` exponentially weighted average, 0 < ALPHA <= 1. First sample returns X, then `ALPHA*X + (1-ALPHA)*prev`. One number of state, no ring, so prefer it over a big `moving-avg` when you only want smoothing.
 - `(rate :ms N X)` events per second. Tick form is rejected because rate needs a time unit. X is evaluated but ignored; the op counts pushes.
 - `(percentile WINDOW P X)` Pth percentile (P in [0, 1]). `(median WINDOW X)` is sugar for `(percentile WINDOW 0.5 X)`. O(n log n) per call.
 - `(stddev WINDOW X)`, `(variance WINDOW X)` population stddev / variance over WINDOW. O(n).
@@ -269,20 +318,101 @@ Edge gates (take a boolean, fire once per transition; first sight never fires):
 
 - `(rising-edge X)`, `(falling-edge X)`
 
+Hysteresis (stateful, returns a bool on every call):
+
+- `(hysteresis LO HI X)` true once X >= HI, false once X <= LO, otherwise the previous answer. First sight is `X >= HI`. `LO > HI` or a non-numeric argument is a type error. Feed it to `transition` to get an alert and all-clear that do not chatter around one threshold: `(transition (hysteresis 26.0 28.0 payload-float) (publish! ... "hot") (publish! ... "ok"))`.
+
 JSON (value-last):
 
 - `(json-get KEY PAYLOAD)` returns the selected top-level key or dotted object path up to four tokens deep (`"a.b.c.d"`) as number / string / boolean, or nil if missing, malformed, null, array, or non-selected nested object. Threads through `->` and short-circuits `publish!` on nil.
 - `(json-demux! KEY ... PAYLOAD)` side-effecting demux: for each top-level KEY or dotted object path up to four tokens deep (`"a.b.c.d"`), publishes the value to `<subject>.<suffix>`. By default suffix is the key/path; `:leaf` uses only the final path token, and `[PATH SUFFIX]` overrides one output suffix. Skips missing / null / arrays / non-selected nested objects silently. Returns nil. Use as the head rule for JSON-emitting devices so the rest of the patchbay stays scalar.
 
-Bars (side-effecting, per (rule, subject, window-kind)):
+Bars (side-effecting, per call site, subject, and window kind):
 
 - `(bar! WINDOW X)` accumulates X into an in-progress bar. WINDOW is `N` (close every N samples) or `:ms N` (close every N ms of wall-clock time, aligned to `floor(now/N)*N`). On close, publishes `<subject>.bar.open`, `.high`, `.low`, `.close`. Returns nil. Volume isn't reported (N for tick bars, varies for time bars; pair with `(count!)` if you need it). Time bars also close from the slot's exact deadline timer if a window elapses without a new sample.
 
-Running counters (side-effecting, per (rule, subject)):
+Running counters (side-effecting, per call site and subject):
 
-- `(count!)` and `(count! COND)` increment a running total and publish it to `<subject>.count`. Use `(count! :subject SUBJECT)` or `(count! :subject SUBJECT COND)` to publish that counter to an explicit subject; the state remains per source `(rule, subject)`. With no condition, fires every call; with COND, only when COND is truthy (same rules as `if` / `when`, so any predicate composes: `(count! (contains? payload "ERROR"))`, `(count! (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
+- `(count!)` and `(count! COND)` increment a running total and publish it to `<subject>.count`. Use `(count! :subject SUBJECT)` or `(count! :subject SUBJECT COND)` to publish that counter to an explicit subject; the state remains per source call site and subject. With no condition, fires every call; with COND, only when COND is truthy (same rules as `if` / `when`, so any predicate composes: `(count! (contains? payload "ERROR"))`, `(count! (> payload-float 100))`, etc.). State is a `.number`, snapshot-persisted. Returns nil so it threads or sits in a `do` block without disturbing the value flowing past.
 
 - `(print! X)` and `(print! LABEL X)` are debug aids: write one line to stderr (`print! [SUBJECT] LABEL = VALUE`) and return `X` unchanged, so they sit cleanly inside `(-> ... (print! "raw") (round 1) (print! "rounded") ...)` without changing the value path. `print!` is not a publish (no `$STATS` bump, not gated by `--trace`). The loader walks every rule body and counts `print!` calls; if any are present the server logs a single warning at startup so a left-in `print!` is visible in the boot log. Use it during debugging, take it out when you ship.
+
+## Funnel: combining subjects
+
+State is per subject. There is no shared state across subjects and no key
+form. To aggregate across subjects, publish them onto one subject with a
+`:reentrant true` rule, and put the stateful rule on that subject. The funnel
+subject must not match the source filter:
+
+```edn
+(on "sensors.*" :reentrant true
+  (publish! "all.sensors" payload))
+
+(on "all.sensors"
+  (publish! "sensors.average" :dp 1 (moving-avg 4 payload-float)))
+```
+
+Per group, build the funnel subject from a token and match it with a wildcard:
+
+```edn
+(on "site.*.*" :reentrant true
+  (publish! (str-concat "group." (subject-token 1)) payload))
+
+(on "group.*"
+  (publish! (subject-append "average") :dp 1 (moving-avg 8 payload-float)))
+```
+
+## Last values and the nil-safe idiom
+
+`(last SUBJECT)` returns the latest payload published on a literal SUBJECT as a
+string, or nil when there is none. It reads the LVC, so SUBJECT must match a
+top-level `(lvc ...)` filter (without one it is always nil). Arithmetic and
+comparison on nil are type errors, so use a thread, which stops on nil:
+
+```edn
+(lvc ["temp.>"])
+
+(on "temp.inside"
+  (-> (last "temp.outside")
+      (- payload-float)
+      (publish! "temp.difference" :dp 1)))
+```
+
+`last` returns a string: arithmetic coerces numeric strings, but `:dp N` formats only numbers, so `(reply! :dp 1 (last "x"))` fails at run time. Wrap it, e.g. `(round 3 (last "x"))`, or omit `:dp`.
+
+Thread-last puts the `last` value in the final argument, so this publishes
+`payload - outside`. Do not write `(- (last "temp.outside") payload-float)`
+unguarded; if you need the non-threaded form, guard it with `(and (last S) ...)`.
+
+## Request-reply (monoblok)
+
+`reply-to` is the request's reply subject (nil when the message had none).
+`(reply! VALUE)` and `(reply! :dp N VALUE)` publish VALUE to it. It is a silent
+no-op when there is no reply subject or VALUE is nil, and it threads like
+`publish!`. `reply-to` is nil for imported messages, clock ticks, `every`
+bodies, and re-entered evaluations, and always nil under `--soundcheck`.
+
+```edn
+(lvc ["temp.>"])
+
+; nats req q.temp "" answers with the latest kitchen temperature.
+(on "q.temp"
+  (reply! (last "temp.kitchen")))
+```
+
+## Heartbeats: `every`
+
+`(every :ms N [:reentrant BOOL] BODY...)` is top level, a sibling of `on`, and
+never appears inside a rule body. `N` is a literal integer from 1 to 1e12. The
+first tick schedules now + N without firing, and a missed interval fires once,
+never a burst. Inside the body `subject` and `payload` are empty strings and
+`reply-to` is nil. Use `(count! :subject "x.count")` rather than bare
+`(count!)` there, since the default subject would be empty.
+
+```edn
+(every :ms 5000
+  (publish! "monoblok.heartbeat" "alive"))
+```
 
 ## The `->` pipeline idiom
 
@@ -314,6 +444,9 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 
 - For "dedupe after rounding / quantizing", thread `round` or `quantize` into `squelch` into `publish!`. Don't hand-roll a last-value check.
 - For analog noise, reach for `deadband` before `squelch`; for slow drift, wrap `moving-avg` in `deadband`.
+- For a threshold that chatters, put `hysteresis` inside `transition` rather than comparing against one number.
+- To combine several subjects into one aggregate, use the funnel pattern; do not look for shared state.
+- For a join of two subjects, use `last` in a thread (nil-safe), with `(lvc ...)` covering the other subject.
 - For alert + all-clear pairs on one predicate, use `transition`, not two `rising-edge` / `falling-edge` rules. It shares the ring and the prev slot.
 - For one-sided alerts that still need to thread, use `rising-edge` / `falling-edge`.
 - When you need multiple windows on the same stream (e.g. max - min spread), drop out of `->` and write the explicit nested form. `->` only threads one value.
@@ -326,6 +459,10 @@ is how a single pipeline "round, dedupe, emit" works without a `when`.
 - Re-implementing `squelch` / `deadband` with `if` and a hand-rolled "last value" (there is no way to store state outside the gate primitives; the gates ARE the state).
 - Using `=` to compare a number and a string. `=` is tag-strict; compare with `<` / `>` or parse first.
 - Changing `N` in `(moving-avg N ...)` between invocations on the same rule. The first call's `N` wins for the lifetime of the slot.
+- Trying to share state across subjects. State is per subject; use the funnel pattern.
+- Doing arithmetic or comparison on `(last ...)` without a nil guard or a `->` thread.
+- Writing `reply!` in a rule and testing it under `--soundcheck`; `reply-to` is always nil there, so it publishes nothing. Check request-reply with a real `nats req`.
+- Writing bare `payload` (or `:ms`, or an unquoted word) in YAML, or bare `"payload"` in JSON. Use `$payload`, `ms`, quoted strings, and `"$payload"`.
 - Assuming `first sight` fires an edge. `rising-edge` / `falling-edge` / `transition` all stay quiet until they have seen at least one prior value.
 
 ## Export form (optional, zero or one at top level)
@@ -420,7 +557,7 @@ subscribers as raw publishes; only explicit rule outputs become visible.
     :lost  (publish! (subject-append "stale") "true")
     :found (publish! (subject-append "stale") "false")))
 
-(on "knobs.*"
+(on "dials.*"
   (debounce! :ms 250 (subject-append "settled") payload))
 
 (on "sensors.*"
@@ -622,10 +759,10 @@ if __name__ == "__main__":
 
 Before returning a patchbay file, verify:
 
-1. For monoblok, every top-level form is `(on ...)`, `(lvc ...)`, or a single optional `(export ...)` / `(import ...)`. Deprecated `(bridge ...)` is accepted as an export alias. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)`, `(export ...)`, deprecated `(bridge ...)`, or `(import ...)` there without alerting the user that they are beyond Lite.
+1. For monoblok, every top-level form is `(on ...)`, `(every ...)`, `(lvc ...)`, or a single optional `(export ...)` / `(import ...)`. Deprecated `(bridge ...)` is accepted as an export alias. For Tinyblok/Patchbay Lite, top-level forms are ordinary `(on ...)` rules plus `(pump ...)`, `(fn ...)`, and `(on-req ...)`; do not rely on `(lvc ...)`, `(export ...)`, deprecated `(bridge ...)`, or `(import ...)` there without alerting the user that they are beyond Lite.
 2. Every `publish!` target is a concrete subject (no `*` or `>`, no `$LVC.` or `$STATS.` prefix - those are read-only).
 3. Every numeric op is fed a numeric value (`payload-float` / `payload-int` / arithmetic result), not raw `payload`.
-4. `N` in `moving-*` is a literal integer and consistent per `(rule, subject, op/window kind)` slot.
+4. `N` in `moving-*` is a literal integer and consistent per call site, subject, and window kind.
 5. Pipelines built with `->` end in a side-effecting form (`publish!`); a pipeline that ends in a pure value is dead code.
 6. Tinyblok `(pump ...)` and `(fn ...)` declarations name registered native symbols, and `on-req` handlers reply with `reply!` rather than assuming arbitrary runtime subscriptions.
 7. Comments start with `;` and never leak prose outside them.

@@ -1,6 +1,18 @@
 #include "http.h"
 
-#include <ctype.h>
+#if __has_include("mb_version.h")
+#include "mb_version.h"
+#endif
+
+#ifndef MB_VERSION
+#define MB_VERSION "0.0.0"
+#endif
+
+// Sent on every HTTP response, for example "Server: monoblok/v0.3.15".
+#define MB_HTTP_SERVER_HEADER "Server: monoblok/v" MB_VERSION "\r\n"
+
+#include "slice.h"
+
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
@@ -93,42 +105,11 @@ static bool slice_starts_lit(mb_slice s, const char *lit) {
     return s.len >= n && memcmp(s.ptr, lit, n) == 0;
 }
 
-static bool slice_eq_ci_lit(mb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    if (s.len != n) {
-        return false;
-    }
-    for (size_t i = 0; i < n; i += 1) {
-        if (tolower((unsigned char)s.ptr[i]) != tolower((unsigned char)lit[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool slice_starts_ci_lit(mb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    if (s.len < n) {
-        return false;
-    }
-    for (size_t i = 0; i < n; i += 1) {
-        if (tolower((unsigned char)s.ptr[i]) != tolower((unsigned char)lit[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool media_type_is(mb_slice value, const char *media_type) {
     value = trim_ows(value);
     const size_t n = strlen(media_type);
-    if (value.len < n) {
+    if (!mb_slice_has_prefix_ci_lit(value, media_type)) {
         return false;
-    }
-    for (size_t i = 0; i < n; i += 1) {
-        if (tolower((unsigned char)value.ptr[i]) != tolower((unsigned char)media_type[i])) {
-            return false;
-        }
     }
     if (value.len == n) {
         return true;
@@ -282,7 +263,7 @@ static bool write_response_bytes(mb_http_conn *conn, int code, const char *reaso
         !append_usize(&conn->router_conn.out, (size_t)code) ||
         !mb_buf_append_byte(&conn->router_conn.out, ' ') ||
         !append_lit(&conn->router_conn.out, reason) ||
-        !append_lit(&conn->router_conn.out, "\r\nServer: monoblok\r\nConnection: close\r\nContent-Length: ") ||
+        !append_lit(&conn->router_conn.out, "\r\n" MB_HTTP_SERVER_HEADER "Connection: close\r\nContent-Length: ") ||
         !append_usize(&conn->router_conn.out, body.len) ||
         !append_lit(&conn->router_conn.out, "\r\nContent-Type: ") ||
         !append_lit(&conn->router_conn.out, type) ||
@@ -425,18 +406,18 @@ static bool parse_headers(mb_slice header, mb_http_request *req) {
         if (name.len == 0) {
             return false;
         }
-        if (slice_eq_ci_lit(name, "authorization")) {
+        if (mb_slice_eq_ci_lit(name, "authorization")) {
             req->authorization = value;
             req->has_authorization = true;
-        } else if (slice_eq_ci_lit(name, "content-type")) {
+        } else if (mb_slice_eq_ci_lit(name, "content-type")) {
             req->content_type = value;
             req->has_content_type = true;
-        } else if (slice_eq_ci_lit(name, "content-length")) {
+        } else if (mb_slice_eq_ci_lit(name, "content-length")) {
             if (req->has_content_length || !parse_usize_slice(value, &req->content_length)) {
                 return false;
             }
             req->has_content_length = true;
-        } else if (slice_eq_ci_lit(name, "transfer-encoding")) {
+        } else if (mb_slice_eq_ci_lit(name, "transfer-encoding")) {
             req->has_transfer_encoding = true;
         }
     }
@@ -628,7 +609,7 @@ static bool base64_decode(mb_slice in, mb_buf *out) {
 }
 
 static bool auth_bearer(mb_http_conn *conn, mb_slice value) {
-    if (!slice_starts_ci_lit(value, "Bearer")) {
+    if (!mb_slice_has_prefix_ci_lit(value, "Bearer")) {
         return false;
     }
     value.ptr += strlen("Bearer");
@@ -638,7 +619,7 @@ static bool auth_bearer(mb_http_conn *conn, mb_slice value) {
 }
 
 static bool auth_basic(mb_http_conn *conn, mb_slice value) {
-    if (!slice_starts_ci_lit(value, "Basic")) {
+    if (!mb_slice_has_prefix_ci_lit(value, "Basic")) {
         return false;
     }
     value.ptr += strlen("Basic");
@@ -739,7 +720,7 @@ static void handle_get(mb_http_conn *conn, const mb_http_request *req) {
     conn->router_conn.write_msg_ctx = conn;
     if (!append_lit(&conn->router_conn.out,
                     "HTTP/1.1 200 OK\r\n"
-                    "Server: monoblok\r\n"
+                    MB_HTTP_SERVER_HEADER
                     "Content-Type: text/event-stream\r\n"
                     "Cache-Control: no-cache\r\n"
                     "Connection: keep-alive\r\n"

@@ -32,7 +32,7 @@
 
 ; Squelch a noisy sensor: only re-publish when the value changes after
 ; rounding to 1 decimal place. Upstream may emit 42.01, 42.04, 42.08,
-; 42.12 — we emit once at 42.0 and once at 42.1.
+; 42.12, we emit once at 42.0 and once at 42.1.
 (on "sensors.*"
   (-> payload-float
       (round 1)
@@ -71,6 +71,46 @@
 ; exact deadline timer if the feed goes quiet.
 ;(on "MARKET.*"
 ;  (bar! :ms 60000 payload-float))
+
+; Hysteresis: a single threshold chatters when a value hovers around it.
+; (hysteresis LO HI X) is true once X >= HI, false once X <= LO, and holds
+; its last answer in between, so transition fires once per real excursion.
+; nats pub boiler.temp 20  => nothing (first sight never fires an edge)
+; nats pub boiler.temp 29  => boiler.temp.alert "hot"
+; nats pub boiler.temp 27  => nothing (inside the 26..28 band)
+; nats pub boiler.temp 25  => boiler.temp.ok "cool"
+(on "boiler.temp"
+  (transition (hysteresis 26.0 28.0 payload-float)
+    (publish! (subject-append "alert") "hot")
+    (publish! (subject-append "ok")    "cool")))
+
+; Funnel: patchbay state is per subject, so there is no shared state across
+; subjects. To average room.kitchen.temp and room.office.temp together,
+; republish both onto one subject with a :reentrant rule, then put the
+; stateful rule on that subject.
+; nats pub room.kitchen.temp 20 ; nats pub room.office.temp 22 => room.average 21.0
+(on "room.*.temp" :reentrant true
+  (publish! "room.all" payload))
+
+(on "room.all"
+  (publish! "room.average" :dp 1 (moving-avg 2 payload-float)))
+
+; Last value: (last SUBJECT) reads the LVC (see (lvc ...) above), so it is
+; a join with another subject. It is nil until that subject has a value, and
+; a thread stops on nil, so nothing is published until both sides exist.
+; nats pub room.office.temp 22 ; nats pub room.kitchen.temp 20.5
+;   => room.kitchen.warmer-by -1.5
+(on "room.kitchen.temp"
+  (-> (last "room.office.temp")
+      (- payload-float)
+      (publish! "room.kitchen.warmer-by" :dp 1)))
+
+; Reply: answer a request with a cached value. reply-to is the request's
+; reply subject; (reply! VALUE) publishes to it, and does nothing if there
+; is no reply subject or VALUE is nil.
+; nats req ask.room.office ""  => 22
+(on "ask.room.office"
+  (reply! (last "room.office.temp")))
 
 ; Outbound NATS bridge (commented out). Zero or one (bridge ...) form
 ; at top level. See docs/patchbay-cheatsheet.md for the full keyword

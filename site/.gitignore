@@ -1,0 +1,4 @@
+# Not kept in the repo: ESP32 firmware build output and the esp-web-tools bundle.
+# Drop them in locally (or at deploy time) for esp32.html to work.
+assets/esp32/firmware/
+assets/esp32/vendor/

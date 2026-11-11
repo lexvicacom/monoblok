@@ -39,17 +39,21 @@ to make S-expressions feel less manual.
 
 JSON is read into the same patchbay AST, not a separate DSL: arrays are
 forms and the first array item is always the operator symbol. In
-argument positions, plain objects become keyword options, and the bound
-names `"subject"`, `"payload"`, `"payload-float"`, `"payload-int"`, and
-`"replaying?"` become symbols in rule expressions.
+argument positions, plain objects become keyword options, and strings
+with a leading `$` (`"$subject"`, `"$payload"`, `"$payload-float"`,
+`"$payload-int"`, `"$payload-bool"`, `"$replaying?"`, `"$reply-to"`)
+become bound symbols in rule expressions. An unknown `"$name"` is a load
+error.
 
 ```json
 [
   ["on", "sensors.*",
-    ["->", "payload-float", ["round", 1], ["squelch"], ["publish!", ["subject-append", "stable"]]]],
+    ["->", "$payload-float", ["round", 1], ["squelch"], ["publish!", ["subject-append", "stable"]]]],
 
   ["on", "market.*", {"reentrant": true},
-    ["bar!", 60, "payload-float"]],
+    ["bar!", 60, "$payload-float"]],
+
+  ["every", {"ms": 1000}, ["publish!", "tick", "alive"]],
 
   ["export", {
     "servers": ["nats://127.0.0.1:4223"],
@@ -58,10 +62,16 @@ names `"subject"`, `"payload"`, `"payload-float"`, `"payload-int"`, and
 ]
 ```
 
-Other strings in argument positions are string literals. Use
-`{"str":"payload"}` if you really need the literal string `"payload"` in
-a rule body, `{"kw":"ms"}` for a standalone keyword, and `{"vec":[...]}`
-when a rule body needs a literal vector. See
+Other strings in argument positions are string literals, so a plain
+`"payload"` is just the text `payload`, with no error. That is the one
+migration hazard from the older JSON spelling, where bare `"payload"`
+was the bound value: an old file still loads, and silently publishes the
+word instead of the payload. Search old JSON patchbays for bare
+`"subject"`, `"payload"`, `"payload-float"`, `"payload-int"`, and
+`"replaying?"` and add the `$`. Use `{"str":"$payload"}` if you really
+need the literal text `$payload` in a rule body, `{"kw":"ms"}` for a
+standalone keyword, and `{"vector":[...]}` when a rule body needs a
+literal vector (the old `{"vec":[...]}` key is a load error). See
 [`examples/demo.json`](../examples/demo.json) for a fuller conversion of
 [`examples/demo.edn`](../examples/demo.edn).
 
@@ -72,18 +82,18 @@ YAML subset. It is also lowered directly into the same patchbay AST:
 YAML never evaluates and no EDN/JSON text is generated internally.
 Supported shapes are block maps/lists, flow arrays for call forms,
 quoted or unquoted scalars, numbers, booleans, nulls, top-level `on`,
-`lvc`, `export`, `bridge`, and `import`. In top-level config string
-positions, `env: "NAME"` lowers to `(env "NAME")`.
+`every`, `lvc`, `export`, `bridge`, and `import`. In top-level config
+string positions, `env: "NAME"` lowers to `(env "NAME")`. Every file is
+also valid standard YAML.
 
 ```yaml
 on:
   - sub: "car.*.rpm"
     thread:
-      from: payload-float
-      steps:
-        - [quantize, 50]
-        - [squelch]
-        - [publish!, [subject-append, "stable"], :dp, 1]
+      - $payload-float
+      - [quantize, 50]
+      - [squelch]
+      - [publish!, [subject-append, "stable"], dp, 1]
 ```
 
 That lowers to the same AST as:
@@ -96,12 +106,16 @@ That lowers to the same AST as:
       (publish! (subject-append "stable") :dp 1)))
 ```
 
-Within expression arrays, the first item is a form symbol; bound names
-such as `payload`, `payload-float`, `payload-int`, `subject`, and
-`replaying?` lower as symbols; other scalar arguments lower as strings
-unless they are numbers, booleans, nulls, or keywords like `:ms`.
-Examples quote those literal strings so they are easy to distinguish
-from symbols and operators. See
+Within expression arrays, the first item is a form symbol. A `$name`
+(`$payload`, `$payload-float`, `$payload-int`, `$payload-bool`,
+`$subject`, `$replaying?`, `$reply-to`) lowers to the bound symbol, and
+a bare option word (`ms`, `dp`, `subject`, ...) lowers to the keyword
+(`:ms`, `:dp`). Every other string in a rule body must be quoted; an
+unquoted word that is not a number, boolean, null, binding or option is
+a load error, so a typo cannot silently become text. Operators made of
+punctuation (`>`, `*`, `->`) must be quoted too, as in
+`[">", $payload-float, 80]`. `when: EXPR` is a rule-level guard beside
+one body key, and `[vector, 1, 2, 3]` is a literal vector. See
 [`examples/rental-car.yml`](../examples/rental-car.yml) for the fuller
 shape and [`patchbay-yaml-schema.md`](./patchbay-yaml-schema.md) for the
 YAML shape reference.
@@ -110,7 +124,7 @@ YAML shape reference.
 
 Patchbay files are valid EDN, which is why `.edn` editor tooling
 (syntax highlighting, paren-matching, structural editing) works out
-of the box. EDN itself is a data notation — it parses lists `(...)`,
+of the box. EDN itself is a data notation: it parses lists `(...)`,
 vectors `[...]`, strings, numbers, keywords, and so on, and stops
 there. It does not say what any of those mean. The patchbay is the
 piece that gives some of those forms call semantics, and only in
@@ -122,9 +136,10 @@ diverges. Clojure's rule is "every `(...)` is a call unless I
 because whether a list dispatches as a call is decided by *where it
 appears*, not by a sigil:
 
-- Inside an `(on FILTER BODY)` body, every list dispatches on its
+- Inside an `(on FILTER BODY)` or `(every :ms N BODY)` body, every list dispatches on its
   head symbol (`hold-off`, `publish!`, `+`, etc.). Unknown heads
-  error.
+  and unknown symbols are rejected at load and by `--validate`, in
+  every branch, not just the one a test message happens to take.
 - Inside top-level config forms, sequences are data. In `(lvc ...)`,
   a single vector is read as the filter set. Inside
   `(export ...)`, deprecated `(bridge ...)`, and `(import ...)`, after a keyword like
@@ -210,12 +225,11 @@ export:
 
 on:
   - sub: "js.sensors.temp"
-    form:
-      - do
+    do:
       - [count!]
-      - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, payload-float]]]
-      - [bar!, :ms, 1000, payload-float]
-      - [if, replaying?, [publish!, "js.replay.last-temp", payload], [publish!, "js.live.temp", payload]]
+      - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, $payload-float]]]
+      - [bar!, ms, 1000, $payload-float]
+      - [if, $replaying?, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
 ```
 
 JetStream import is consumer-only: monoblok does not serve JetStream to local
@@ -316,7 +330,12 @@ Bare symbols inside a body that resolve against the current message:
 | `payload`       | string     | the raw payload bytes              |
 | `payload-float` | number     | `payload` parsed as a floating-point number (errors if not numeric) |
 | `payload-int`   | number     | `payload` parsed as an integer and returned as a number (errors on non-integer input) |
+| `payload-bool`  | bool       | `true` for `true` / `1` / `on`, `false` for `false` / `0` / `off` (ASCII case-insensitive, no trimming); any other payload is a type error |
 | `replaying?`    | bool       | true while JetStream loading-phase replay is evaluating historical messages |
+| `reply-to`      | string or nil | the request's reply subject (see "Request-reply" below); nil when the message had none |
+
+An empty payload is not the number 0: `payload-float` and `payload-int`
+on an empty payload are type errors, and so is `payload-bool`.
 
 ## Special forms
 
@@ -476,8 +495,41 @@ forever, so re-entry is depth-capped (default 8). The original PUB
 runs at depth 0, and each level of re-entry increments by one;
 emissions past the cap are dropped and logged to stderr.
 
-`:reentrant` is the only rule option currently recognised. Unknown
-options are a load error.
+`:reentrant` is the only rule option currently recognised (on `on` and
+`every`). Unknown options are a load error. Re-entry is also how rules
+share state across subjects; see "Funnel" below.
+
+## Funnel
+
+State is per subject, so a stateful form on `sensors.*` keeps one slot
+for each concrete subject. There is no shared state across subjects,
+and no key to choose. To combine subjects, publish them onto one subject
+with a re-entrant rule, and put the stateful rule on that subject:
+
+```edn
+(on "sensors.*" :reentrant true
+  (publish! "all.sensors" payload))
+
+(on "all.sensors"
+  (publish! "sensors.average" :dp 1 (moving-avg 4 payload-float)))
+```
+
+Every `sensors.*` message is republished as `all.sensors`, re-enters
+rule evaluation, and lands in one `moving-avg` ring. The funnel subject
+must not match the source filter, or the rule would feed itself.
+For one funnel per group, build the funnel subject from a
+token and match it with a wildcard:
+
+```edn
+(on "site.*.*" :reentrant true
+  (publish! (str-concat "group." (subject-token 1)) payload))
+
+(on "group.*"
+  (publish! (subject-append "average") :dp 1 (moving-avg 8 payload-float)))
+```
+
+The funnel subject is an ordinary publish: subscribers and `lvc` see it,
+and the cost is one extra rule evaluation per message.
 
 ## Threading with `->`
 
@@ -525,15 +577,21 @@ gate blocks. You don't need `when` anywhere in a threaded pipeline.
 
 Real sensor streams are noisy. These primitives turn a chatty
 publisher into a "change-only" one without any timers or windows;
-one slot of state per subject the rule has ever seen.
+one slot of state per call site and subject the rule has ever seen.
+
+State identity is per call site: each place a stateful form appears in
+a rule body gets its own state, so two `(squelch ...)` calls in one rule
+never share a slot. It is also per subject, so `sensors.*` keeps one
+slot for every concrete subject it has seen. To combine several
+subjects into one slot, see "Funnel" below.
 
 | form                  | behavior                                                                       |
 |-----------------------|--------------------------------------------------------------------------------|
 | `(round N X)`         | round number `X` to `N` decimal places (pure)                                  |
 | `(quantize STEP X)`   | snap `X` to the nearest multiple of `STEP` (pure)                              |
-| `(squelch X)`         | pass `X` through iff it differs from the last `X` seen on this (rule, subject) |
+| `(squelch X)`         | pass `X` through iff it differs from the last `X` seen at this call site and subject |
 | `(deadband DELTA X)`  | pass `X` through iff numeric `X` changed by at least `DELTA` since last emit   |
-| `(changed? X)`        | boolean predicate: true iff `X` differs from the last `X` on this (rule, subject); true on first sight |
+| `(changed? X)`        | boolean predicate: true iff `X` differs from the last `X` at this call site and subject; true on first sight |
 | `(delta X)`           | numeric difference between `X` and the last `X`; 0 on first sight              |
 
 `changed?` is the predicate form of `squelch`: it returns a plain
@@ -544,9 +602,10 @@ Gates return the value on pass and `nil` on suppress. Truthy-on-pass
 keeps them usable as conditions in `when` / `and`, while passing the
 value through makes them compose directly with `->` and `publish!`.
 `squelch` stores the stringified value; `deadband` stores the numeric
-anchor and only updates it on an accepted change. Both are **per rule,
-per subject**: two rules watching the same subject don't interfere,
-and the first message a rule sees on a new subject always passes.
+anchor and only updates it on an accepted change. Both are **per call
+site, per subject**: two rules (or two calls in one rule) watching the
+same subject don't interfere, and the first message a call site sees on
+a new subject always passes.
 
 ```edn
 ; Jittery temperature sensor, only emit when the rounded value moves.
@@ -580,8 +639,8 @@ Time source is the ingress wall-clock (monotonic ms from the event
 loop), stamped once per incoming publish, so every op in one evaluation
 sees the same "now." This means `hold-off` is only evaluated when a
 message arrives (it's not a ticking timer): a stream that goes silent
-will stay silent, not fire a delayed trailing emit. Per (rule, subject),
-same as the other gates.
+will stay silent, not fire a delayed trailing emit. Per call site and
+subject, same as the other gates.
 
 ```edn
 ; Alert is noisy during a transient; emit at most once per 2s.
@@ -622,15 +681,16 @@ about the spacing.
 `WINDOW` is either a bare integer `N` (tick window) or `:ms N` (time
 window). Tick form counts the last `N` evaluations; time form counts
 pass timestamps in the last `N` ms and is evicted by the server's
-shared patchbay timer. Per (rule, subject, window-kind).
+shared patchbay timer. Per call site, subject, and window kind.
 
 ## Windowed aggregates
 
 A small windowing family for smoothing and window-based triggers. State
-is keyed by `(rule, subject, op, window kind)`, so a tick-windowed and a
-time-windowed `moving-avg` on the same rule and subject keep independent
-state. Repeating the same op/window kind in the same rule and subject
-shares that slot; split it across rules if you need separate state.
+is keyed by `(rule, call site, op, window kind, subject)`, so a
+tick-windowed and a time-windowed `moving-avg` on the same rule and
+subject keep independent state, and so do two `moving-avg` calls in one
+rule. (Before call-site identity, two uses of the same form in one rule
+shared a slot; they no longer do.)
 
 A window is either a tick count or a wall-clock duration:
 
@@ -704,10 +764,24 @@ Window ops return numbers, so they compose directly with the
 arithmetic, comparison, and gating primitives above. No special
 pipeline syntax.
 
+### Exponential average
+
+`(ewma ALPHA X)` is a smoothed value that needs no ring. `ALPHA` is in
+`(0, 1]`; the first sample returns `X`, and after that
+`s = ALPHA * X + (1 - ALPHA) * s`. A small `ALPHA` is smooth and slow, an
+`ALPHA` of 1 passes `X` through. State is one number per call site and
+subject, so unlike `(moving-avg N X)` the cost does not grow with the
+window. `ALPHA` out of range, or a non-numeric `X`, is a type error.
+
+```edn
+(on "rpc.latency"
+  (publish! "rpc.latency.smooth" :dp 2 (ewma 0.2 payload-float)))
+```
+
 ### Rate, percentiles, distribution shape
 
 The same windowing machinery powers a few more analytical primitives.
-Each one is keyed `(rule, op, window-kind, subject)` so they don't
+Each one is keyed by call site, op, window kind, and subject, so they don't
 share state with `moving-*` even on the same subject.
 
 | form                          | returns | meaning                                       |
@@ -783,7 +857,7 @@ and only the next heartbeat after that runs `:found`.
 quiet time and then publishes the latest value.
 
 ```edn
-(on "knobs.*"
+(on "dials.*"
   (debounce! :ms 250
     (subject-append "settled")
     payload))
@@ -809,6 +883,31 @@ windowed aggregate forms. It supports `:avg`, `:sum`, `:min`, `:max`,
   (aggregate! :ms 10000 "rpc.latency.avg10s" :avg payload-float))
 ```
 
+### Heartbeats with `every`
+
+`(every :ms N [:reentrant BOOL] BODY...)` is a top-level sibling of
+`on`. It runs BODY on a fixed period instead of on a publish. `N` is a
+literal integer from 1 to 1e12; several BODY forms are an implicit `do`.
+
+```edn
+(every :ms 5000
+  (publish! "monoblok.heartbeat" "alive"))
+```
+
+The first tick schedules the next one at now + N without firing. After
+that it fires once per interval; if several intervals were missed it
+fires once and realigns to now + N, with no burst. Inside the body,
+`subject` and `payload` are empty strings and `reply-to` is nil. `last`,
+`now`, stateful forms, and `publish!` work. `:reentrant true` feeds the
+body's emissions back to `on` rules.
+
+`count!` defaults to `<subject>.count`, which is invalid with an empty
+subject, so inside `every` write `(count! :subject "x.count")`. `every`
+inside a rule body, a missing or fractional `:ms`, an empty body, and an
+unknown option are all load errors. The timer itself is not persisted in
+snapshots; it is recreated at load. An `every` rule takes a rule index,
+so `$STATS.rules.N.*` covers it.
+
 ## Edge gates
 
 `squelch` fires on every change; often you only want one fire per
@@ -821,8 +920,8 @@ matching transition.
 | `(rising-edge X)`     | `X` transitions from falsy to truthy           |
 | `(falling-edge X)`    | `X` transitions from truthy to falsy           |
 
-Both are **per rule, per subject**, and the first message a rule sees
-on a new subject never fires (no prior state means no edge, so no
+Both are **per call site, per subject**, and the first message a call
+site sees on a new subject never fires (no prior state means no edge, so no
 cold-start noise). Use `rising-edge` / `falling-edge` when you only
 care about one direction and want to keep threading through `->`.
 
@@ -841,6 +940,26 @@ branches.
 Compared to pairing two edge-gate rules, this evaluates the predicate
 once, keeps one `moving-avg` ring instead of two, and doesn't renumber
 when you later add or remove rules around it.
+
+### Hysteresis
+
+A single threshold chatters when the value hovers around it.
+`(hysteresis LO HI X)` returns a boolean with two thresholds: it becomes
+true once `X >= HI`, false once `X <= LO`, and between them it holds
+whatever it said last. On first sight it is `X >= HI`. If `LO` equals
+`HI`, `X >= HI` wins. `LO > HI` or a non-numeric argument is a type
+error.
+
+It returns a bool on every call, so it composes with `rising-edge`,
+`falling-edge`, `transition`, and `when`:
+
+```edn
+; Alert at 28 or above, clear only once it falls to 26 or below.
+(on "temp.*"
+  (transition (hysteresis 26.0 28.0 payload-float)
+    (publish! (subject-append "alert") "hot")
+    (publish! (subject-append "ok")    "cool")))
+```
 
 ## JSON payloads
 
@@ -935,7 +1054,7 @@ four sub-subjects under `<subject>.bar`:
 | `.bar.close` | last sample seen in the bar (the closing tick or last     |
 |              | sample before the boundary, for time bars)                |
 
-State is per `(rule, subject, window kind)`, so a single rule on
+State is per call site, subject, and window kind, so a single rule on
 `MARKET.*` builds independent bars for every symbol, and a tick bar
 plus a time bar on the same subject keep distinct slots. The op
 returns `nil`, so it slots into a `do` block or stands alone as the
@@ -965,7 +1084,7 @@ intermediate per-tick noise.
 
 `bar!` is fixed-size per stream, but the stream cardinality is yours to
 budget. Each distinct subject seen by the bar rule gets a long-lived
-state slot keyed by `(rule, subject, window-kind)`; closing a bar resets
+state slot keyed by call site, subject, and window kind; closing a bar resets
 the in-progress values but does not remove that slot. A raw trade feed
 shaped like `T.<MARKET>.<SYM>` or a demuxed price stream shaped like
 `T.<MARKET>.<SYM>.p` across thousands of symbols and tens of markets can
@@ -988,7 +1107,7 @@ bars, pair the rule with `(count!)` if you want the per-bar tick count.
 
 ## Running counters
 
-`(count!)` is a side-effecting running counter, per `(rule, subject)`.
+`(count!)` is a side-effecting running counter, per call site and subject.
 Each call increments and publishes the new total to `<subject>.count`.
 Returns nil so it threads or sits in a `do` block without disturbing the
 value being passed through.
@@ -999,7 +1118,7 @@ itself is fully general, so it composes with everything the dialect
 already has (`contains?`, comparisons, `changed?`, `rising-edge`, ...).
 Use `(count! :subject SUBJECT)` or `(count! :subject SUBJECT COND)` to
 publish the counter somewhere other than `<subject>.count`. The counter
-identity remains per source `(rule, subject)`; the option only changes
+identity remains per source call site and subject; the option only changes
 the output subject.
 
 ```edn
@@ -1024,6 +1143,81 @@ the output subject.
 State is a single number, snapshot-persisted, so a restart resumes from
 the last seen total instead of zero. Subscribe to `<subject>.count` (or
 `$LVC.<subject>.count` for the latest value) to watch a counter live.
+
+## Last values
+
+`(last SUBJECT)` returns the latest payload published on SUBJECT as a
+string, or nil when there is none. It reads the same cache that
+`$LVC.SUBJECT` serves, so SUBJECT must be a literal subject that matches
+a top-level `(lvc ...)` filter. Without `(lvc ...)`, or with `--no-lvc`,
+it is always nil. A wildcard, empty, or malformed subject is an error,
+and an empty stored payload returns `""`, not nil.
+
+A client publish reaches the cache before its rules run, so
+`(last subject)` inside a rule equals the current payload. A rule's own
+`publish!` updates the cache too.
+
+nil is not a number: arithmetic and comparison on it are type errors.
+The idiomatic nil-safe shape is a thread, which stops when a step yields
+nil:
+
+```edn
+(lvc ["temp.>"])
+
+(on "temp.inside"
+  (-> (last "temp.outside")
+      (- payload-float)
+      (publish! "temp.difference" :dp 1)))
+```
+
+Threading puts the `last` value in the final argument, so this publishes
+`payload - outside`. Until `temp.outside` has been seen, the thread ends
+at the nil and nothing is published. The unthreaded form needs a guard:
+`(and (last "temp.outside") (> (last "temp.outside") 30))`.
+
+`last` returns a string. Arithmetic and comparison coerce numeric strings,
+but `:dp N` formats only numbers, so `(reply! :dp 1 (last "x"))` is a type
+error when it runs (`--validate` cannot see it, because `last` is nil
+there). Pass the value through arithmetic first, for example
+`(round 3 (last "x"))`, or leave `:dp` off and reply with the string as
+stored.
+
+`--validate` checks arity and subject validity only. `--soundcheck`
+keeps its own last-value table that honours the file's `(lvc ...)`
+filters, updated from each input row and each emitted row.
+
+## Request-reply
+
+A NATS request carries a reply subject. Patchbay exposes it as the
+bound symbol `reply-to` (a string, or nil when the message had none),
+and `reply!` publishes to it:
+
+| form | effect |
+|------|--------|
+| `(reply! VALUE)` | `publish!` VALUE to the reply subject |
+| `(reply! :dp N VALUE)` | same, formatting a numeric VALUE with N decimal places |
+
+`reply!` is a silent no-op (counted as suppressed) when there is no
+reply subject or VALUE is nil, and it applies the same subject checks as
+`publish!`. It threads like `publish!`: `(-> (last "temp.kitchen") (reply!))`
+and `(-> x (reply! :dp 1))` both work.
+
+```edn
+(lvc ["temp.>"])
+
+; nats req q.temp "" answers with the latest kitchen temperature.
+(on "q.temp"
+  (reply! (last "temp.kitchen")))
+```
+
+`reply-to` is nil for imported messages, clock ticks, `every` bodies,
+and re-entered evaluations, and it is always nil under `--soundcheck`,
+so a request-reply rule can be validated but is checked end to end with
+a real client:
+
+```sh
+nats req q.temp ""
+```
 
 ## Debug printing
 

@@ -34,8 +34,8 @@ bool mb_bridge_start(mb_bridge *bridge, const pb_bridge_config *config) {
     }
 
     mb_nats_strings strings = {0};
-    const mb_nats_options_config options = mb_nats_options_from_bridge(config);
-    bool ok = mb_nats_set_options(opts, &options, &strings);
+    const pb_remote_config *options = &config->remote;
+    bool ok = mb_nats_set_options(opts, options, &strings);
     char *origin_value = NULL;
     if (ok && config->origin_header) {
         origin_value = mb_nats_origin_header_value();

@@ -24,9 +24,9 @@ Now `nats pub` and `nats sub` go to the demo server by default.
 nats sub 'demo.>'
 
 # In another: drive some input.
-nats pubdemo.sensors.temp 25.3
-nats pubdemo.sensors.temp 25.34
-nats pubdemo.sensors.temp 25.38
+nats pub demo.sensors.temp 25.3
+nats pub demo.sensors.temp 25.34
+nats pub demo.sensors.temp 25.38
 ```
 
 Subject names starting with `$` (like `$LVC.*`) need single-quoting
@@ -54,7 +54,7 @@ input subject plus a suffix.
 | `demo.log.<name>` (any text)         | `demo.alerts`                               | mirror if payload contains `alert`, prefixed with source  |
 
 State (`squelch` last values, `moving-avg` rings, `transition`
-previous state) is **per rule, per subject**, for the server's
+previous state) is **per call site, per subject**, for the server's
 lifetime. Two people both publishing to `demo.sensors.temp` share
 the same state (that's a feature of the demo, not a bug).
 
@@ -104,53 +104,53 @@ plain ASCII numbers.
 ### Squelch (value dedup)
 
 ```
-nats pubdemo.sensors.temp 42.01   # -> .stable emits "42.0"
-nats pubdemo.sensors.temp 42.04   # -> rounds to 42.0, same, suppressed
-nats pubdemo.sensors.temp 42.08   # -> rounds to 42.1, emits
-nats pubdemo.sensors.temp 42.12   # -> rounds to 42.1, suppressed
+nats pub demo.sensors.temp 42.01   # -> .stable emits "42.0"
+nats pub demo.sensors.temp 42.04   # -> rounds to 42.0, same, suppressed
+nats pub demo.sensors.temp 42.08   # -> rounds to 42.1, emits
+nats pub demo.sensors.temp 42.12   # -> rounds to 42.1, suppressed
 ```
 
 ### Hold-off (time dedup)
 
 ```
-nats pubdemo.sensors.temp 45      # -> .overload emits (first sight)
-nats pubdemo.sensors.temp 46      # -> within 2s, suppressed
-nats pubdemo.sensors.temp 47      # -> still within 2s, suppressed
+nats pub demo.sensors.temp 45      # -> .overload emits (first sight)
+nats pub demo.sensors.temp 46      # -> within 2s, suppressed
+nats pub demo.sensors.temp 47      # -> still within 2s, suppressed
 # wait 2s
-nats pubdemo.sensors.temp 48      # -> .overload emits
+nats pub demo.sensors.temp 48      # -> .overload emits
 ```
 
 ### Transition (both edges, one rule)
 
 ```
-nats pubdemo.sensors.temp 20      # first sight, no edge
-nats pubdemo.sensors.temp 30      # crossed 28 -> .alert "hot"
-nats pubdemo.sensors.temp 31      # still above, nothing
-nats pubdemo.sensors.temp 25      # crossed back -> .ok "cool"
+nats pub demo.sensors.temp 20      # first sight, no edge
+nats pub demo.sensors.temp 30      # crossed 28 -> .alert "hot"
+nats pub demo.sensors.temp 31      # still above, nothing
+nats pub demo.sensors.temp 25      # crossed back -> .ok "cool"
 ```
 
 ### Counting threshold crossings
 
 ```
-nats pubdemo.sensors.temp 10      # below 50, no spike, count unchanged
-nats pubdemo.sensors.temp 60      # crosses 50 -> .spike, .count "1"
-nats pubdemo.sensors.temp 70      # still above, no edge, count unchanged
-nats pubdemo.sensors.temp 40      # drops below, no edge
-nats pubdemo.sensors.temp 55      # crosses 50 again -> .spike, .count "2"
+nats pub demo.sensors.temp 10      # below 50, no spike, count unchanged
+nats pub demo.sensors.temp 60      # crosses 50 -> .spike, .count "1"
+nats pub demo.sensors.temp 70      # still above, no edge, count unchanged
+nats pub demo.sensors.temp 40      # drops below, no edge
+nats pub demo.sensors.temp 55      # crosses 50 again -> .spike, .count "2"
 ```
 
 ### Alerts from logs
 
 ```
-nats pubdemo.log.db "heartbeat ok"        # nothing
-nats pubdemo.log.db "replication alert!"  # -> demo.alerts "[db] replication alert!"
+nats pub demo.log.db "heartbeat ok"        # nothing
+nats pub demo.log.db "replication alert!"  # -> demo.alerts "[db] replication alert!"
 ```
 
 ### Late-joining with `$LVC`
 
 ```
 # Someone else publishes, you weren't listening.
-nats pubdemo.sensors.temp 23.5
+nats pub demo.sensors.temp 23.5
 
 # Subscribe later. Normal SUB would see nothing until the next publish.
 # $LVC gives you the last value immediately.

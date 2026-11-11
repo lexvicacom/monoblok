@@ -1,32 +1,10 @@
 # monoblok Overview
 
-> A NATS-core compatible messaging system that conditions subjects before subscribers see them.
-> 
-> Fix raw input streams once, not in every subscriber.
+This is the longer guide to monoblok: patchbay basics, debugging, the optional listeners and adapters, bridge and import, snapshots, and deploying. For the rationale, the common ways of running monoblok, install steps and benchmarks in brief, start with the [README](../README.md).
 
-## Rationale
-
-It is not uncommon for systems to contain some _caretaker_ services that subscribe to ingress NATS subjects to clean up and republish a raw stream before the real business starts. This might include rounding, dedup, deadband, JSON demux, OHLC bars, threshold alerts and so on. High velocity or miniscule changes don't always have value downstream. monoblok lets you declare that tidying work once, leveraging efficient implementations of common tasks as rules at the broker, instead of writing _rounding logic_ N times in N services.
-
-**Declare it once, as rules, in the broker.**
-
-monoblok speaks NATS. Point your NATS clients at it and the conditioning happens on the way through. Rules live in patchbay, a small S-expression DSL.
-
-![monoblok round and squelch demo](./monoblok-round-squelch-fixed.gif)
-
-Common ways of running monoblok:
-- Standalone broker: clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
-- Signal conditioning front door: publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a real NATS cluster.
-- Tap into existing NATS: monoblok subscribes to selected subjects on a real NATS cluster, treats them as private patchbay input, then emits only the cleaned or derived subjects your rules choose.
+The three common ways of running monoblok (standalone broker, signal conditioning front door, and tap into existing NATS) look like this:
 
 ![monoblok deployment modes](./infographic.png)
-
-monoblok is written in C with libuv and builds on Linux and macOS. It aims to be **fast**, even on entry level/shared hardware. The [saved benchmarks](../bench-results) show low millions of msgs/sec on a 2-core ARM VPS, suggesting monoblok is unlikely to be the bottleneck in many likely conditioning workloads. The numbers are directional rather than scientific; see the [scripts](../scripts) if you want to rerun them.
-
-[tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation of the same idea, but for microcontrollers.
-
-
-[Read the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
 ## Public demo server
 
@@ -51,16 +29,7 @@ See [docs/demo.md](./demo.md) for the loaded patchbay and subjects worth subscri
 
 ## Install
 
-### Binary (macOS/Linux)
-This script downloads and unpacks the latest release into the current directory. See [scripts/start.sh](../scripts/start.sh)
-
-You can run it with:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
-```
-
-Or [grab the latest](https://github.com/lexvicacom/monoblok/releases/latest).
+See [Run it](../README.md#run-it) in the README for the binary, container and source build instructions.
 
 ## patchbay
 
@@ -86,18 +55,18 @@ The vocabulary is borrowed from electronics (`squelch` suppresses until the valu
 
 JSON payloads like `{"temp":12.5,"hum":80}` can be demuxed onto scalar sub-subjects (`json-demux!`) and conditioned the same way; dotted object paths are supported up to four levels deep. [`json-frames.edn`](../examples/json-frames.edn) shows the fuller version.
 
-Time-windowed operators cover OHLC bars, moving aggregates, silence detection, debounce, and sampling.
+Time-windowed operators cover OHLC bars, moving aggregates, silence detection, debounce, and sampling. `hysteresis` and `ewma` smooth a threshold and a value without a window, `last` reads another subject's cached value, `reply!` answers a request, and a top-level `every` rule runs on a timer instead of a publish. To aggregate across subjects, a re-entrant rule funnels them onto one subject and a second rule keeps the state (see [docs/patchbay.md](./patchbay.md#funnel)).
 
 The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives in [docs/patchbay.md](./patchbay.md), with a one-line operator summary in [docs/patchbay-cheatsheet.md](./patchbay-cheatsheet.md). Runnable examples live in [`examples/`](../examples/).
 
 | file                                              | what it shows                                                   |
 |---------------------------------------------------|-----------------------------------------------------------------|
 | [`sensors.edn`](../examples/sensors.edn)           | round + squelch on a noisy sensor                               |
-| [`office-temp.edn`](../examples/office-temp.edn)   | moving-average alert + all-clear via `transition` and `count!`  |
+| [`office-temp.edn`](../examples/office-temp.edn)   | moving-average alert + all-clear via `transition` with `hysteresis` |
 | [`ticker.edn`](../examples/ticker.edn)             | market data: round, squelch, big-jump alerts, export            |
 | [`bars.edn`](../examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
 | [`latency-stats.edn`](../examples/latency-stats.edn) | live p50/p95/p99/stddev over a sliding window                 |
-| [`clocked.edn`](../examples/clocked.edn)             | silence detection, debounce, sampling, and clocked aggregates |
+| [`clocked.edn`](../examples/clocked.edn)             | silence detection, debounce, sampling, clocked aggregates, an `every` heartbeat, and a funnel |
 | [`json-frames.edn`](../examples/json-frames.edn)   | `json-demux!` a JSON-emitting device into scalar sub-subjects   |
 | [`rental-car.edn`](../examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
 | [`rental-car.yml`](../examples/rental-car.yml)     | the same rules using YAML sugar                                 |
@@ -105,6 +74,7 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 | [`jetstream.yml`](../examples/jetstream.yml)       | replay a populated JetStream stream, then continue live         |
 | [`demo.edn`](../examples/demo.edn)                 | tour of every primitive on `demo.sensors.*`                     |
 | [`lvc.edn`](../examples/lvc.edn)                   | `$LVC.>` cache replay: a late joiner gets the last value        |
+| [`ask.edn`](../examples/ask.edn)                   | join two subjects with `last`, answer a request with `reply!`   |
 
 
 ### Validate and debug rules
@@ -117,6 +87,8 @@ For quick patchbay debugging, `--soundcheck` runs the same evaluator without ope
 printf 'sensors.temp|31\n' | monoblok --soundcheck examples/sensors.edn
 printf 'sensors.temp|31\n' | monoblok --soundcheck --soundcheck-label examples/sensors.edn
 ```
+
+`--validate` loads the file with the same loader as startup, so it is strict: unknown forms and symbols are rejected in every branch, duplicate `export` / `import` forms and non-integer numbers where an integer is required are errors, and parse errors report `line:col`. `--soundcheck` follows `:reentrant true` publishes like the server does. `reply-to` is always nil under `--soundcheck`, so check `reply!` rules against a running server with `nats req`. At runtime a failed rule evaluation is logged with the rule's filter and rate-limited (the first failure, then every power of two).
 
 ### `--trace`: protocol trace
 
@@ -137,11 +109,7 @@ A nice way to learn it is with an LLM that has the DSL loaded as project context
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
 ```
 
-[docs/CLAUDE_PATCHBAY.md](./CLAUDE_PATCHBAY.md) is the Claude-specific version for `CLAUDE.md`. Once loaded, describe the stream you have and the stream you want.
-
-<p align="center">
-  <img src="claude.png" alt="Claude Code editing a patchbay" width="720">
-</p>
+For Claude Code, append the same file to `CLAUDE.md` instead. Once loaded, describe the stream you have and the stream you want.
 
 For some elaborate generated demos, see [`advanced-examples/`](../advanced-examples/). They are intentionally a bit over the top, but they give a feel for what is possible.
 
@@ -198,6 +166,8 @@ monoblok implements the NATS core pieces it needs to behave like a small broker.
 | bridge to real NATS | export-only |
 | import from real NATS | yes, as private patchbay ingress |
 | JetStream import | yes, as consumer-only patchbay ingress |
+
+Request-reply works through patchbay as well as plain pub/sub. A rule can read the request's reply subject as `reply-to`, and `(reply! VALUE)` publishes to it, so `(on "q.temp" (reply! (last "temp.kitchen")))` makes `nats req q.temp ""` answer with the latest cached kitchen temperature. `reply-to` is nil for imported messages, clock ticks, and `every` bodies.
 | TLS on the local server | yes, optional server cert/key |
 | auth on the local server | yes, optional global token or user/pass from environment |
 | HTTP/SSE adapter | yes, optional plain HTTP listener |
@@ -301,6 +271,8 @@ tiny fetch-based JavaScript helper lives at
 [`examples/http-sse-client.js`](../examples/http-sse-client.js), with a browser
 page at [`examples/http-sse-client.html`](../examples/http-sse-client.html).
 
+Every HTTP response carries a `Server: monoblok/v<version>` header.
+
 #### nginx reverse proxy for SSE
 
 Run monoblok's HTTP listener on loopback and let nginx terminate public TLS:
@@ -383,10 +355,6 @@ node examples/http-sse-demo.js --start-monoblok --port 8090 --open
 
 ### As a bridging/importing client to a NATS server
 
-<p align="center">
-  <img src="bridge.png" alt="bridge" width="720">
-</p>
-
 monoblok can forward a subset of local publishes to a real NATS cluster, or
 subscribe to remote subjects and run those messages through patchbay. TLS and
 `.creds` files are supported via vendored [nats.c](https://github.com/nats-io/nats.c).
@@ -466,13 +434,15 @@ monoblok --snapshot /var/lib/monoblok/state.mblk --snapshot-every 10
 `--snapshot PATH` loads on startup if it exists (missing is fine). `--snapshot-every SECONDS` runs a periodic dump using atomic temp-file + rename. If the patchbay file changes between runs, LVC entries still load; rule state for any rule 
 whose filter no longer matches at its recorded position is skipped with a warning.
 
-Patchbay state is usually per rule and per subject. Avoid unbounded subject tokens such as timestamps, user IDs, or raw device-generated strings unless you intend to create state for each one.
+Snapshot files are format version 5. A snapshot in format 3 or 4 still loads its LVC entries, but its rule state is skipped with one warning (anything older is ignored entirely), so the first restart after upgrading loses window and gate state.
+
+Patchbay state is per call site and subject (two uses of the same stateful form in one rule keep separate state). Avoid unbounded subject tokens such as timestamps, user IDs, or raw device-generated strings unless you intend to create state for each one.
 
 ## Design
 
 monoblok is intentionally simple at runtime: one process, one libuv loop, one application thread for protocol parsing, subject matching, patchbay evaluation, fan-out, write buffering, and LVC state. That makes the behavior predictable and keeps coordination costs out of the publish path.
 
-For lower-level details on ownership boundaries, snapshot I/O, libuv behavior, borrowed slices, and allocation policy, see [implementation notes](./implementation-notes.md).
+For lower-level details on ownership boundaries, snapshot I/O, libuv behavior, borrowed slices, and allocation policy, see [implementation notes](../design/implementation-notes.md).
 
 ## Deploying
 
@@ -503,11 +473,3 @@ The **shape** of the comparison vs. nats-server, though, is consistent across ru
 - **monoblok scales better with subscriber count.** Its fan-out model has low per-subscriber coordination overhead. Crossover happens somewhere around 10-30 subscribers; the further past that you go, the bigger monoblok's lead.
 
 Worth keeping in mind: nats-server has a decade of production-grade performance work behind it. Any monoblok win in these benches should be read as "the single-threaded design happens to fit this specific workload shape well," not "monoblok is faster than nats." The right tool for most pub/sub deployments is still nats-server; monoblok is for the cases where the patchbay or LVC features earn their place, and "fast enough on a small box" is a happy side-effect of the design, not the headline.
-
-## Building from source
-
-See the repository [README](../README.md) for CMake build targets and smoke tests.
-
-## License
-
-MIT. See `LICENSE`.

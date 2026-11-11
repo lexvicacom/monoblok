@@ -2,6 +2,7 @@
 
 #include "array.h"
 #include "fs.h"
+#include "pb_eval_internal.h"
 #include "slice.h"
 
 #include <errno.h>
@@ -11,7 +12,10 @@
 
 enum
 {
-    SNAP_VERSION = 4,
+    // v5 added the call-site id to each rule-state record (state identity is
+    // (rule, site, op, subject)). v3 and v4 files still load LVC entries; their
+    // rule state is skipped with one warning.
+    SNAP_VERSION = 5,
     SNAP_MIN_READ_VERSION = 3,
     SNAP_KIND_LVC = 0x01,
     SNAP_KIND_RULE_STATE = 0x02,
@@ -149,12 +153,14 @@ static bool read_len_prefixed(const uint8_t *bytes, size_t len, size_t *pos, mb_
     return true;
 }
 
-static bool skip_rule_state(const uint8_t *bytes, size_t len, size_t *pos)
+static bool skip_rule_state(const uint8_t *bytes, size_t len, size_t *pos, int version)
 {
     uint32_t n = 0;
+    uint32_t site = 0;
     uint8_t variant = 0;
     mb_slice ignored = {0};
     if (!read_u32(bytes, len, pos, &n) ||
+        (version >= SNAP_VERSION && !read_u32(bytes, len, pos, &site)) ||
         !read_len_prefixed(bytes, len, pos, &ignored) ||
         !read_len_prefixed(bytes, len, pos, &ignored) ||
         !read_u8(bytes, len, pos, &variant))
@@ -215,7 +221,7 @@ static bool split_key(mb_slice key, mb_slice *op, mb_slice *subject)
     return false;
 }
 
-static pb_eval_state_entry *append_state(pb_program *program, uint32_t rule_idx, mb_slice filter, mb_slice key)
+static pb_eval_state_entry *append_state(pb_program *program, uint32_t rule_idx, uint32_t site, mb_slice filter, mb_slice key)
 {
     if (program == NULL || rule_idx >= program->len)
     {
@@ -227,52 +233,69 @@ static pb_eval_state_entry *append_state(pb_program *program, uint32_t rule_idx,
         return NULL;
     }
     mb_slice op = {0};
-    mb_slice subject = {0};
-    if (!split_key(key, &op, &subject) ||
-        !mb_array_reserve((void **)&rule->state.items, &rule->state.cap, rule->state.len + 1,
+    mb_slice entry_key = {0};
+    if (!split_key(key, &op, &entry_key))
+    {
+        return NULL;
+    }
+    // The site must still exist in this rule and its form must own this op, so
+    // edited rules do not resurrect stale or dangling state.
+    const pb_form_entry *form = pb_form_at_site(rule->body, site);
+    if (form == NULL ||
+        !pb_form_owns_op(form, (pb_slice){.ptr = (const char *)op.ptr, .len = op.len}))
+    {
+        return NULL;
+    }
+    if (!mb_array_reserve((void **)&rule->state.items, &rule->state.cap, rule->state.len + 1,
                           sizeof rule->state.items[0], 8))
     {
         return NULL;
     }
     pb_eval_state_entry *entry = &rule->state.items[rule->state.len];
-    *entry = (pb_eval_state_entry){.rule_id = rule_idx};
+    *entry = (pb_eval_state_entry){.rule_id = rule_idx, .site = site};
     uint8_t *op_ptr = NULL;
-    uint8_t *subject_ptr = NULL;
+    uint8_t *key_ptr = NULL;
     if (!mb_slice_dup(op, &op_ptr, &entry->op_len) ||
-        !mb_slice_dup(subject, &subject_ptr, &entry->subject_len))
+        !mb_slice_dup(entry_key, &key_ptr, &entry->subject_len))
     {
         free(op_ptr);
-        free(subject_ptr);
+        free(key_ptr);
         *entry = (pb_eval_state_entry){0};
         return NULL;
     }
     entry->op = (char *)op_ptr;
-    entry->subject = (char *)subject_ptr;
+    entry->subject = (char *)key_ptr;
     rule->state.len += 1;
     return entry;
 }
 
-static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_program *program, size_t *loaded)
+static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_program *program, mb_snapshot_counts *counts)
 {
     uint32_t rule_idx = 0;
+    uint32_t site = 0;
     uint8_t variant = 0;
     mb_slice filter = {0};
     mb_slice key = {0};
     if (!read_u32(bytes, len, pos, &rule_idx) ||
+        !read_u32(bytes, len, pos, &site) ||
         !read_len_prefixed(bytes, len, pos, &filter) ||
         !read_len_prefixed(bytes, len, pos, &key) ||
         !read_u8(bytes, len, pos, &variant))
     {
         return false;
     }
-    pb_eval_state_entry *entry = append_state(program, rule_idx, filter, key);
+    pb_eval_state_entry *entry = append_state(program, rule_idx, site, filter, key);
+    if (entry == NULL)
+    {
+        counts->rule_state_skipped += 1;
+    }
     switch (variant)
     {
     case 0x00:
         if (entry != NULL)
         {
             entry->kind = PB_EVAL_STATE_EMPTY;
-            *loaded += 1;
+            counts->rule_state += 1;
         }
         return true;
     case 0x01:
@@ -291,7 +314,7 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
             entry->bytes_len = data.len;
             entry->bytes_cap = data.len;
             entry->kind = PB_EVAL_STATE_BYTES;
-            *loaded += 1;
+            counts->rule_state += 1;
         }
         return true;
     }
@@ -306,7 +329,7 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
         {
             entry->kind = PB_EVAL_STATE_NUMBER;
             entry->number = n;
-            *loaded += 1;
+            counts->rule_state += 1;
         }
         return true;
     }
@@ -350,7 +373,7 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
             entry->ring_cap = cap;
             entry->ring_len = (size_t)saved_len;
             entry->ring_sum = sum;
-            *loaded += 1;
+            counts->rule_state += 1;
         }
         return true;
     }
@@ -387,7 +410,7 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
             entry->bar_window_start_ms = window_start_ms;
             entry->bar_last_close = last_close;
             entry->bar_time_window = window_ms != 0;
-            *loaded += 1;
+            counts->rule_state += 1;
         }
         return true;
     }
@@ -429,7 +452,7 @@ static bool load_rule_state(const uint8_t *bytes, size_t len, size_t *pos, pb_pr
             entry->ring_sum = sum;
             entry->ring_window_ms = window_ms;
             entry->ring_time_window = true;
-            *loaded += 1;
+            counts->rule_state += 1;
         }
         return true;
     }
@@ -464,6 +487,7 @@ bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, 
         return true;
     }
 
+    const int version = bytes[4];
     size_t pos = 8;
     bool ok = true;
     while (ok && pos < len)
@@ -488,13 +512,17 @@ bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, 
         }
         else if (kind == SNAP_KIND_RULE_STATE)
         {
-            if (program == NULL)
+            if (program == NULL || version < SNAP_VERSION)
             {
-                ok = skip_rule_state(bytes, len, &pos);
+                ok = skip_rule_state(bytes, len, &pos, version);
+                if (ok && program != NULL)
+                {
+                    counts->rule_state_skipped += 1;
+                }
             }
             else
             {
-                ok = load_rule_state(bytes, len, &pos, program, &counts->rule_state);
+                ok = load_rule_state(bytes, len, &pos, program, counts);
             }
         }
         else
@@ -505,6 +533,19 @@ bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, 
     if (!ok)
     {
         fprintf(stderr, "snapshot: failed to parse %s\n", path);
+    }
+    else if (counts->rule_state_skipped != 0)
+    {
+        if (version < SNAP_VERSION)
+        {
+            fprintf(stderr, "snapshot: %s is version %d; skipped %zu rule state entr%s (call-site identity needs version %d)\n",
+                    path, version, counts->rule_state_skipped, counts->rule_state_skipped == 1 ? "y" : "ies", SNAP_VERSION);
+        }
+        else
+        {
+            fprintf(stderr, "snapshot: skipped %zu rule state entr%s that no longer match the patchbay\n",
+                    counts->rule_state_skipped, counts->rule_state_skipped == 1 ? "y" : "ies");
+        }
     }
     mb_buf_free(&file);
     return ok;
@@ -545,6 +586,7 @@ static bool append_rule_state(mb_buf *out, const pb_program *program)
             }
             bool ok = append_u8(out, SNAP_KIND_RULE_STATE) &&
                       append_u32(out, (uint32_t)rule_idx) &&
+                      append_u32(out, entry->site) &&
                       append_pb_slice(out, rule->filter) &&
                       append_key(out, entry);
             if (!ok)

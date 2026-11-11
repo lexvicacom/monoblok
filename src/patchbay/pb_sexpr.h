@@ -5,6 +5,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // Borrowed text slice; ownership is determined by the containing value.
 typedef struct pb_slice {
@@ -35,8 +36,12 @@ typedef struct pb_values {
 } pb_values;
 
 // Patchbay AST node. Lists are call forms; vectors are data.
+// tag is 0 until pb_resolve_rule runs. After it: a list's tag is its per-rule
+// call-site id, a call head symbol's tag is form-table index + 1, and a bound
+// symbol's tag names the binding. It lives in what was padding after kind.
 struct pb_value {
     pb_value_kind kind;
+    uint32_t tag;
     union {
         bool boolean;
         double number;
@@ -44,6 +49,8 @@ struct pb_value {
         pb_values seq;
     };
 };
+
+_Static_assert(sizeof(pb_value) == 24, "pb_value tag must fit in kind's padding");
 
 typedef enum pb_parse_error {
     PB_PARSE_OK,
@@ -65,9 +72,12 @@ typedef struct pb_parse_result {
     pb_parse_error err;
     size_t err_offset;
     pb_values forms;
+    char err_msg[192]; // optional detail from the YAML and JSON adapters; empty when unused
 } pb_parse_result;
 
 pb_parse_result pb_parse_all(pb_arena *arena, const char *src, size_t len);
 const char *pb_parse_error_name(pb_parse_error err);
+// 1-based line and column of byte `offset` in src (clamped to len).
+void pb_line_col(const char *src, size_t len, size_t offset, size_t *line, size_t *col);
 
 #endif

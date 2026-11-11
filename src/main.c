@@ -131,7 +131,8 @@ static bool import_ingress(void *ctx, mb_slice subject, mb_slice payload) {
     server->total_pubs += 1;
     uv_update_time(&server->loop);
     const bool ok = pb_program_eval_publish(server->program, &server->router, subject, payload,
-                                            mb_server_patchbay_now_ms(server), mb_wall_clock_ms());
+                                            mb_server_patchbay_now_ms(server), mb_wall_clock_ms(),
+                                            (pb_program_eval_options){0});
     mb_server_reschedule_patchbay_clock(server);
     return ok;
 }
@@ -148,8 +149,8 @@ static bool jetstream_ingress(void *ctx, const pb_import_stream_config *config,
     pb_program_eval_options options = {.replaying = replaying};
     server->total_pubs += 1;
     const bool tick_ok = pb_program_tick_until(server->program, &server->router, event_now_ms, event_wall_ms, options);
-    const bool eval_ok = pb_program_eval_publish_with_options(server->program, &server->router, subject, payload,
-                                                              event_now_ms, event_wall_ms, options);
+    const bool eval_ok = pb_program_eval_publish(server->program, &server->router, subject, payload,
+                                                   event_now_ms, event_wall_ms, options);
     if (!replaying) {
         mb_server_reschedule_patchbay_clock(server);
     }
@@ -501,8 +502,8 @@ int main(int argc, char **argv) {
         server.router.bridge_fn = mb_bridge_publish_with_options;
         server.bridge_published = &bridge.published;
         server.bridge_dropped = &bridge.dropped;
-        fprintf(stderr, "info: bridge: connected to NATS (%zu server%s, %zu export filter%s)\n", program.bridge.servers_len,
-                program.bridge.servers_len == 1 ? "" : "s", program.bridge.exports_len,
+        fprintf(stderr, "info: bridge: connected to NATS (%zu server%s, %zu export filter%s)\n", program.bridge.remote.servers_len,
+                program.bridge.remote.servers_len == 1 ? "" : "s", program.bridge.exports_len,
                 program.bridge.exports_len == 1 ? "" : "s");
     } else {
         fprintf(stderr, "info: bridge: disabled\n");
@@ -558,6 +559,8 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
+    // Start the patchbay timer so (every ...) rules schedule without waiting for a publish.
+    mb_server_reschedule_patchbay_clock(&server);
     rc = mb_server_run(&server);
 
 cleanup:

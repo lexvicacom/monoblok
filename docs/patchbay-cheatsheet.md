@@ -1,12 +1,13 @@
 # patchbay cheatsheet
 
-For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistant, see [`AGENTS_PATCHBAY.md`](./AGENTS_PATCHBAY.md), or [`CLAUDE_PATCHBAY.md`](./CLAUDE_PATCHBAY.md) for Claude-specific setup.
+For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistant, see [`AGENTS_PATCHBAY.md`](./AGENTS_PATCHBAY.md).
 
 ## Top-level forms
 
 | form | meaning |
 |------|---------|
 | `(on FILTER [:reentrant true] BODY)` | run BODY whenever an incoming subject matches FILTER. Wildcards: `*` one token, `>` tail. `:reentrant true` (optional, default false) feeds this rule's emissions back into rule evaluation; depth-capped at 8. |
+| `(every :ms N [:reentrant BOOL] BODY...)` | run BODY every N ms (integer, 1 to 1e12) instead of on a publish. Top level only; several BODY forms are an implicit `do`. First tick schedules, it does not fire. Inside, `subject` and `payload` are empty strings. |
 | `(lvc [FILTER ...])` | opt matching subjects into `$LVC.*` last-value streams. Filters are strings or `(env "NAME")`. Legacy `(lvc FILTER ...)` is accepted. |
 | `(export :servers ... :export ...)` | optional, zero or one. Outbound NATS forwarder. Deprecated `(bridge ...)` is accepted as an alias. See export keywords below. |
 | `(import :servers ... :subject ...)` | optional, zero or one. Inbound core NATS tap into patchbay; compatibility alias for one `:core` entry. |
@@ -24,20 +25,30 @@ comments, and editor support is good (`Calva` plus Parinfer-style
 editing in VS Code; `clojure-mode`/CIDER or `clojure-ts-mode` plus
 Parinfer/paredit/smartparens in Emacs). JSON maps to the same form AST:
 arrays are calls, the first array item is always the operator symbol,
-object arguments become keyword options, and
-`"subject"` / `"payload"` / `"payload-float"` / `"payload-int"` /
-`"replaying?"` become symbols in rule expressions.
-In top-level config string positions, YAML `env: "NAME"` lowers to
-EDN `(env "NAME")`.
+object arguments become keyword options, and strings with a leading `$`
+(`"$subject"`, `"$payload"`, `"$payload-float"`, `"$payload-int"`,
+`"$payload-bool"`, `"$replaying?"`, `"$reply-to"`) become bound symbols.
+A plain `"payload"` in JSON is just text, with no error, so old JSON
+files that used bare names now publish the word. Vector data is
+`{"vector": [...]}`.
 
-| EDN | JSON |
-|-----|------|
-| `(lvc ["demo.>"])` | `["lvc", "demo.>"]` |
-| `(on "sensors.*" (publish! "out" payload))` | `["on", "sensors.*", ["publish!", "out", "payload"]]` |
-| `(moving-avg :ms 5000 payload-float)` | `["moving-avg", {"ms":5000}, "payload-float"]` |
-| `(on "MARKET.*" :reentrant true (bar! 60 payload-float))` | `["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "payload-float"]]` |
-| `(export :servers ["nats://127.0.0.1:4223"] :export ["demo.>"])` | `["export", {"servers":["nats://127.0.0.1:4223"], "export":["demo.>"]}]` |
-| `(import :servers ["nats://127.0.0.1:4223"] :subject ["raw.>"])` | `["import", {"servers":["nats://127.0.0.1:4223"], "subject":["raw.>"]}]` |
+In YAML, `$name` is the bound value, a bare option word (`ms`, `dp`,
+`subject`) is the keyword, every other string in a rule body is quoted,
+and operators that are YAML indicators are quoted (`[">", a, b]`). YAML
+files are valid standard YAML. In top-level config string positions,
+YAML `env: "NAME"` lowers to EDN `(env "NAME")`.
+
+| EDN | JSON | YAML |
+|-----|------|------|
+| `(lvc ["demo.>"])` | `["lvc", "demo.>"]` | `lvc: ["demo.>"]` |
+| `(on "sensors.*" (publish! "out" payload))` | `["on", "sensors.*", ["publish!", "out", "$payload"]]` | `- sub: "sensors.*"` with `form: [publish!, "out", $payload]` |
+| `(moving-avg :ms 5000 payload-float)` | `["moving-avg", {"ms":5000}, "$payload-float"]` | `[moving-avg, ms, 5000, $payload-float]` |
+| `(on "MARKET.*" :reentrant true (bar! 60 payload-float))` | `["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "$payload-float"]]` | `sub: "MARKET.*"`, `reentrant: true`, `form: [bar!, 60, $payload-float]` |
+| `(when (> payload-float 80) ...)` | `["when", [">", "$payload-float", 80], ...]` | `when: [">", $payload-float, 80]` beside the body key |
+| `[1 2 3]` | `{"vector": [1, 2, 3]}` | `[vector, 1, 2, 3]` |
+| `(every :ms 1000 (publish! "tick" "alive"))` | `["every", {"ms":1000}, ["publish!", "tick", "alive"]]` | `every:` list, item `ms: 1000` and `form: [publish!, "tick", "alive"]` |
+| `(export :servers ["nats://127.0.0.1:4223"] :export ["demo.>"])` | `["export", {"servers":["nats://127.0.0.1:4223"], "export":["demo.>"]}]` | `export:` map with `servers:` and `export:` |
+| `(import :servers ["nats://127.0.0.1:4223"] :subject ["raw.>"])` | `["import", {"servers":["nats://127.0.0.1:4223"], "subject":["raw.>"]}]` | `import:` map with `servers:` and `subject:` |
 
 ## Bound symbols
 
@@ -47,7 +58,12 @@ EDN `(env "NAME")`.
 | `payload` | incoming payload (string of bytes) |
 | `payload-float` | payload parsed as a floating-point number (errors if not numeric) |
 | `payload-int` | integer payload parsed and returned as a number (errors if not integer) |
+| `payload-bool` | `true` for `true` / `1` / `on`, `false` for `false` / `0` / `off` (ASCII case-insensitive); anything else is a type error |
 | `replaying?` | true while JetStream catch-up is evaluating historical messages |
+| `reply-to` | the request's reply subject, or nil when the message had none (always nil under `--soundcheck`) |
+
+An empty payload is not the number 0: `payload-float`, `payload-int`, and
+`payload-bool` on an empty payload are type errors.
 
 ## Special forms
 
@@ -76,7 +92,7 @@ window.
 | `(publish! SUBJECT VALUE)` | emit a publish; no-op if VALUE is nil; numbers coerced canonically |
 | `(publish! SUBJECT :dp N VALUE)` | emit a numeric payload formatted with exactly N decimal places, 0-15 |
 | `(json-demux! KEY... PAYLOAD)` | break JSON fields or dotted object paths out onto `<subject>.<suffix>` |
-| `(count!)` / `(count! COND)` | running counter per (rule, subject); publishes to `<subject>.count` |
+| `(count!)` / `(count! COND)` | running counter per call site and subject; publishes to `<subject>.count` |
 | `(count! :subject SUBJECT COND?)` | same counter, but publish to an explicit subject |
 | `(bar! WINDOW X)` | OHLC bar; publishes `<subject>.bar.{open,high,low,close}` on each close |
 | `(on-silence :ms N BODY...)` | reset a per-subject timer on each match; evaluate BODY if no match arrives for N ms |
@@ -84,6 +100,7 @@ window.
 | `(debounce! :ms N SUBJECT VALUE)` | publish the latest SUBJECT/VALUE after N ms of quiet |
 | `(sample! :ms N SUBJECT VALUE)` | publish the latest SUBJECT/VALUE every N ms after the first match |
 | `(aggregate! :ms N SUBJECT :METRIC X)` | clock-publish `:avg`, `:sum`, `:min`, `:max`, `:count`, or `:rate` over the last N ms |
+| `(reply! VALUE)` / `(reply! :dp N VALUE)` | `publish!` to the request's `reply-to` subject; silent no-op when there is none or VALUE is nil. Threads like `publish!`. |
 | `(print! X)` / `(print! LABEL X)` | debug aid: writes one line to stderr, returns X unchanged so it threads. Not a publish; loader counts these and the server warns at startup. |
 
 ## Strings and subjects
@@ -120,7 +137,8 @@ window.
 
 ## Stateful gates
 
-State is per `(rule, subject, op)` and survives snapshot reload. Gates
+State is per call site and subject and survives snapshot reload. Two uses
+of the same form in one rule keep separate state. Gates
 return their input on pass, `nil` on suppress; `publish!` is a no-op
 on nil, so a chain of gates self-terminates.
 
@@ -133,6 +151,7 @@ on nil, so a chain of gates self-terminates.
 | `(hold-off MS X)` | first sight, then any call ≥ MS ms after the prior pass |
 | `(rising-edge X)` | X transitions falsy→truthy (first sight: nil) |
 | `(falling-edge X)` | X transitions truthy→falsy (first sight: nil) |
+| `(hysteresis LO HI X)` | not a gate: returns a bool. true once X >= HI, false once X <= LO, else held. First sight: X >= HI. LO > HI is a type error. Put it inside `transition`. |
 
 ## Windows
 
@@ -143,8 +162,8 @@ Windowed ops take a **window** as their first argument(s):
 | `N` (bare integer) | last N samples; fixed-cap ring |
 | `:ms N` | last N ms of wall-clock time (ingress timestamp). Active slots expose deadlines; the server keeps one rescheduled timer pointed at the earliest one. |
 
-Slots are keyed `(rule, op, kind, subject)`, so the same op with both
-window kinds keeps distinct state. Snapshot restore re-arms time-window
+Slots are keyed by call site, op, window kind, and subject, so the same
+op with both window kinds keeps distinct state. Snapshot restore re-arms time-window
 slots; overdue slots fire immediately on startup.
 
 ## Windowed aggregates
@@ -158,9 +177,32 @@ slots; overdue slots fire immediately on startup.
 | `(percentile N P X)` / `(percentile :ms N P X)` | Pth percentile (P in [0, 1]) |
 | `(median N X)` / `(median :ms N X)` | sugar for `(percentile WINDOW 0.5 X)` |
 | `(stddev N X)` / `(variance N X)` (and `:ms` forms) | population stats |
+| `(ewma ALPHA X)` | exponential average, 0 < ALPHA <= 1; first sight returns X. One number of state, no ring. |
 
 `aggregate!` is the clock-emitting sibling for dashboards that need a
 fresh value when a time window elapses even if no new PUB arrives.
+
+## Last values
+
+| form | returns |
+|------|---------|
+| `(last SUBJECT)` | latest payload on a literal SUBJECT as a string, or nil. SUBJECT must match an `(lvc ...)` filter. |
+
+nil is not a number, so `(- (last S) x)` is a type error until a value
+exists. The nil-safe shape is a thread, which stops on nil:
+`(-> (last "temp.outside") (- payload-float) (publish! "temp.difference" :dp 1))`.
+
+## Funnel
+
+State is per subject. To combine subjects, publish them onto one subject
+with a re-entrant rule and put the stateful rule on that subject:
+
+```edn
+(on "sensors.*" :reentrant true (publish! "all.sensors" payload))
+(on "all.sensors" (publish! "sensors.average" :dp 1 (moving-avg 4 payload-float)))
+```
+
+Per group: publish to `(str-concat "site." (subject-token 1))` and match `site.*`.
 
 ## Rate gates
 

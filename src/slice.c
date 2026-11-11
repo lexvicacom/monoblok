@@ -11,6 +11,27 @@ bool mb_slice_has_prefix(mb_slice s, const char *prefix, size_t prefix_len) {
     return s.len >= prefix_len && memcmp(s.ptr, prefix, prefix_len) == 0;
 }
 
+static uint8_t ascii_lower(uint8_t c) {
+    return c >= 'A' && c <= 'Z' ? (uint8_t)(c + ('a' - 'A')) : c;
+}
+
+bool mb_slice_has_prefix_ci_lit(mb_slice s, const char *prefix) {
+    const size_t n = strlen(prefix);
+    if (s.len < n) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i += 1) {
+        if (ascii_lower(s.ptr[i]) != ascii_lower((uint8_t)prefix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool mb_slice_eq_ci_lit(mb_slice s, const char *lit) {
+    return s.len == strlen(lit) && mb_slice_has_prefix_ci_lit(s, lit);
+}
+
 bool mb_slice_dup(mb_slice s, uint8_t **out_ptr, size_t *out_len) {
     if (out_ptr == NULL || out_len == NULL) {
         return false;

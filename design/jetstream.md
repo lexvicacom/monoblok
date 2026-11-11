@@ -281,9 +281,9 @@ Implications for the implementation:
   one message at a time and hands it to the libuv loop with `uv_async_t`. The
   worker waits for loop-thread evaluation before fetching the next message, so
   live JetStream ingress is backpressured rather than lossy.
-- `pb_program_eval_publish_with_options()` and
-  `pb_program_tick_with_options()` carry the `replaying` flag. The default
-  wrappers keep existing core traffic behavior unchanged.
+- `pb_program_eval_publish()` and `pb_program_tick()` take a
+  `pb_program_eval_options` argument whose `replaying` flag marks catch-up
+  evaluation. Core traffic passes default options and is unchanged.
 
 The existing core-NATS import path is untouched. This is an additional ingress,
 selected by scoped `:streams` entries, not a modification of the existing one.
@@ -543,9 +543,9 @@ The current implementation keeps JetStream separate from the core import path:
   JetStream catch-up has completed.
 - `pb_program_tick_until()` drains due virtual deadlines up to each event-time
   message timestamp.
-- `pb_program_eval_publish_with_options()` and
-  `pb_program_tick_with_options()` carry `replaying=true` during catch-up and
-  false during live delivery.
+- `pb_program_eval_publish()` and `pb_program_tick()` carry
+  `replaying=true` in their options during catch-up and false during live
+  delivery.
 - `mb_server_patchbay_now_ms()` adds a one-time offset after the transition so
   ordinary timer scheduling uses the same patchbay clock surface.
 - The loader stores imports as `pb_imports_config`, split into `cores[]` and

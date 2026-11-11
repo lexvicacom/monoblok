@@ -11,23 +11,11 @@
 #define MB_BUILD_INFO "unknown"
 #endif
 
-#include <ctype.h>
+#include "slice.h"
+
 #include <string.h>
 
 #define APPEND_LIT(out, lit) mb_buf_append((out), (lit), sizeof(lit) - 1)
-
-static bool eq_upper(mb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    if (s.len != n) {
-        return false;
-    }
-    for (size_t i = 0; i < n; i += 1) {
-        if ((char)toupper((unsigned char)s.ptr[i]) != lit[i]) {
-            return false;
-        }
-    }
-    return true;
-}
 
 static mb_slice trim_spaces(mb_slice s) {
     while (s.len > 0 && (s.ptr[0] == ' ' || s.ptr[0] == '\t')) {
@@ -287,7 +275,7 @@ mb_parse_result mb_parse_client_op(const uint8_t *buf, size_t len) {
     if (!next_token(&rest, &verb)) {
         return (mb_parse_result){.status = MB_PARSE_MALFORMED};
     }
-    if (eq_upper(verb, "PING")) {
+    if (mb_slice_eq_ci_lit(verb, "PING")) {
         rest = trim_spaces(rest);
         if (rest.len != 0) {
             return (mb_parse_result){.status = MB_PARSE_INVALID_ARGS};
@@ -298,7 +286,7 @@ mb_parse_result mb_parse_client_op(const uint8_t *buf, size_t len) {
             .consumed = line_end,
         };
     }
-    if (eq_upper(verb, "CONNECT")) {
+    if (mb_slice_eq_ci_lit(verb, "CONNECT")) {
         rest = trim_spaces(rest);
         return (mb_parse_result){
             .status = MB_PARSE_OK,
@@ -306,13 +294,13 @@ mb_parse_result mb_parse_client_op(const uint8_t *buf, size_t len) {
             .consumed = line_end,
         };
     }
-    if (eq_upper(verb, "SUB")) {
+    if (mb_slice_eq_ci_lit(verb, "SUB")) {
         return parse_sub(rest, line_end);
     }
-    if (eq_upper(verb, "UNSUB")) {
+    if (mb_slice_eq_ci_lit(verb, "UNSUB")) {
         return parse_unsub(rest, line_end);
     }
-    if (eq_upper(verb, "PUB")) {
+    if (mb_slice_eq_ci_lit(verb, "PUB")) {
         return parse_pub(buf, len, rest, line_end);
     }
     return (mb_parse_result){.status = MB_PARSE_UNKNOWN};

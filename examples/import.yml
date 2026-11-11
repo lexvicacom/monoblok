@@ -13,8 +13,7 @@ export:
 on:
   - sub: "raw.temp"
     thread:
-      from: payload-float
-      steps:
-        - [round, 1]
-        - [squelch]
-        - [publish!, "clean.temp"]
+      - $payload-float
+      - [round, 1]
+      - [squelch]
+      - [publish!, "clean.temp"]

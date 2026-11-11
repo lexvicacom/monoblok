@@ -8,6 +8,7 @@ subscribe 'rpc.latency.p50'    p50.txt
 subscribe 'rpc.latency.p95'    p95.txt
 subscribe 'rpc.latency.p99'    p99.txt
 subscribe 'rpc.latency.stddev' stddev.txt
+subscribe 'rpc.latency.ewma'   ewma.txt
 settle 0.3
 
 # Phase 1: 50 well-behaved samples around 20ms, light jitter.
@@ -41,8 +42,9 @@ settle 0.6
 
 note \
     "Drove a synthetic latency stream through three phases: calm baseline (~20ms), a 10-sample tail-latency burst (~250ms), then another calm baseline." \
-    "Four rules share the same 50-sample window, each emitting one statistic. p50 barely moves, p95 and p99 spike when the burst lands, stddev tracks the widening spread, and all three settle once the burst rolls out of the window."
+    "Four rules share the same 50-sample window, each emitting one statistic. p50 barely moves, p95 and p99 spike when the burst lands, stddev tracks the widening spread, and all three settle once the burst rolls out of the window. A fifth rule keeps an ewma (alpha 0.1) with no window at all: it jumps toward the burst and decays back afterwards."
 show "p50 (last 12)"     p50.txt    12
 show "p95 (last 12)"     p95.txt    12
 show "p99 (last 12)"     p99.txt    12
 show "stddev (last 12)"  stddev.txt 12
+show "ewma (last 12)"    ewma.txt   12

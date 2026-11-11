@@ -104,7 +104,7 @@ static bool js_stream_connect(mb_js_stream *stream) {
     natsConnection *conn = NULL;
     jsCtx *js = NULL;
     natsSubscription *sub = NULL;
-    const mb_nats_options_config options = mb_nats_options_from_import(&stream->config->source);
+    const pb_remote_config *options = &stream->config->source.remote;
     char *subject = NULL;
     char *stream_name = NULL;
     char *consumer_name = NULL;
@@ -118,7 +118,7 @@ static bool js_stream_connect(mb_js_stream *stream) {
         goto cleanup;
     }
 
-    if (!mb_nats_set_options(opts, &options, &strings)) {
+    if (!mb_nats_set_options(opts, options, &strings)) {
         goto cleanup;
     }
 

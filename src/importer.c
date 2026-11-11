@@ -200,7 +200,7 @@ bool mb_importer_start(mb_importer *importer, uv_loop_t *loop, const pb_import_c
         return false;
     }
 
-    const size_t max_pending = config->has_max_pending ? config->max_pending : MB_IMPORT_DEFAULT_MAX_PENDING;
+    const size_t max_pending = config->max_pending != 0 ? config->max_pending : MB_IMPORT_DEFAULT_MAX_PENDING;
     importer->ring = calloc(max_pending, sizeof importer->ring[0]);
     if (importer->ring == NULL) {
         return false;
@@ -226,8 +226,8 @@ bool mb_importer_start(mb_importer *importer, uv_loop_t *loop, const pb_import_c
     }
 
     mb_nats_strings strings = {0};
-    const mb_nats_options_config options = mb_nats_options_from_import(config);
-    bool ok = mb_nats_set_options(opts, &options, &strings);
+    const pb_remote_config *options = &config->remote;
+    bool ok = mb_nats_set_options(opts, options, &strings);
     if (ok) {
         natsConnection *conn = NULL;
         mb_nats_retain();

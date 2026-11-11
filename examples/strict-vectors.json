@@ -6,10 +6,10 @@
       "do",
       [
         "when",
-        ["contains?", {"vec": ["temp", "hum", "batt"]}, ["subject-token", 1]],
-        ["publish!", ["subject-append", "seen"], "payload"]
+        ["contains?", {"vector": ["temp", "hum", "batt"]}, ["subject-token", 1]],
+        ["publish!", ["subject-append", "seen"], "$payload"]
       ],
-      ["json-demux!", {"vec": ["temp", {"vec": ["status", "state"]}]}, "payload"]
+      ["json-demux!", {"vector": ["temp", {"vector": ["status", "state"]}]}, "$payload"]
     ]
   ]
 ]

@@ -28,3 +28,13 @@
   (-> payload-float
       (stddev 50)
       (publish! "rpc.latency.stddev")))
+
+;; Cheap trend line beside the windowed stats. (ewma ALPHA X) keeps one
+;; number of state instead of a 50-slot ring: each sample moves the
+;; average 10% of the way toward it. Unlike the windowed stats it never
+;; forgets abruptly, the burst just decays out over the next few dozen
+;; samples. Raise ALPHA to follow the signal faster.
+(on "rpc.latency"
+  (-> payload-float
+      (ewma 0.1)
+      (publish! "rpc.latency.ewma" :dp 2)))

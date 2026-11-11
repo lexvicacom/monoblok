@@ -16,8 +16,7 @@ static pb_slice pbs(const char *s) {
 
 static pb_import_config basic_config(pb_slice *servers, size_t servers_len, pb_slice *subjects, size_t subjects_len) {
     return (pb_import_config){
-        .servers = servers,
-        .servers_len = servers_len,
+        .remote = {.servers = servers, .servers_len = servers_len},
         .subjects = subjects,
         .subjects_len = subjects_len,
         .present = true,
@@ -116,7 +115,6 @@ static void test_importer_bounds_pending_ring(void) {
     pb_slice subjects[] = {pbs("raw.>")};
     pb_import_config config = basic_config(servers, 1, subjects, 1);
     config.max_pending = 1;
-    config.has_max_pending = true;
     seen_import seen = {0};
     mb_importer importer = {0};
 

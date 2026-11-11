@@ -22,6 +22,8 @@ Keep the layout shallow:
 - `advanced-examples/`: larger integration examples and producer/pump scripts.
 - `docs/`: user-facing overview, patchbay docs, and documentation images.
 - `design/`: design notes and proposals that are not necessarily product docs.
+- `site/`: static marketing/demo site (plain HTML, CSS, JS). ESP32 firmware
+  binaries and the esp-web-tools bundle are deliberately not checked in.
 - `scripts/`: benchmark, smoke, packaging, install, service, and release helpers.
 - `seccomp/`: container seccomp profile.
 - `.github/workflows/`: CI and release automation.
@@ -146,8 +148,17 @@ cmake --build build --target pb-dump
 
 - Lists are call forms. A list must be non-empty and headed by a symbol.
 - Vectors are data.
-- JSON patchbay files use arrays as call forms and `{"vec":[...]}` for vector
-  data. Plain objects in form arguments expand to keyword/value pairs.
+- JSON patchbay files use arrays as call forms and `{"vector":[...]}` for vector
+  data. Bound values are `"$payload"`-style strings (a plain `"payload"` is just
+  text, so watch for it when migrating old files). Plain objects in form
+  arguments expand to keyword/value pairs.
+- State is per call site and subject, so two uses of the same stateful form in
+  one rule keep separate state. There is no shared state across subjects: to
+  combine subjects, a `:reentrant true` rule publishes them onto one subject and
+  the stateful rule sits on that subject (the funnel pattern).
+- `(every :ms N BODY...)` is a top-level timer rule, `(last SUBJECT)` reads the
+  LVC (nil when absent, so use it in a `->` thread), and `(reply! VALUE)`
+  publishes to the request's `reply-to`.
 - Do not add quote, macro, or list-as-data compatibility paths.
 - Keep effectful forms explicit, conventionally with `!` (`publish!`,
   `json-demux!`).
@@ -169,18 +180,22 @@ cmake --build build --target pb-dump
   reference. Use `docs/patchbay.md#yaml-sugar-files` for the narrative
   overview and `docs/patchbay-cheatsheet.md#edn--json--yaml` for the short
   EDN/JSON/YAML comparison.
-- Treat YAML as a small sugar layer that lowers to the same patchbay AST, not
-  as general YAML. The root is a map with `lvc`, `on`, `export`, deprecated
-  `bridge`, and/or `import`; each `on` item is a rule map with `sub` and one
-  body shape such as `thread`, `when`, `do`, `form`, or `body`.
+- Treat YAML as a small sugar layer that lowers to the same patchbay AST. The
+  subset is also valid standard YAML, so check ports with a normal parser too.
+  The root is a map with `lvc`, `on`, `every`, `export`, deprecated `bridge`,
+  and/or `import`; each `on` item is a rule map with `sub`, an optional
+  `when: EXPR` guard, and exactly one body key: `thread`, `do`, or `form`.
+  `every` items use `ms: N` in place of `sub`.
 - Use flow arrays for call forms, with the operator as the first element. Use
-  `thread` for `->`, `when` for `(when ...)`, and `form`/`body` for direct
-  expressions such as `transition`, `count!`, or `bar!`.
-- Be precise with scalars. In expression positions only `subject`, `payload`,
-  `payload-float`, and `payload-int` become bound symbols; other string-like
-  scalars become strings unless they are numbers, booleans, nulls, or keywords
-  such as `:ms`. Quote subjects, URLs, and payload strings when it improves
-  clarity or avoids YAML punctuation traps.
+  `thread` (a list, start value first) for `->` and `form` for direct
+  expressions such as `transition`, `count!`, or `bar!`. Operators that are YAML
+  indicators are quoted: `[">", $payload-float, 80]`. A literal vector is
+  `[vector, 1, 2, 3]`.
+- Be precise with scalars. Bound values are written `$subject`, `$payload`,
+  `$payload-float`, `$payload-int`, `$payload-bool`, `$replaying?`, and
+  `$reply-to`. Options are plain words (`ms`, `dp`, `subject`), never `:ms`.
+  Every other string in a rule body must be quoted; an unquoted word that is not
+  a number, boolean, null, binding, or option is a load error.
 - In top-level config string positions, `env: NAME` lowers to `(env "NAME")`.
   Do not use it inside rule bodies. Validate the port with `monoblok
   --validate` and, when behavior matters, compare with `--soundcheck`.
@@ -198,9 +213,10 @@ Snapshots are optional warm-start persistence:
 - `--snapshot-every SECONDS`: periodic dump.
 
 Snapshots include LVC entries and patchbay state. Snapshot rule state identity
-is `(rule_idx, filter)`. If the patchbay changed and the recorded filter no
-longer matches, that rule state is skipped with a warning. LVC entries load
-regardless.
+is `(rule_idx, filter)` plus the call site and subject of each slot. If the
+patchbay changed and the recorded filter no longer matches, that rule state is
+skipped with a warning. LVC entries load regardless. The format is version 5;
+an older file loads its LVC entries, skips rule state, and warns once.
 
 ## Bridge and import mode
 
@@ -240,12 +256,14 @@ publish failure should leave the JetStream message unacked for redelivery.
 Core local server only: `CONNECT`, `PUB`/`MSG` reply-to, `SUB`, `UNSUB`,
 `PING`, `PONG`, `INFO`, `+OK`, `-ERR`.
 
-There is no auth on the local server side, headers, JetStream service, or
-`$SYS.*` service request-reply. JetStream support is import-side only through
-configured `:streams` durable consumers. The bridge remains export-only and
-does not route remote replies back. Import mode consumes remote NATS and
-JetStream messages as patchbay input only. `CONNECT` bodies are accepted and
-ignored. `+OK` is never sent.
+Local auth is opt-in and simple: `--auth-token-env` or
+`--auth-user-env`/`--auth-pass-env` check the `CONNECT` body, and
+`--tls-cert`/`--tls-key` enable client TLS. There are no headers, JetStream
+service, or `$SYS.*` service request-reply. JetStream support is import-side
+only through configured `:streams` durable consumers. The bridge remains
+export-only and does not route remote replies back. Import mode consumes remote
+NATS and JetStream messages as patchbay input only. Without auth flags,
+`CONNECT` bodies are accepted and ignored. `+OK` is never sent.
 
 ## C style
 
@@ -274,8 +292,8 @@ ignored. `+OK` is never sent.
   over `FetchContent` or package-manager magic, so builds remain predictable
   and dependency code stays reviewable.
 - `pb_eval.c` contains evaluator dispatch and binding semantics. Keep large
-  builtin bodies in `pb_builtins.c` or split them further before the evaluator
-  gets hard to scan.
+  form bodies in the `pb_form_*.c` fragments included by `pb_forms.c`, and
+  split those further before the evaluator gets hard to scan.
 
 ## Platform Assumptions
 

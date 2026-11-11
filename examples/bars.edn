@@ -8,7 +8,7 @@
 ;   MARKET.AAPL.bar.low    min price seen
 ;   MARKET.AAPL.bar.close  last price seen in the bar
 ;
-; State is per (rule, subject, window kind), so each ticker builds its
+; State is per call site, subject, and window kind, so each ticker builds its
 ; own bars and tick + time forms keep distinct slots. The in-progress
 ; bar is part of the snapshot, so a restart mid-bar resumes without
 ; losing the open / high / low collected so far. Time bars also close

@@ -129,7 +129,8 @@ void mb_server_set_patchbay_clock_offset(mb_server *server, int64_t offset_ms) {
 static void on_patchbay_timer(uv_timer_t *timer) {
     mb_server *server = timer->data;
     uv_update_time(&server->loop);
-    (void)pb_program_tick(server->program, &server->router, mb_server_patchbay_now_ms(server), mb_wall_clock_ms());
+    (void)pb_program_tick(server->program, &server->router, mb_server_patchbay_now_ms(server), mb_wall_clock_ms(),
+                          (pb_program_eval_options){0});
     mb_server_reschedule_patchbay_clock(server);
 }
 
@@ -199,7 +200,8 @@ mb_client_publish_status mb_server_client_publish(mb_server *server, mb_slice su
     server->total_pubs += 1;
     uv_update_time(&server->loop);
     if (!pb_program_eval_publish(server->program, &server->router, subject, payload,
-                                 mb_server_patchbay_now_ms(server), mb_wall_clock_ms())) {
+                                 mb_server_patchbay_now_ms(server), mb_wall_clock_ms(),
+                                 (pb_program_eval_options){.reply_to = reply_to})) {
         return MB_CLIENT_PUBLISH_PATCHBAY_FAILED;
     }
     mb_server_reschedule_patchbay_clock(server);

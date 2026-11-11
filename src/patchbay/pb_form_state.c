@@ -1,5 +1,5 @@
 // Forms: squelch, deadband, changed?, hold-off, rising-edge, falling-edge,
-// delta, count!, count.
+// delta, hysteresis, ewma, count!, count.
 
 #include "pb_form_chunk.h"
 
@@ -157,6 +157,63 @@ static pb_eval_result call_delta(pb_eval_ctx *ctx, pb_values args) {
     slot->kind = PB_EVAL_STATE_NUMBER;
     slot->number = x;
     return ok((pb_value){.kind = PB_NUMBER, .number = x - prev});
+}
+
+// (hysteresis LO HI X): Schmitt trigger. True once X >= HI, false once X <= LO,
+// otherwise the held state. First sight is X >= HI. Always returns a bool.
+static pb_eval_result call_hysteresis(pb_eval_ctx *ctx, pb_values args) {
+    if (args.len != 3) {
+        return fail(PB_EVAL_ARITY);
+    }
+    double lo = 0;
+    double hi = 0;
+    double x = 0;
+    if (!as_number(args.items[0], &lo) || !as_number(args.items[1], &hi) || !as_number(args.items[2], &x) ||
+        !isfinite(lo) || !isfinite(hi) || lo > hi) {
+        return fail(PB_EVAL_TYPE);
+    }
+    pb_eval_state_entry *slot = state_slot(ctx, "hysteresis");
+    if (slot == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+    if (slot->kind != PB_EVAL_STATE_EMPTY && slot->kind != PB_EVAL_STATE_NUMBER) {
+        return fail(PB_EVAL_TYPE);
+    }
+    bool held = slot->kind == PB_EVAL_STATE_NUMBER && slot->number != 0.0;
+    if (x >= hi) {
+        held = true;
+    } else if (x <= lo) {
+        held = false;
+    }
+    slot->kind = PB_EVAL_STATE_NUMBER;
+    slot->number = held ? 1.0 : 0.0;
+    return ok(bool_value(held));
+}
+
+// (ewma ALPHA X): exponentially weighted moving average, O(1) state. ALPHA in
+// (0, 1]. First sight returns X. Non-finite X is a type error so one bad
+// sample cannot poison the average forever.
+static pb_eval_result call_ewma(pb_eval_ctx *ctx, pb_values args) {
+    if (args.len != 2) {
+        return fail(PB_EVAL_ARITY);
+    }
+    double alpha = 0;
+    double x = 0;
+    if (!as_number(args.items[0], &alpha) || !as_number(args.items[1], &x) ||
+        !(alpha > 0.0 && alpha <= 1.0) || !isfinite(x)) {
+        return fail(PB_EVAL_TYPE);
+    }
+    pb_eval_state_entry *slot = state_slot(ctx, "ewma");
+    if (slot == NULL) {
+        return fail(PB_EVAL_OOM);
+    }
+    if (slot->kind != PB_EVAL_STATE_EMPTY && slot->kind != PB_EVAL_STATE_NUMBER) {
+        return fail(PB_EVAL_TYPE);
+    }
+    const double next = slot->kind == PB_EVAL_STATE_NUMBER ? alpha * x + (1.0 - alpha) * slot->number : x;
+    slot->kind = PB_EVAL_STATE_NUMBER;
+    slot->number = next;
+    return ok((pb_value){.kind = PB_NUMBER, .number = next});
 }
 
 static pb_eval_result call_count(pb_eval_ctx *ctx, pb_values args) {

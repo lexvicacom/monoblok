@@ -71,73 +71,7 @@ static bool set_status(natsStatus status, const char *what) {
     return false;
 }
 
-mb_nats_options_config mb_nats_options_from_bridge(const pb_bridge_config *config) {
-    return (mb_nats_options_config){
-        .servers = config->servers,
-        .servers_len = config->servers_len,
-        .name = config->name,
-        .creds = config->creds,
-        .user = config->user,
-        .password = config->password,
-        .token = config->token,
-        .tls_ca = config->tls_ca,
-        .tls_cert = config->tls_cert,
-        .tls_key = config->tls_key,
-        .connect_timeout_ms = config->connect_timeout_ms,
-        .ping_interval_ms = config->ping_interval_ms,
-        .reconnect_wait_ms = config->reconnect_wait_ms,
-        .max_reconnect = config->max_reconnect,
-        .tls = config->tls,
-        .tls_skip_verify = config->tls_skip_verify,
-        .has_name = config->has_name,
-        .has_creds = config->has_creds,
-        .has_user = config->has_user,
-        .has_password = config->has_password,
-        .has_token = config->has_token,
-        .has_tls_ca = config->has_tls_ca,
-        .has_tls_cert = config->has_tls_cert,
-        .has_tls_key = config->has_tls_key,
-        .has_connect_timeout_ms = config->has_connect_timeout_ms,
-        .has_ping_interval_ms = config->has_ping_interval_ms,
-        .has_reconnect_wait_ms = config->has_reconnect_wait_ms,
-        .has_max_reconnect = config->has_max_reconnect,
-    };
-}
-
-mb_nats_options_config mb_nats_options_from_import(const pb_import_config *config) {
-    return (mb_nats_options_config){
-        .servers = config->servers,
-        .servers_len = config->servers_len,
-        .name = config->name,
-        .creds = config->creds,
-        .user = config->user,
-        .password = config->password,
-        .token = config->token,
-        .tls_ca = config->tls_ca,
-        .tls_cert = config->tls_cert,
-        .tls_key = config->tls_key,
-        .connect_timeout_ms = config->connect_timeout_ms,
-        .ping_interval_ms = config->ping_interval_ms,
-        .reconnect_wait_ms = config->reconnect_wait_ms,
-        .max_reconnect = config->max_reconnect,
-        .tls = config->tls,
-        .tls_skip_verify = config->tls_skip_verify,
-        .has_name = config->has_name,
-        .has_creds = config->has_creds,
-        .has_user = config->has_user,
-        .has_password = config->has_password,
-        .has_token = config->has_token,
-        .has_tls_ca = config->has_tls_ca,
-        .has_tls_cert = config->has_tls_cert,
-        .has_tls_key = config->has_tls_key,
-        .has_connect_timeout_ms = config->has_connect_timeout_ms,
-        .has_ping_interval_ms = config->has_ping_interval_ms,
-        .has_reconnect_wait_ms = config->has_reconnect_wait_ms,
-        .has_max_reconnect = config->has_max_reconnect,
-    };
-}
-
-bool mb_nats_set_options(natsOptions *opts, const mb_nats_options_config *config, mb_nats_strings *strings) {
+bool mb_nats_set_options(natsOptions *opts, const pb_remote_config *config, mb_nats_strings *strings) {
     if (config->servers_len > (size_t)INT_MAX) {
         fprintf(stderr, "warn: nats: too many configured servers\n");
         return false;
@@ -159,21 +93,21 @@ bool mb_nats_set_options(natsOptions *opts, const mb_nats_options_config *config
         return false;
     }
 
-    if (config->has_name) {
+    if (config->name.len != 0) {
         char *name = mb_nats_track_cstr(strings, config->name);
         if (name == NULL || !set_status(natsOptions_SetName(opts, name), "set name")) {
             return false;
         }
     }
 
-    if (config->has_creds) {
+    if (config->creds.len != 0) {
         char *creds = mb_nats_track_cstr(strings, config->creds);
         if (creds == NULL ||
             !set_status(natsOptions_SetUserCredentialsFromFiles(opts, creds, NULL), "set credentials")) {
             return false;
         }
-    } else if (config->has_user || config->has_password) {
-        if (!config->has_user || !config->has_password) {
+    } else if (config->user.len != 0 || config->password.len != 0) {
+        if (config->user.len == 0 || config->password.len == 0) {
             fprintf(stderr, "warn: nats: :user and :password must be configured together\n");
             return false;
         }
@@ -183,26 +117,26 @@ bool mb_nats_set_options(natsOptions *opts, const mb_nats_options_config *config
             !set_status(natsOptions_SetUserInfo(opts, user, password), "set user info")) {
             return false;
         }
-    } else if (config->has_token) {
+    } else if (config->token.len != 0) {
         char *token = mb_nats_track_cstr(strings, config->token);
         if (token == NULL || !set_status(natsOptions_SetToken(opts, token), "set token")) {
             return false;
         }
     }
 
-    if (config->tls || config->has_tls_ca || config->has_tls_cert || config->tls_skip_verify) {
+    if (config->tls || config->tls_ca.len != 0 || config->tls_cert.len != 0 || config->tls_skip_verify) {
         if (!set_status(natsOptions_SetSecure(opts, true), "enable TLS")) {
             return false;
         }
     }
-    if (config->has_tls_ca) {
+    if (config->tls_ca.len != 0) {
         char *ca = mb_nats_track_cstr(strings, config->tls_ca);
         if (ca == NULL || !set_status(natsOptions_LoadCATrustedCertificates(opts, ca), "load CA")) {
             return false;
         }
     }
-    if (config->has_tls_cert || config->has_tls_key) {
-        if (!config->has_tls_cert || !config->has_tls_key) {
+    if (config->tls_cert.len != 0 || config->tls_key.len != 0) {
+        if (config->tls_cert.len == 0 || config->tls_key.len == 0) {
             fprintf(stderr, "warn: nats: :tls-cert and :tls-key must be configured together\n");
             return false;
         }

@@ -22,6 +22,9 @@ typedef enum pb_eval_error {
 typedef struct pb_eval_ctx pb_eval_ctx;
 typedef struct pb_eval_result pb_eval_result;
 typedef bool (*pb_publish_fn)(void *ctx, pb_slice subject, pb_slice payload);
+// Last-value lookup for `(last SUBJECT)`. On a hit sets *payload to a view that
+// is only valid until the next publish; the caller copies it. False means none.
+typedef bool (*pb_last_fn)(void *ctx, pb_slice subject, pb_slice *payload);
 typedef bool (*pb_eval_symbol_fn)(void *user_ctx, pb_eval_ctx *ctx, pb_slice name, pb_eval_result *out);
 typedef bool (*pb_eval_call_fn)(void *user_ctx, pb_eval_ctx *ctx, pb_slice name, pb_values args, pb_eval_result *out);
 
@@ -41,6 +44,7 @@ typedef enum pb_eval_clock_kind {
     PB_EVAL_CLOCK_DEBOUNCE,
     PB_EVAL_CLOCK_SAMPLE,
     PB_EVAL_CLOCK_AGGREGATE,
+    PB_EVAL_CLOCK_EVERY,
 } pb_eval_clock_kind;
 
 typedef enum pb_eval_metric_kind {
@@ -53,9 +57,12 @@ typedef enum pb_eval_metric_kind {
     PB_EVAL_METRIC_RATE,
 } pb_eval_metric_kind;
 
-// Long-lived per-(rule, op, subject) slot for simple stateful forms.
+// Long-lived per-(rule, call site, op, subject) slot for stateful forms. The
+// subject is the publish subject that created the slot (empty under every
+// rules); owned heap bytes, also bound as `subject` when a clock body fires.
 typedef struct pb_eval_state_entry {
     size_t rule_id;
+    uint32_t site;
     char *op;
     size_t op_len;
     char *subject;
@@ -117,13 +124,17 @@ struct pb_eval_ctx {
     pb_arena *arena;
     pb_eval_state *state;
     size_t rule_id;
+    uint32_t site; // call-site id of the form being run; set by eval, 0 outside a call
     uint64_t now_ms;
     int64_t wall_ms;
     bool replaying;
     pb_slice subject;
     pb_slice payload;
+    pb_slice reply_to; // reply subject of the triggering publish; empty means none
     pb_publish_fn publish;
     void *publish_ctx;
+    pb_last_fn last; // optional `(last ...)` lookup; NULL makes `last` return nil
+    void *last_ctx;
     uint64_t *publishes_emitted;
     uint64_t *publishes_suppressed;
     pb_eval_symbol_fn user_symbol;
@@ -137,7 +148,17 @@ struct pb_eval_result {
     pb_value value;
 };
 
+// Resolve pass run once per rule body on the AST (any source format): numbers
+// call sites, tags form heads, rejects unknown forms/symbols (unless the
+// matching user hook is installed) and `->` steps that cannot be threaded.
+// On failure writes a short message into err and returns false.
+bool pb_resolve_rule(pb_arena *arena, pb_value *body, bool allow_user_call, bool allow_user_symbol,
+                     char *err, size_t err_cap);
 pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr);
+// Creates the clock slot of an (every ...) rule in `state`. `body` must be a
+// resolved value that outlives the state (parse arena); the first tick
+// schedules the slot at now + ms without firing it.
+bool pb_eval_every_arm(pb_eval_state *state, size_t rule_id, uint64_t ms, pb_value *body);
 pb_eval_result pb_eval_tick_state_entry(pb_eval_ctx *ctx, pb_eval_state_entry *entry);
 void pb_eval_state_free(pb_eval_state *state);
 const char *pb_eval_error_name(pb_eval_error err);

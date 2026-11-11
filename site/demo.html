@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Live demo | monoblok</title><meta name="description" content="Publish a reading and watch a real monoblok server turn it into useful NATS subjects."><meta property="og:title" content="Live demo | monoblok"><meta property="og:description" content="Publish a reading and watch a real monoblok server turn it into useful NATS subjects."><meta property="og:type" content="website"><meta name="theme-color" content="#f5f4ed"><link rel="stylesheet" href="site.css?v=870b1ccc1c9c"></head><body><a class="skip" href="#main">Skip to content</a><nav class="nav" aria-label="Main"><a class="brand" href="index.html" aria-label="monoblok home">monoblok</a><div><a href="index.html#language">Patchbay</a><a href="demo.html" aria-current="page">Live demo</a><a href="esp32.html">ESP32</a><a href="why.html">Why monoblok?</a><a href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a><a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a></div></nav><main id="main"><header class="page-header"><h1>Try monoblok here</h1><p class="lede">Publish a reading and watch the processed messages arrive.</p></header><h2 class="demo-workbench-title">Publish and subscribe</h2><article class="workbench demo-panel" id="demo">
+<div class="example-tabs" role="tablist" aria-label="Live Patchbay examples">
+<button type="button" id="demo-tab-clean" role="tab" aria-selected="true" aria-controls="demo-example-panel" data-demo-example="clean"><span>Dedupe</span></button>
+<button type="button" id="demo-tab-smooth" role="tab" aria-selected="false" aria-controls="demo-example-panel" tabindex="-1" data-demo-example="smooth"><span>Smooth</span></button>
+<button type="button" id="demo-tab-alert" role="tab" aria-selected="false" aria-controls="demo-example-panel" tabindex="-1" data-demo-example="alert"><span>Alert</span></button>
+</div>
+<div id="demo-example-panel" class="example-panel" role="tabpanel" aria-labelledby="demo-tab-clean" tabindex="0">
+<div class="demo-left-pane"><div class="code-pane">
+<div class="file-label"><span>patchbay.edn</span><span>Live server rule</span></div>
+<pre><code id="demo-example-code">(on "demo.sensors.*"
+  (-&gt; payload-float
+      (round 1)
+      (squelch)
+      (publish! (subject-append "stable"))))</code></pre>
+<a href="https://github.com/lexvicacom/monoblok/blob/main/examples/demo.edn" target="_blank" rel="noopener noreferrer">Server rules</a>
+</div>
+<div class="demo-output"><div class="demo-output-head"><h3>Live output</h3><button id="sse-clear-log" class="demo-button secondary" type="button">Clear</button></div>
+<div class="output-tabs" role="tablist" aria-label="Live output view"><button type="button" id="output-tab-text" role="tab" aria-selected="true" aria-controls="output-text" data-output-view="text">Raw</button><button type="button" id="output-tab-graph" role="tab" aria-selected="false" aria-controls="output-graph" tabindex="-1" data-output-view="graph">Graph</button><button type="button" id="output-tab-latest" role="tab" aria-selected="false" aria-controls="output-latest" tabindex="-1" data-output-view="latest">Read latest value</button></div>
+<div id="output-text" class="output-view" role="tabpanel" aria-labelledby="output-tab-text"><div id="sse-log" class="demo-log" role="log" aria-live="polite" aria-label="Live messages" tabindex="0"></div></div>
+<div id="output-graph" class="output-view" role="tabpanel" aria-labelledby="output-tab-graph" tabindex="0" hidden><svg id="sse-graph" viewBox="0 0 440 200" role="img" aria-label="Live readings by message order"></svg><p id="graph-empty">Publish a numeric reading or subscribe to a numeric stream to plot it here.</p><div id="graph-legend" class="graph-legend"></div><p class="graph-note">Last 120 readings · message order → · hot = 1, cool = 0</p></div>
+<div id="output-latest" class="output-view" role="tabpanel" aria-labelledby="output-tab-latest" tabindex="0" hidden><form id="sse-latest-form" class="demo-latest"><label class="demo-label">Subject<input id="sse-latest-subject" class="demo-input" value="demo.sensors.temp.stable" autocomplete="off" spellcheck="false"></label><button id="sse-latest-button" class="demo-button" type="submit">Read latest</button></form><p id="latest-value" class="latest-value" role="status">Read a subject’s most recent cached value.</p></div>
+</div>
+</div>
+<div class="result-pane demo-controls">
+<div class="demo-example-heading"><h3 id="demo-example-title">Round readings and suppress repeats</h3><div id="demo-status" class="demo-status" aria-live="polite">Ready</div></div>
+<p id="demo-example-description">Round to one decimal place, then publish only when that rounded value changes.</p>
+<form id="sse-sub-form">
+<label class="demo-label">Subscribe to<input id="sse-subject" class="demo-input" value="demo.sensors.temp.stable" autocomplete="off" spellcheck="false" aria-describedby="demo-sub-help"></label>
+<p id="demo-sub-help" class="demo-help">Subscribe first, then send the sample readings in order.</p>
+<div class="demo-actions"><button id="sse-sub-button" class="demo-button" type="submit">Subscribe</button><button id="sse-stop-button" class="demo-button secondary" type="button" disabled>Stop</button></div>
+</form>
+<form id="sse-pub-form">
+<label class="demo-label">Publish to<input id="sse-pub-subject" class="demo-input" value="demo.sensors.temp" autocomplete="off" spellcheck="false"></label>
+<div class="publish-line"><label class="demo-label">Reading<input id="sse-payload" class="demo-input" value="21.01" autocomplete="off" spellcheck="false"></label><button id="sse-pub-button" class="demo-button" type="submit">Publish</button></div>
+<div id="demo-samples" class="quick-payloads" role="group" aria-label="Sample readings">
+<button class="demo-button secondary" type="button" data-demo-payload="21.01">21.01</button><button class="demo-button secondary" type="button" data-demo-payload="21.02">21.02</button><button class="demo-button secondary" type="button" data-demo-payload="21.04">21.04</button><button class="demo-button secondary" type="button" data-demo-payload="21.12">21.12</button>
+</div>
+</form>
+<p id="demo-connection-note" class="demo-help" hidden>Live messages need the monoblok HTTP adapter. Open this page through its HTTP server to connect.</p>
+<noscript><p>Enable JavaScript to publish and subscribe.</p></noscript>
+</div>
+</div>
+
+
+<div class="demo-note-wrap"><p>These are the homepage examples running on a real server, with subjects prefixed by <code>demo.</code>. State is shared per subject, so other visitors can affect averages and threshold crossings. Choose a different name in place of <code>temp</code> across the subject fields to use a separate stream. Use two browser windows or your phone to see multiple clients updating.</p><p><a href="index.html#language">Back to the examples</a> · <a href="https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md" target="_blank" rel="noopener noreferrer">Use the NATS CLI</a></p></div>
+</article></main><footer><div><a class="brand" href="index.html">monoblok</a><span>Rules for useful streams.</span></div><p>MIT licensed · Built by <a href="mailto:alex@lexvica.com">Alex Reid</a><br><a href="https://lexvica.com" target="_blank" rel="noopener noreferrer">Lexvica</a></p></footer><script src="http-sse-client.js?v=633c24dcaa2b"></script><script src="patchbay-examples.js?v=0300747e34d6"></script><script src="demo.js?v=7393baaee016"></script></body></html>

@@ -122,7 +122,7 @@ static bool run_program(pb_program *program, pb_slice subject, pb_slice payload,
     bool ok = true;
     for (size_t i = 0; i < program->len; i += 1) {
         pb_rule *rule = &program->rules[i];
-        if (!subject_matches(rule->filter, subject)) {
+        if (rule->every_ms != 0 || !subject_matches(rule->filter, subject)) {
             continue;
         }
         pb_eval_ctx ctx = {

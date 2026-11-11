@@ -312,3 +312,19 @@ const char *pb_parse_error_name(pb_parse_error err) {
     }
     return "unknown parse error";
 }
+
+void pb_line_col(const char *src, size_t len, size_t offset, size_t *line, size_t *col) {
+    if (offset > len) {
+        offset = len;
+    }
+    size_t l = 1;
+    size_t line_start = 0;
+    for (size_t i = 0; i < offset; i += 1) {
+        if (src[i] == '\n') {
+            l += 1;
+            line_start = i + 1;
+        }
+    }
+    *line = l;
+    *col = offset - line_start + 1;
+}

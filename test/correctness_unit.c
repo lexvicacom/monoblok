@@ -342,7 +342,7 @@ static void test_patchbay_numeric_streams_exact_under_fanout(void) {
         const int n = snprintf(payload, sizeof payload, "%zu", value);
         CHECK(n >= 0 && (size_t)n < sizeof payload);
         CHECK(mb_router_publish(&router, lit(subject), lit(payload)));
-        CHECK(pb_program_eval_publish(&program, &router, lit(subject), lit(payload), (uint64_t)i, 0));
+        CHECK(pb_program_eval_publish(&program, &router, lit(subject), lit(payload), (uint64_t)i, 0, (pb_program_eval_options){0}));
     }
 
     check_metric_conns(avg_conns, METRIC_AVG4, "avg4");

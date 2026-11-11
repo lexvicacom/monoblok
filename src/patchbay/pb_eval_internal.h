@@ -33,6 +33,7 @@ typedef enum pb_form {
     PB_FORM_SUBJECT_WITH,
     PB_FORM_PRINT,
     PB_FORM_PUBLISH,
+    PB_FORM_REPLY,
     PB_FORM_JSON_GET,
     PB_FORM_JSON_DEMUX,
     PB_FORM_ROUND,
@@ -64,7 +65,28 @@ typedef enum pb_form {
     PB_FORM_SAMPLE,
     PB_FORM_AGGREGATE,
     PB_FORM_BAR,
+    PB_FORM_HYSTERESIS,
+    PB_FORM_EWMA,
+    PB_FORM_LAST,
 } pb_form;
+
+// One row of the form table (FORMS[] in pb_eval.c), the single description of a
+// form. Adding a form: enum id above, one row, one case in pb_eval_call_form
+// (or pb_eval.c for special forms).
+typedef struct pb_form_entry {
+    const char *name;
+    pb_form form;
+    bool special;    // evaluates raw (unevaluated) arguments itself
+    bool stateful;   // allocates a state slot keyed by call site
+    bool clocked;    // always needs the clock timer
+    bool clocked_ms; // needs the clock timer only when called with a leading :ms window
+} pb_form_entry;
+
+const pb_form_entry *pb_form_lookup(pb_slice name);
+// Form at call-site id `site` inside a resolved rule body, or NULL.
+const pb_form_entry *pb_form_at_site(pb_value body, uint32_t site);
+// True when state op name `op` (e.g. "moving-avg/t", "count") belongs to `entry`'s form.
+bool pb_form_owns_op(const pb_form_entry *entry, pb_slice op);
 
 pb_eval_result pb_eval_ok(pb_value v);
 pb_eval_result pb_eval_fail(pb_eval_error err);
@@ -72,6 +94,10 @@ bool pb_eval_text_eq(pb_slice s, const char *lit);
 bool pb_eval_truthy(pb_value v);
 pb_value pb_eval_bool_value(bool b);
 bool pb_eval_as_number(pb_value v, double *out);
+// Bound-symbol table shared with the YAML and JSON adapters: tag for NAME (no sigil), 0 if unknown.
+uint32_t pb_binding_lookup(pb_slice name);
+// Name of the INDEX-th binding, or NULL past the end; for error messages.
+const char *pb_binding_name(size_t index);
 bool pb_eval_as_string(pb_value v, pb_slice *out);
 bool pb_eval_coerce_payload(pb_eval_ctx *ctx, pb_value v, pb_slice *out);
 bool pb_eval_value_eq(pb_value a, pb_value b);
@@ -87,21 +113,5 @@ pb_eval_result pb_eval_call_dropout(pb_eval_ctx *ctx, pb_values raw_args);
 static inline pb_eval_result pb_eval_nil(void) {
     return pb_eval_ok((pb_value){.kind = PB_NIL});
 }
-
-// Short aliases used as local sugar in evaluator form implementations.
-#define ok pb_eval_ok
-#define nil pb_eval_nil
-#define fail pb_eval_fail
-#define text_eq pb_eval_text_eq
-#define truthy pb_eval_truthy
-#define bool_value pb_eval_bool_value
-#define as_number pb_eval_as_number
-#define as_string pb_eval_as_string
-#define coerce_payload pb_eval_coerce_payload
-#define value_eq pb_eval_value_eq
-#define state_slot pb_eval_state_slot
-#define state_set_bytes pb_eval_state_set_bytes
-#define state_set_emit_subject pb_eval_state_set_emit_subject
-#define note_suppressed pb_eval_note_suppressed
 
 #endif

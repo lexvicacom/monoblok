@@ -45,8 +45,10 @@ pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args)
     case PB_FORM_SUBJECT_APPEND: return call_subject_append(ctx, args);
     case PB_FORM_SUBJECT_TOKEN: return call_subject_token(ctx, args);
     case PB_FORM_SUBJECT_WITH: return call_subject_with(ctx, args);
+    case PB_FORM_LAST: return call_last(ctx, args);
     case PB_FORM_PRINT: return call_print(ctx, args);
     case PB_FORM_PUBLISH: return call_publish(ctx, args);
+    case PB_FORM_REPLY: return call_reply(ctx, args);
 
 #if PB_ENABLE_JSON
     // JSON forms.
@@ -66,6 +68,8 @@ pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args)
     case PB_FORM_RISING_EDGE: return call_edge(ctx, args, true);
     case PB_FORM_FALLING_EDGE: return call_edge(ctx, args, false);
     case PB_FORM_DELTA: return call_delta(ctx, args);
+    case PB_FORM_HYSTERESIS: return call_hysteresis(ctx, args);
+    case PB_FORM_EWMA: return call_ewma(ctx, args);
     case PB_FORM_COUNT: return call_count(ctx, args);
 
     // Ring-window forms.

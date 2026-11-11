@@ -8,6 +8,7 @@
 typedef struct mb_snapshot_counts {
     size_t lvc;
     size_t rule_state;
+    size_t rule_state_skipped; // entries dropped: old format, rule/site/op no longer matches
 } mb_snapshot_counts;
 
 bool mb_snapshot_load(const char *path, mb_router *router, pb_program *program, mb_snapshot_counts *counts);

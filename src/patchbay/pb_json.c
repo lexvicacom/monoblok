@@ -4,9 +4,11 @@
 #if PB_ENABLE_JSON
 
 #include "array.h"
+#include "pb_eval_internal.h"
 
 #include "yyjson.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,7 +23,16 @@ typedef struct value_vec {
 typedef struct json_conv {
     pb_arena *arena;
     pb_parse_error err;
+    bool bindings; // rule-body forms: "$name" strings are bound symbols; config forms keep plain strings
+    char msg[192];
 } json_conv;
+
+static void json_fail(json_conv *c, const char *fmt, const char *a) {
+    if (c->err == PB_PARSE_OK) {
+        c->err = PB_PARSE_INVALID_JSON;
+        snprintf(c->msg, sizeof c->msg, fmt, a);
+    }
+}
 
 static bool vec_push(value_vec *v, pb_value item) {
     if (!mb_array_reserve((void **)&v->items, &v->cap, v->len + 1, sizeof v->items[0], 8)) {
@@ -44,11 +55,15 @@ static pb_value text_value(json_conv *c, pb_value_kind kind, const char *ptr, si
 static pb_value string_value(json_conv *c, yyjson_val *v) {
     const char *s = yyjson_get_str(v);
     const size_t len = yyjson_get_len(v);
-    pb_slice raw = {.ptr = s, .len = len};
-    if (pb_slice_eq_lit(raw, "subject") || pb_slice_eq_lit(raw, "payload") ||
-        pb_slice_eq_lit(raw, "payload-float") || pb_slice_eq_lit(raw, "payload-int") ||
-        pb_slice_eq_lit(raw, "replaying?")) {
-        return text_value(c, PB_SYMBOL, s, len);
+    if (c->bindings && len > 0 && s[0] == '$') {
+        const pb_slice name = {.ptr = s + 1, .len = len - 1};
+        if (pb_binding_lookup(name) == 0) {
+            char shown[64];
+            snprintf(shown, sizeof shown, "%.*s", (int)(len < 60 ? len : 60), s);
+            json_fail(c, "unknown binding %s (write {\"str\": \"...\"} for literal text starting with $)", shown);
+            return (pb_value){0};
+        }
+        return text_value(c, PB_SYMBOL, name.ptr, name.len);
     }
     return text_value(c, PB_STRING, s, len);
 }
@@ -123,8 +138,12 @@ static bool convert_special_object(json_conv *c, yyjson_val *obj, pb_value *out)
         *out = text_value(c, PB_KEYWORD, yyjson_get_str(val), yyjson_get_len(val));
         return c->err == PB_PARSE_OK;
     }
-    if (name_len == 3 && memcmp(name, "vec", 3) == 0 && yyjson_is_arr(val)) {
+    if (name_len == 6 && memcmp(name, "vector", 6) == 0 && yyjson_is_arr(val)) {
         return convert_vec_array(c, val, out);
+    }
+    if (name_len == 3 && memcmp(name, "vec", 3) == 0 && yyjson_is_arr(val)) {
+        json_fail(c, "{\"vec\": [...]} was renamed; write {\"vector\": [...]}%s", "");
+        return false;
     }
     return false;
 }
@@ -158,7 +177,11 @@ static bool convert_form(json_conv *c, yyjson_val *array, pb_value *out) {
             continue;
         }
         pb_value special = {0};
-        if (convert_special_object(c, item, &special)) {
+        if (idx == 1 && c->bindings && yyjson_is_str(item) && yyjson_equals_str(head, "on")) {
+            if (!vec_push(&items, text_value(c, PB_STRING, yyjson_get_str(item), yyjson_get_len(item)))) {
+                c->err = PB_PARSE_OOM;
+            }
+        } else if (convert_special_object(c, item, &special)) {
             if (!vec_push(&items, special)) {
                 c->err = PB_PARSE_OOM;
             }
@@ -218,7 +241,7 @@ static pb_value convert_expr(json_conv *c, yyjson_val *v) {
             return out;
         }
     }
-    c->err = PB_PARSE_INVALID_JSON;
+    json_fail(c, "%s", "unsupported JSON value in patchbay");
     return (pb_value){0};
 }
 
@@ -241,6 +264,13 @@ static bool looks_yaml(const char *path) {
     const size_t path_len = strlen(path);
     return (path_len >= 4 && memcmp(path + path_len - 4, ".yml", 4) == 0) ||
            (path_len >= 5 && memcmp(path + path_len - 5, ".yaml", 5) == 0);
+}
+
+// Config forms carry plain strings (URLs, subjects); only rule forms take $bindings.
+static bool is_config_head(yyjson_val *head) {
+    return yyjson_is_str(head) &&
+           (yyjson_equals_str(head, "lvc") || yyjson_equals_str(head, "export") ||
+            yyjson_equals_str(head, "bridge") || yyjson_equals_str(head, "import"));
 }
 
 static pb_parse_result parse_json_patchbay(pb_arena *arena, const char *src, size_t len) {
@@ -269,6 +299,7 @@ static pb_parse_result parse_json_patchbay(pb_arena *arena, const char *src, siz
     yyjson_val *first = yyjson_arr_get_first(root);
     if (yyjson_is_str(first)) {
         pb_value form = {0};
+        c.bindings = !is_config_head(first);
         if (convert_form(&c, root, &form) && !vec_push(&forms, form)) {
             c.err = PB_PARSE_OOM;
         }
@@ -278,6 +309,7 @@ static pb_parse_result parse_json_patchbay(pb_arena *arena, const char *src, siz
         yyjson_val *item = NULL;
         yyjson_arr_foreach(root, idx, max, item) {
             pb_value form = {0};
+            c.bindings = !yyjson_is_arr(item) || !is_config_head(yyjson_arr_get_first(item));
             if (!convert_form(&c, item, &form) || !vec_push(&forms, form)) {
                 c.err = c.err == PB_PARSE_OK ? PB_PARSE_OOM : c.err;
                 break;
@@ -289,7 +321,9 @@ static pb_parse_result parse_json_patchbay(pb_arena *arena, const char *src, siz
 
     if (c.err != PB_PARSE_OK) {
         free(forms.items);
-        return (pb_parse_result){.err = c.err, .err_offset = 0};
+        pb_parse_result r = {.err = c.err, .err_offset = 0};
+        memcpy(r.err_msg, c.msg, sizeof r.err_msg);
+        return r;
     }
     pb_value *items = pb_arena_alloc(arena, forms.len * sizeof items[0], alignof(pb_value));
     if (items == NULL && forms.len != 0) {

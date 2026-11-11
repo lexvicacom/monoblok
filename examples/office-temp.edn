@@ -6,17 +6,22 @@
       (publish! (subject-append "stable"))))
 
 ;; Sustained heat alert + all-clear in one rule: fire "alert" once when
-;; the 60-sample moving average crosses above 28°C, "ok" once when it
-;; drops back below. One predicate, one ring buffer, one prev slot.
+;; the 60-sample moving average reaches 28°C, "ok" once when it falls back
+;; to 26°C. A single 28°C threshold chatters: an average that hovers around
+;; 28 crosses it back and forth and floods subscribers with alert/ok pairs.
+;; (hysteresis LO HI X) is true from X >= HI until X <= LO and holds its
+;; answer in between, so the average has to drop 2°C before the all-clear.
+;; One predicate, one ring buffer, one prev slot.
 (on "temp.*.*"
-  (transition (> (moving-avg 60 payload-float) 28.0)
+  (transition (hysteresis 26.0 28.0 (moving-avg 60 payload-float))
     (publish! (subject-append "alert") "hot")
     (publish! (subject-append "ok")    "cool")))
 
 ;; Daily heat-event tally: increment a per-sensor counter once on each
-;; false->true crossing of the same threshold, ignoring all the
-;; in-between samples. Subscribe to `temp.<floor>.<room>.count` for the
-;; running total. (rising-edge fires once per transition, so this is a
-;; counter of *crossings*, not samples.)
+;; false->true crossing of the same band, ignoring all the in-between
+;; samples. Subscribe to `temp.<floor>.<room>.count` for the running
+;; total. (rising-edge fires once per transition, so this is a counter
+;; of *crossings*, not samples.) Its moving-avg is its own call site, so
+;; it keeps its own ring and does not share state with the rule above.
 (on "temp.*.*"
-  (count! (rising-edge (> (moving-avg 60 payload-float) 28.0))))
+  (count! (rising-edge (hysteresis 26.0 28.0 (moving-avg 60 payload-float)))))

@@ -7,6 +7,9 @@
 ;;   - `clocked.sensor.temp.sampled` every 1s with the latest value
 ;;   - `clocked.sensor.temp.avg5s` every 5s while the window has samples
 ;;   - `clocked.sensor.temp.rate5s` every 5s while the window has samples
+;;   - `clocked.heartbeat` every 2s, whether or not anything is publishing
+;;   - `clocked.all.count` a running total across every `clocked.sensor.*`
+;;   - `clocked.all.avg5s` every 5s, the average across every sensor
 
 (lvc ["clocked.>"])
 
@@ -35,4 +38,28 @@
   (aggregate! :ms 5000
     (subject-append "rate5s")
     :rate
+    payload-float))
+
+;; Heartbeat: a top-level `every` rule runs on a timer, not on a publish.
+;; The first tick only schedules; it fires every 2s after that. Inside the
+;; body `subject` and `payload` are empty strings, so publish to an
+;; explicit subject.
+(every :ms 2000
+  (publish! "clocked.heartbeat" "alive"))
+
+;; Funnel: state is per subject, so `count!` and `aggregate!` directly on
+;; `clocked.sensor.*` would keep one slot per sensor. To roll every sensor
+;; up together, a re-entrant rule republishes each reading on one subject,
+;; and the stateful rules below sit on that subject. The funnel subject
+;; must not match the filter it came from.
+(on "clocked.sensor.*" :reentrant true
+  (publish! "clocked.all" payload))
+
+(on "clocked.all"
+  (count!))
+
+(on "clocked.all"
+  (aggregate! :ms 5000
+    "clocked.all.avg5s"
+    :avg
     payload-float))
