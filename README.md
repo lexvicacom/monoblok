@@ -37,8 +37,6 @@ monoblok is written in C with libuv and builds on Linux and macOS. It aims to be
 
 See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. There's a [demo server](https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md). Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
 
-![monoblok deployment modes](./docs/infographic.png)
-
 ## Run it
 
 ### Binary
