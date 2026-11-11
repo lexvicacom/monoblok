@@ -6,8 +6,6 @@ Signal conditioning, transformation, and routing in a NATS-native message proces
 >
 >Point existing publishers at it or have it subscribe to existing subjects. Declare the processing rules you need, and monoblok republishes clean, actionable subjects for subscribers.
 >
-> _Rounding. Deadbands. Squelch. Aggregation. Moving averages. OHLC. Derived alerts._
->
 > Fix noisy raw streams once, not in every subscriber.
 
 ## Rationale
@@ -36,8 +34,6 @@ monoblok is written in C with libuv and builds on Linux and macOS. It aims to be
 [tinyblok](https://github.com/lexvicacom/tinyblok) is an implementation for microcontrollers relaying cleaned sensor data into NATS.
 
 See [Overview](./docs/overview.md), [Patchbay](./docs/patchbay.md), and the runnable files in [examples/](./examples/) to better get a feel. There's a [demo server](https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md). Also, there's [the introductory blog post](https://alexjreid.dev/posts/monoblok/) [and friends](https://alexjreid.dev/tags/monoblok/).
-
-![monoblok deployment modes](./docs/infographic.png)
 
 ## Run it
 
