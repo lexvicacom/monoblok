@@ -44,7 +44,7 @@ mkdir -p "$STORE"
 cleanup() {
     [ -n "${MONO_PID:-}" ] && kill "$MONO_PID" 2>/dev/null || true
     [ -n "${LVC_SUB_PID:-}" ] && kill "$LVC_SUB_PID" 2>/dev/null || true
-    [ -n "${BAR_SUB_PID:-}" ] && kill "$BAR_SUB_PID" 2>/dev/null || true
+    [ -n "${BRIDGE_BAR_PID:-}" ] && kill "$BRIDGE_BAR_PID" 2>/dev/null || true
     [ -n "${BRIDGE_REPLAY_PID:-}" ] && kill "$BRIDGE_REPLAY_PID" 2>/dev/null || true
     [ -n "${BRIDGE_RAW_PID:-}" ] && kill "$BRIDGE_RAW_PID" 2>/dev/null || true
     [ -n "${BRIDGE_HEADER_PID:-}" ] && kill "$BRIDGE_HEADER_PID" 2>/dev/null || true
@@ -105,6 +105,8 @@ nats -s "$BRIDGE_URL" sub 'js.replay.last-temp' > "$WORKDIR/bridge-replay.log" 2
 BRIDGE_REPLAY_PID=$!
 nats -s "$BRIDGE_URL" sub 'js.sensors.temp' > "$WORKDIR/bridge-raw.log" 2>&1 &
 BRIDGE_RAW_PID=$!
+nats -s "$BRIDGE_URL" sub 'js.sensors.temp.bar.close' > "$WORKDIR/bridge-bar.log" 2>&1 &
+BRIDGE_BAR_PID=$!
 (
     printf 'CONNECT {"headers":true}\r\n'
     printf 'SUB js.replay.last-temp 19\r\n'
@@ -114,7 +116,8 @@ BRIDGE_RAW_PID=$!
 BRIDGE_HEADER_PID=$!
 for _ in $(seq 1 30); do
     grep -q 'Subscribing on' "$WORKDIR/bridge-replay.log" &&
-        grep -q 'Subscribing on' "$WORKDIR/bridge-raw.log" && break
+        grep -q 'Subscribing on' "$WORKDIR/bridge-raw.log" &&
+        grep -q 'Subscribing on' "$WORKDIR/bridge-bar.log" && break
     sleep 0.1
 done
 
@@ -173,16 +176,15 @@ if [ "$BRIDGE_RAW_COUNT" != "0" ]; then
     cat "$WORKDIR/bridge-raw.log"; exit 1
 fi
 
-nats -s "$MONO_URL" sub '$LVC.js.sensors.temp.bar.close' > "$WORKDIR/bar.log" 2>&1 &
-BAR_SUB_PID=$!
+# Capture the historical close before startup: an LVC subscription also receives
+# live updates, so the next window's close (43) can race a post-startup check.
 for _ in $(seq 1 30); do
-    grep -q 'Received on "\$LVC\.js\.sensors\.temp\.bar\.close"' "$WORKDIR/bar.log" && break
+    grep -q '^41$' "$WORKDIR/bridge-bar.log" && break
     sleep 0.1
 done
-BAR_COUNT=$(grep -c 'Received on "\$LVC\.js\.sensors\.temp\.bar\.close"' "$WORKDIR/bar.log" || true)
-if [ "$BAR_COUNT" != "1" ] || ! grep -Eq '^(41|43)$' "$WORKDIR/bar.log"; then
+if ! grep -q '^41$' "$WORKDIR/bridge-bar.log"; then
     echo "FAIL: expected replay-time bar close from virtual catch-up clock"
-    cat "$WORKDIR/bar.log"; exit 1
+    cat "$WORKDIR/bridge-bar.log"; exit 1
 fi
 
 nats -s "$MONO_URL" sub 'js.live.temp' > "$WORKDIR/live.log" 2>&1 &
@@ -217,10 +219,9 @@ if [ "$BRIDGE_RAW_COUNT" != "0" ]; then
     cat "$WORKDIR/bridge-raw.log"; exit 1
 fi
 
-kill "$LVC_SUB_PID" "$BAR_SUB_PID" "$LIVE_SUB_PID" "$RAW_SUB_PID" 2>/dev/null || true
-wait "$LVC_SUB_PID" "$BAR_SUB_PID" "$LIVE_SUB_PID" "$RAW_SUB_PID" 2>/dev/null || true
+kill "$LVC_SUB_PID" "$LIVE_SUB_PID" "$RAW_SUB_PID" 2>/dev/null || true
+wait "$LVC_SUB_PID" "$LIVE_SUB_PID" "$RAW_SUB_PID" 2>/dev/null || true
 LVC_SUB_PID=
-BAR_SUB_PID=
 LIVE_SUB_PID=
 RAW_SUB_PID=
 
