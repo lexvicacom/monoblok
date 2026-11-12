@@ -88,8 +88,11 @@ if [ ! -x "$MB_BIN" ]; then
     (cd "$ROOT" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null && cmake --build build --target monoblok) || exit 1
 fi
 
+BENCH_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/monoblok-bench.XXXXXX") || exit 1
+
 cleanup() {
     [ -n "${MB_PID:-}" ] && kill "$MB_PID" 2>/dev/null && wait "$MB_PID" 2>/dev/null || true
+    rm -rf "$BENCH_TMPDIR"
 }
 trap cleanup EXIT
 
@@ -117,12 +120,12 @@ run_pub() {
 
 run_fanout() {
     local subs="$1" msgs="$2"
-    nats --no-context bench sub --clients=$subs --msgs=$msgs fan > /tmp/bench_sub.out 2>&1 &
+    nats --no-context bench sub --clients=$subs --msgs=$msgs fan > "$BENCH_TMPDIR/bench_sub.out" 2>&1 &
     local sub_pid=$!
     sleep 0.8
     nats --no-context bench pub --clients=1 --msgs=$msgs --size=64 fan > /dev/null 2>&1
     wait $sub_pid 2>/dev/null || true
-    extract_rate subscriber < /tmp/bench_sub.out
+    extract_rate subscriber < "$BENCH_TMPDIR/bench_sub.out"
 }
 
 # Convert "1,234,567" to 1234567
@@ -168,10 +171,10 @@ echo "monoblok libuv mode: $MB_IO_LABEL"
 echo
 
 # --- monoblok -----------------------------------------------------------------
-"$MB_BIN" "${MB_IO_ARGS[@]}" --port $PORT > /tmp/mb.log 2>&1 &
+"$MB_BIN" ${MB_IO_ARGS[@]+"${MB_IO_ARGS[@]}"} --port $PORT > "$BENCH_TMPDIR/mb.log" 2>&1 &
 MB_PID=$!
 sleep 0.3
-kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat /tmp/mb.log; exit 1; }
+kill -0 $MB_PID 2>/dev/null || { echo "monoblok failed to start:"; cat "$BENCH_TMPDIR/mb.log"; exit 1; }
 
 # Cooldown between rows. Back-to-back 500k+ msg runs can throttle laptop
 # CPUs; bump BENCH_COOLDOWN_S to 5 if you're chasing publishable numbers
@@ -196,7 +199,7 @@ sleep "$COOLDOWN_S"
 PATCHBAY_EDN="$ROOT/examples/bench-onerule.edn"
 MB_P_1="" MB_P_2="" MB_P_3="" MB_P_4="" MB_P_5="" MB_P_6=""
 if [ -f "$PATCHBAY_EDN" ]; then
-    "$MB_BIN" "${MB_IO_ARGS[@]}" --port $PORT --patchbay "$PATCHBAY_EDN" > /tmp/mb-patchbay.log 2>&1 &
+    "$MB_BIN" ${MB_IO_ARGS[@]+"${MB_IO_ARGS[@]}"} --port $PORT --patchbay "$PATCHBAY_EDN" > "$BENCH_TMPDIR/mb-patchbay.log" 2>&1 &
     MB_PID=$!
     sleep 0.3
     if kill -0 $MB_PID 2>/dev/null; then
@@ -212,7 +215,7 @@ if [ -f "$PATCHBAY_EDN" ]; then
         sleep "$COOLDOWN_S"
     else
         echo "monoblok+patchbay (1 rule) failed to start:"
-        cat /tmp/mb-patchbay.log
+        cat "$BENCH_TMPDIR/mb-patchbay.log"
     fi
 fi
 
@@ -222,7 +225,7 @@ fi
 PATCHBAY_50_EDN="$ROOT/examples/bench-50rules.edn"
 MB_50_1="" MB_50_2="" MB_50_3="" MB_50_4="" MB_50_5="" MB_50_6=""
 if [ -f "$PATCHBAY_50_EDN" ]; then
-    "$MB_BIN" "${MB_IO_ARGS[@]}" --port $PORT --patchbay "$PATCHBAY_50_EDN" > /tmp/mb-patchbay50.log 2>&1 &
+    "$MB_BIN" ${MB_IO_ARGS[@]+"${MB_IO_ARGS[@]}"} --port $PORT --patchbay "$PATCHBAY_50_EDN" > "$BENCH_TMPDIR/mb-patchbay50.log" 2>&1 &
     MB_PID=$!
     sleep 0.3
     if kill -0 $MB_PID 2>/dev/null; then
@@ -238,7 +241,7 @@ if [ -f "$PATCHBAY_50_EDN" ]; then
         sleep "$COOLDOWN_S"
     else
         echo "monoblok+patchbay (50 rules) failed to start:"
-        cat /tmp/mb-patchbay50.log
+        cat "$BENCH_TMPDIR/mb-patchbay50.log"
     fi
 fi
 
