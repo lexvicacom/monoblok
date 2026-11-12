@@ -41,7 +41,7 @@ on:
     do:
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, $payload-float]]]
-      - [bar!, ms, 1000, $payload-float]
+      - [bar!, {ms: 1000}, $payload-float]
       - [if, $replaying, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
 
   # A few simple variants to try:
@@ -49,14 +49,14 @@ on:
   # Publish only meaningful live movement:
   - sub: "js.sensors.temp"
     when: [not, $replaying]
-    thread:
+    pipeline:
       - $payload-float
       - [deadband, 0.25]
       - [publish!, "js.live.deadband"]
   #
   # Publish a rounded stable signal from both replay and live data:
   # - sub: "js.sensors.temp"
-  #   thread:
+  #   pipeline:
   #     - $payload-float
   #     - [round, 1]
   #     - [squelch]

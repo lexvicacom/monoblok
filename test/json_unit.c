@@ -152,6 +152,46 @@ static void test_yaml_patchbay_sugar(void) {
     pb_arena_free(&arena);
 }
 
+// Option maps lower to the same ordered keyword/value arguments as bare options.
+static void check_same_ast(pb_value a, pb_value b) {
+    CHECK(a.kind == b.kind);
+    switch (a.kind) {
+    case PB_NIL: break;
+    case PB_BOOL: CHECK(a.boolean == b.boolean); break;
+    case PB_NUMBER: CHECK(a.number == b.number); break;
+    case PB_SYMBOL: case PB_KEYWORD: case PB_STRING:
+        CHECK(pb_slice_eq(a.text, b.text)); break;
+    case PB_LIST: case PB_VECTOR:
+        CHECK(a.seq.len == b.seq.len);
+        for (size_t i = 0; i < a.seq.len; i += 1) check_same_ast(a.seq.items[i], b.seq.items[i]);
+        break;
+    }
+}
+
+static void test_yaml_option_map_parity(void) {
+    const char *mapped =
+        "on:\n  - sub: \"a\"\n"
+        "    when: [\">\", [moving-avg, {ms: 5000}, $payload-float], 0]\n"
+        "    pipeline: [$payload-float, [moving-avg, {ms: 5000}], [publish!, \"out\", {dp: 1}]]\n"
+        "  - sub: \"b\"\n"
+        "    do: [dropout, {ms: 500, lost: [publish!, \"lost\", \"{a: b,c}\"], found: [publish!, \"found\", {dp: 1}, $payload-float]}]\n";
+    const char *bare =
+        "on:\n  - sub: \"a\"\n"
+        "    when: [\">\", [moving-avg, ms, 5000, $payload-float], 0]\n"
+        "    pipeline: [$payload-float, [moving-avg, ms, 5000], [publish!, \"out\", dp, 1]]\n"
+        "  - sub: \"b\"\n"
+        "    do: [dropout, ms, 500, lost, [publish!, \"lost\", \"{a: b,c}\"], found, [publish!, \"found\", dp, 1, $payload-float]]\n";
+    pb_arena a = {0}, b = {0};
+    pb_parse_result x = pb_parse_patchbay_source(&a, "map.yml", mapped, strlen(mapped));
+    pb_parse_result y = pb_parse_patchbay_source(&b, "bare.yml", bare, strlen(bare));
+    CHECK(x.err == PB_PARSE_OK);
+    CHECK(y.err == PB_PARSE_OK);
+    CHECK(x.forms.len == y.forms.len);
+    for (size_t i = 0; i < x.forms.len; i += 1) check_same_ast(x.forms.items[i], y.forms.items[i]);
+    pb_arena_free(&a);
+    pb_arena_free(&b);
+}
+
 static void test_yaml_config_env_sugar(void) {
     const char *src =
         "export:\n"
@@ -253,16 +293,38 @@ static void test_yaml_invalid_inputs(void) {
     // Old map-form thread: from/steps.
     expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    thread:\n      from: $payload-float\n      steps:\n        - [round, 1]\n",
                       "from/steps map form was removed");
-    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    body: [publish!, \"x\"]\n", "use form");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    body: [publish!, \"x\"]\n", "use do");
     expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    when:\n      test: [\">\", 1, 2]\n      then: [publish!, \"x\"]\n",
                       "when: {test, then} map form was removed");
-    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    form: [publish!, \"x\"]\n    thread: [$payload]\n", "exactly one of thread, do or form");
-    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n", "exactly one of thread, do or form");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    form: [publish!, \"x\"]\n    thread: [$payload]\n", "exactly one body key");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n", "exactly one body key");
     expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    form: [publish!, \"x\"]\n    bogus: 1\n", "unknown key \"bogus\"");
     expect_load_error("bad.yml", "every:\n  - ms: 5\n    form: [publish!, \"x\"]\n    sub: \"a\"\n", "unknown key \"sub\"");
     expect_load_error("bad.yml", "on:\n  - form: [publish!, \"x\"]\n", "needs `sub");
     expect_load_error("bad.yml", "every:\n  - form: [publish!, \"x\"]\n", "needs `ms");
     expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    thread: []\n", "non-empty list");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    pipeline: []\n", "non-empty list");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do: []\n", "non-empty list");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do:\n      bogus: 1\n", "do must be an expression");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    pipeline: [$payload]\n    thread: [$payload]\n", "exactly one body key");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do: [count!]\n    form: [count!]\n", "exactly one body key");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    pipeline: [$payload]\n    do: [count!]\n", "exactly one body key");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do:\n      - pipeline: [$payload]\n        form: [count!]\n", "exactly one body key");
+}
+
+static void test_yaml_invalid_option_maps(void) {
+    const char *forms[] = {
+        "[publish!, \"x\", {}]", "[publish!, \"x\", {:dp: 1}]",
+        "[publish!, \"x\", {dp:}]", "[publish!, \"x\", {dp 1}]",
+        "[publish!, \"x\", {dp: 1 ms: 2}]", "[publish!, \"x\", {dp: 1]",
+        "[publish!, \"x\", {dp: {ms: 1}}]", "[vector, {dp: 1}]",
+    };
+    for (size_t i = 0; i < sizeof forms / sizeof forms[0]; i += 1) expect_form_error(forms[i], "");
+    expect_form_error("[publish!, \"x\", {dp: 1, dp: 2}]", "duplicate YAML option key");
+    expect_form_error("[publish!, \"x\", {bogus: 1}]", "unknown YAML option key");
+    expect_load_error("bad.yml", "{on: []}\n", "");
+    expect_load_error("bad.yml", "export: {servers: [\"nats://localhost:4222\"]}\n", "");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do: {dp: 1}\n", "");
 }
 
 static void test_yaml_scalar_rules(void) {
@@ -409,11 +471,13 @@ TEST_MAIN(json,
           test_json_single_form_and_special_objects,
           test_json_replaying_symbol,
           test_json_invalid_inputs,
+          test_yaml_option_map_parity,
           test_yaml_patchbay_sugar,
           test_yaml_config_env_sugar,
           test_yaml_replaying_symbol,
           test_yaml_nested_import_config_sugar,
           test_yaml_invalid_inputs,
+          test_yaml_invalid_option_maps,
           test_yaml_scalar_rules,
           test_yaml_rule_shape,
           test_json_binding_rules)

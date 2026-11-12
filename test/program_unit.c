@@ -1057,7 +1057,96 @@ static void test_yaml_every_reply_and_new_forms(void) {
     CHECK(!pb_program_load_source(&program, "bad2.yml", no_ms, strlen(no_ms)));
 }
 
+// Both spellings must preserve stateful pipelines, nested guards, effect order and timers.
+static void test_yaml_pipeline_and_do_aliases(void) {
+    for (size_t variant = 0; variant < 2; variant += 1) {
+        const char *pipeline_key = variant == 0 ? "pipeline" : "thread";
+        const char *expr_key = variant == 0 ? "do" : "form";
+        char src[2048];
+        const int len = snprintf(src, sizeof src,
+                                 "every:\n"
+                                 "  - ms: 100\n"
+                                 "    %s: [publish!, \"tick\", \"alive\"]\n"
+                                 "on:\n"
+                                 "  - sub: \"a\"\n"
+                                 "    when: [\">\", $payload-float, 0]\n"
+                                 "    %s:\n"
+                                 "      - $payload-float\n"
+                                 "      - [round, 1]\n"
+                                 "      - [squelch]\n"
+                                 "      - [publish!, \"clean\", dp, 1]\n"
+                                 "  - sub: \"a\"\n"
+                                 "    do:\n"
+                                 "      - $payload\n"
+                                 "      - %s: [publish!, \"raw\", $payload]\n"
+                                 "      - when: [\">\", $payload-float, 10]\n"
+                                 "        %s:\n"
+                                 "          - $payload-float\n"
+                                 "          - [\"+\", 1]\n"
+                                 "          - [publish!, \"shifted\", dp, 1]\n"
+                                 "      - do: [[publish!, \"first\", \"1\"], [publish!, \"second\", \"2\"]]\n"
+                                 "      - %s: $payload\n",
+                                 expr_key, pipeline_key, expr_key, pipeline_key, expr_key);
+        CHECK(len > 0 && (size_t)len < sizeof src);
+        pb_program program = {0};
+        CHECK(pb_program_load_source(&program, "aliases.yml", src, (size_t)len));
+        CHECK(program.len == 3);
+        mb_router router;
+        mb_router_init(&router);
+        mb_router_conn conn = {0};
+        CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+        const char *payloads[] = {"0", "21.31", "21.34"};
+        for (size_t i = 0; i < sizeof payloads / sizeof payloads[0]; i += 1) {
+            CHECK(pb_program_eval_publish(&program, &router, lit("a"), lit(payloads[i]), 0, 0, (pb_program_eval_options){0}));
+        }
+        CHECK(tick_at(&program, &router, 0));
+        CHECK(tick_at(&program, &router, 100));
+        CHECK(buf_eq(&conn.out,
+                     "MSG raw 1 1\r\n0\r\n"
+                     "MSG first 1 1\r\n1\r\n"
+                     "MSG second 1 1\r\n2\r\n"
+                     "MSG clean 1 4\r\n21.3\r\n"
+                     "MSG raw 1 5\r\n21.31\r\n"
+                     "MSG shifted 1 4\r\n22.3\r\n"
+                     "MSG first 1 1\r\n1\r\n"
+                     "MSG second 1 1\r\n2\r\n"
+                     "MSG raw 1 5\r\n21.34\r\n"
+                     "MSG shifted 1 4\r\n22.3\r\n"
+                     "MSG first 1 1\r\n1\r\n"
+                     "MSG second 1 1\r\n2\r\n"
+                     "MSG tick 1 5\r\nalive\r\n"));
+        mb_buf_free(&conn.out);
+        mb_router_free(&router);
+        pb_program_free(&program);
+    }
+}
+
+// Mapped options work in guards, pipeline steps, direct expressions and timer rules.
+static void test_yaml_option_maps_runtime(void) {
+    const char *src =
+        "every:\n  - ms: 100\n    do: [publish!, \"tick\", {dp: 1}, 2.34]\n"
+        "on:\n  - sub: \"a\"\n"
+        "    when: [\">\", [moving-avg, {ms: 5000}, $payload-float], 0]\n"
+        "    pipeline: [$payload-float, [moving-avg, {ms: 5000}], [publish!, \"avg\", {dp: 1}]]\n"
+        "  - sub: \"a\"\n    do: [publish!, \"direct\", {dp: 1}, $payload-float]\n";
+    pb_program program = {0};
+    CHECK(pb_program_load_source(&program, "maps.yml", src, strlen(src)));
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit(">"), lit("1")));
+    CHECK(pb_program_eval_publish(&program, &router, lit("a"), lit("2.34"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(tick_at(&program, &router, 0));
+    CHECK(tick_at(&program, &router, 100));
+    CHECK(buf_eq(&conn.out, "MSG avg 1 3\r\n2.3\r\nMSG direct 1 3\r\n2.3\r\nMSG tick 1 3\r\n2.3\r\n"));
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
 TEST_MAIN(program,
+          test_yaml_option_maps_runtime,
+          test_yaml_pipeline_and_do_aliases,
           test_reentry_is_opt_in,
           test_last_reads_router_lvc,
           test_last_is_nil_without_lvc,

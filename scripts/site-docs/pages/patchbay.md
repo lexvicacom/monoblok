@@ -118,11 +118,11 @@ The same rule three ways:
 ```yaml
 on:
   - sub: "car.*.rpm"
-    thread:
+    pipeline:
       - $payload-float
       - [quantize, 50]
       - [squelch]
-      - [publish!, [subject-append, "stable"], dp, 1]
+      - [publish!, [subject-append, "stable"], {dp: 1}]
 ```
 
 ```json

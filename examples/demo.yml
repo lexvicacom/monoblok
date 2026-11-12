@@ -9,7 +9,7 @@ on:
   # 1. Squelch: round to 1dp, only emit when the rounded value changes.
   #    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.stable`.
   - sub: "demo.sensors.*"
-    thread:
+    pipeline:
       - $payload-float
       - [round, 1]
       - [squelch]
@@ -18,7 +18,7 @@ on:
   # 2. Deadband: analog-style suppression; ignore moves smaller than 0.5.
   #    Publish to `demo.sensors.temp` and watch `demo.sensors.temp.delta`.
   - sub: "demo.sensors.*"
-    thread:
+    pipeline:
       - $payload-float
       - [deadband, 0.5]
       - [publish!, [subject-append, "delta"]]
@@ -27,7 +27,7 @@ on:
   #    and only emit when the smoothed value drifts by at least 1.0.
   #    Watch `demo.sensors.*.smoothed`.
   - sub: "demo.sensors.*"
-    thread:
+    pipeline:
       - $payload-float
       - [moving-avg, 10]
       - [deadband, 1.0]
@@ -37,9 +37,9 @@ on:
   #     by age, so the average self-drains when the publisher goes quiet.
   #     Watch `demo.sensors.*.avg5s`.
   - sub: "demo.sensors.*"
-    thread:
+    pipeline:
       - $payload-float
-      - [moving-avg, ms, 5000]
+      - [moving-avg, {ms: 5000}]
       - [publish!, [subject-append, "avg5s"]]
 
   # 4. Delta + squelch: emit the per-tick change, but only when it
@@ -47,7 +47,7 @@ on:
   #    doesn't produce a stream of zeros). 0 on first sight.
   #    Watch `demo.sensors.*.delta-abs`.
   - sub: "demo.sensors.*"
-    thread:
+    pipeline:
       - [delta, $payload-float]
       - [squelch]
       - [publish!, [subject-append, "delta-abs"]]
@@ -56,18 +56,14 @@ on:
   #    "hot" once on crossing > 28, "cool" once on crossing back.
   #    Watch `demo.sensors.*.alert` and `demo.sensors.*.ok`.
   - sub: "demo.sensors.*"
-    form:
-      - transition
-      - [">", $payload-float, 28.0]
-      - [publish!, [subject-append, "alert"], "hot"]
-      - [publish!, [subject-append, "ok"], "cool"]
+    do: [transition, [">", $payload-float, 28.0], [publish!, [subject-append, "alert"], "hot"], [publish!, [subject-append, "ok"], "cool"]]
 
   # 6. Hold-off: leading-edge rate gate. While above 40, emit at most
   #    once every 2s. Publish faster than that and extra publishes are
   #    dropped silently. Watch `demo.sensors.*.overload`.
   - sub: "demo.sensors.*"
     when: [">", $payload-float, 40.0]
-    thread:
+    pipeline:
       - $payload
       - [hold-off, 2000]
       - [publish!, [subject-append, "overload"]]
@@ -76,7 +72,7 @@ on:
   #    when you care about "went high" but not "is high."
   #    Watch `demo.sensors.*.spike`.
   - sub: "demo.sensors.*"
-    thread:
+    pipeline:
       - [rising-edge, [">", $payload-float, 50.0]]
       - [publish!, [subject-append, "spike"]]
 
@@ -85,14 +81,14 @@ on:
   #    `(subject-token 2)` is the third dot-separated token.
   - sub: "demo.log.*"
     when: ["contains?", $payload, "alert"]
-    form: [publish!, "demo.alerts", [str-concat, "[", [subject-token, 1], "] ", $payload]]
+    do: [publish!, "demo.alerts", [str-concat, "[", [subject-token, 1], "] ", $payload]]
 
   # 9. Count: a running tally of threshold crossings, not raw samples.
   #    Increments once per false->true transition above 50, publishes
   #    the new total to `demo.sensors.*.count`. Pair with example 7
   #    (rising-edge "spike") and watch the count climb in lockstep.
   - sub: "demo.sensors.*"
-    form: [count!, [rising-edge, [">", $payload-float, 50.0]]]
+    do: [count!, [rising-edge, [">", $payload-float, 50.0]]]
 
 export:
   servers:

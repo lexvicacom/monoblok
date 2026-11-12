@@ -51,6 +51,14 @@ different runtime. Explain when a requested operation belongs upstream or downst
   An empty payload is not zero. Edges need a prior value before they fire.
 - Use explicit effects such as `publish!`, concrete output subjects, and the
   user's thresholds. Keep raw imported messages private unless a rule republishes them.
+- In YAML, prefer `pipeline:` for value threading and `do:` for one expression
+  or a block sequence of independent bodies. Keep `thread:` and `form:` only
+  when preserving existing spelling; both remain supported. See the YAML schema
+  for nested bodies and guards.
+- Prefer YAML option maps such as `{dp: 1}` and `{ms: 5000}` as call
+  arguments. They expand to keyword/value pairs; bare options remain accepted.
+  Maps are not general data or config syntax. Keep standalone flags such as
+  `[now, date]` bare.
 - Tinyblok has different request semantics and fewer features. Do not introduce
   JSON forms unless its optional JSON support is explicitly enabled.
 

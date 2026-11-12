@@ -37,6 +37,7 @@ struct y_node {
     size_t offset;
     y_scalar_kind scalar_kind;
     bool quoted; // text came from a quoted scalar: always a string
+    bool flow; // collection came from flow syntax rather than a block
     pb_slice text;
     double number;
     bool boolean;
@@ -327,6 +328,7 @@ static y_node *parse_flow_array(y_parse *p, pb_slice s, size_t *pos, size_t base
     if (list == NULL) {
         return NULL;
     }
+    list->flow = true;
     *pos += 1;
     flow_skip_ws(s, pos);
     if (*pos < s.len && s.ptr[*pos] == ']') {
@@ -379,7 +381,7 @@ static y_node *parse_flow_scalar(y_parse *p, pb_slice s, size_t *pos, size_t bas
         set_err(p, base_offset + start);
         return NULL;
     }
-    while (*pos < s.len && s.ptr[*pos] != ',' && s.ptr[*pos] != ']') {
+    while (*pos < s.len && s.ptr[*pos] != ',' && s.ptr[*pos] != ']' && s.ptr[*pos] != '}') {
         *pos += 1;
     }
     pb_slice raw = trim_slice((pb_slice){.ptr = s.ptr + start, .len = *pos - start});
@@ -390,10 +392,54 @@ static y_node *parse_flow_scalar(y_parse *p, pb_slice s, size_t *pos, size_t bas
     return scalar_from_slice(p, raw, base_offset + start);
 }
 
+static y_node *parse_flow_map(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
+    y_node *map = node_new(p, Y_MAP, base_offset + *pos);
+    if (map == NULL) {
+        return NULL;
+    }
+    map->flow = true;
+    *pos += 1;
+    for (;;) {
+        flow_skip_ws(s, pos);
+        const size_t start = *pos;
+        while (*pos < s.len && s.ptr[*pos] != ':' && s.ptr[*pos] != ',' && s.ptr[*pos] != '}' && s.ptr[*pos] != ']') {
+            *pos += 1;
+        }
+        pb_slice key = trim_slice((pb_slice){.ptr = s.ptr + start, .len = *pos - start});
+        if (key.len == 0 || *pos >= s.len || s.ptr[*pos] != ':' ||
+            *pos + 1 >= s.len || (s.ptr[*pos + 1] != ' ' && s.ptr[*pos + 1] != '\t')) {
+            set_err(p, base_offset + *pos);
+            node_free(map);
+            return NULL;
+        }
+        *pos += 1;
+        y_node *value = parse_flow_value(p, s, pos, base_offset);
+        if (value == NULL || !node_map_put(p, map, key, value)) {
+            node_free(value);
+            node_free(map);
+            return NULL;
+        }
+        flow_skip_ws(s, pos);
+        if (*pos < s.len && s.ptr[*pos] == '}') {
+            *pos += 1;
+            return map;
+        }
+        if (*pos >= s.len || s.ptr[*pos] != ',') {
+            set_err(p, base_offset + *pos);
+            node_free(map);
+            return NULL;
+        }
+        *pos += 1;
+    }
+}
+
 static y_node *parse_flow_value(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
     flow_skip_ws(s, pos);
     if (*pos < s.len && s.ptr[*pos] == '[') {
         return parse_flow_array(p, s, pos, base_offset);
+    }
+    if (*pos < s.len && s.ptr[*pos] == '{') {
+        return parse_flow_map(p, s, pos, base_offset);
     }
     return parse_flow_scalar(p, s, pos, base_offset);
 }
@@ -404,9 +450,9 @@ static y_node *parse_inline_value(y_parse *p, pb_slice raw, size_t offset) {
         set_err(p, offset);
         return NULL;
     }
-    if (raw.ptr[0] == '[') {
+    if (raw.ptr[0] == '[' || raw.ptr[0] == '{') {
         size_t pos = 0;
-        y_node *n = parse_flow_array(p, raw, &pos, offset);
+        y_node *n = parse_flow_value(p, raw, &pos, offset);
         flow_skip_ws(raw, &pos);
         if (n == NULL || pos != raw.len) {
             node_free(n);
@@ -768,7 +814,26 @@ static bool lower_call(y_lower *L, y_node *n, pb_value *out) {
             vec_done(&v, false);
             return lower_fail(L, arg->offset, "bare \"subject\" here is the :subject option, which has no value in this position; use $subject for the bound value, or quote it for the text");
         }
-        if (!lower_expr(L, n->items[i], &item) || !vec_push(L, &v, item)) {
+        if (arg->kind == Y_MAP && arg->flow) {
+            for (size_t j = 0; j < arg->pair_len; j += 1) {
+                y_pair *pair = &arg->pairs[j];
+                if (!is_option_word(pair->key)) {
+                    vec_done(&v, false);
+                    return lower_fail(L, arg->offset, "unknown YAML option key \"%.*s\"; use an unquoted option word without a colon", (int)pair->key.len, pair->key.ptr);
+                }
+                for (size_t k = 0; k < j; k += 1) {
+                    if (pb_slice_eq(arg->pairs[k].key, pair->key)) {
+                        vec_done(&v, false);
+                        return lower_fail(L, arg->offset, "duplicate YAML option key \"%.*s\"", (int)pair->key.len, pair->key.ptr);
+                    }
+                }
+                pb_value key = {0};
+                if (!arena_text(L, PB_KEYWORD, pair->key, &key) || !vec_push(L, &v, key) ||
+                    !lower_expr(L, pair->value, &item) || !vec_push(L, &v, item)) {
+                    return vec_done(&v, false);
+                }
+            }
+        } else if (!lower_expr(L, arg, &item) || !vec_push(L, &v, item)) {
             return vec_done(&v, false);
         }
     }
@@ -776,12 +841,12 @@ static bool lower_call(y_lower *L, y_node *n, pb_value *out) {
     return vec_done(&v, ok);
 }
 
-static bool lower_thread(y_lower *L, y_node *n, pb_value *out) {
+static bool lower_pipeline(y_lower *L, y_node *n, pb_value *out) {
     if (n->kind == Y_MAP) {
-        return lower_fail(L, n->offset, "thread: the from/steps map form was removed; write a list whose first item is the start value and the rest are steps");
+        return lower_fail(L, n->offset, "pipeline: the from/steps map form was removed; write a list whose first item is the start value and the rest are steps");
     }
     if (n->kind != Y_LIST || n->len == 0) {
-        return lower_fail(L, n->offset, "thread must be a non-empty list: the start value, then the steps");
+        return lower_fail(L, n->offset, "pipeline must be a non-empty list: the start value, then the steps");
     }
     pb_build_vec v = {0};
     pb_value head = {0};
@@ -799,8 +864,13 @@ static bool lower_thread(y_lower *L, y_node *n, pb_value *out) {
 }
 
 static bool lower_do(y_lower *L, y_node *n, pb_value *out) {
+    // A flow call is one expression; block sequences run bodies in order. Keep
+    // accepting existing flow sequences of calls/maps as multiple bodies too.
+    if (n->kind == Y_SCALAR || (n->kind == Y_LIST && n->flow && n->len != 0 && n->items[0]->kind == Y_SCALAR)) {
+        return lower_expr(L, n, out);
+    }
     if (n->kind != Y_LIST || n->len == 0) {
-        return lower_fail(L, n->offset, "do must be a non-empty list of bodies");
+        return lower_fail(L, n->offset, "do must be an expression or a non-empty list of bodies");
     }
     pb_build_vec v = {0};
     pb_value head = {0};
@@ -830,9 +900,12 @@ static bool lower_expr(y_lower *L, y_node *n, pb_value *out) {
     return lower_fail(L, n->offset, "a map is not an expression; use a list such as [operator, args...]");
 }
 
-// A body map: optional `when` guard plus exactly one of thread, do, form. At rule level
+// A body map: optional `when` guard plus one pipeline/do body (thread/form aliases). At rule level
 // the caller owns reentrant and rule_key ("sub" for on, "ms" for every); nested bodies pass NULL.
 static bool lower_body_map(y_lower *L, y_node *n, const char *rule_key, pb_value *out) {
+    if (n->flow) {
+        return lower_fail(L, n->offset, "flow maps are only allowed as call arguments");
+    }
     y_pair *when = NULL;
     y_pair *body = NULL;
     size_t bodies = 0;
@@ -840,27 +913,27 @@ static bool lower_body_map(y_lower *L, y_node *n, const char *rule_key, pb_value
         y_pair *p = &n->pairs[i];
         if (slice_eq_lit(p->key, "when")) {
             when = p;
-        } else if (slice_eq_lit(p->key, "thread") || slice_eq_lit(p->key, "do") || slice_eq_lit(p->key, "form")) {
+        } else if (slice_eq_lit(p->key, "pipeline") || slice_eq_lit(p->key, "thread") || slice_eq_lit(p->key, "do") || slice_eq_lit(p->key, "form")) {
             body = p;
             bodies += 1;
         } else if (slice_eq_lit(p->key, "body")) {
-            return lower_fail(L, p->value->offset, "the body key was removed; use form");
+            return lower_fail(L, p->value->offset, "the body key was removed; use do");
         } else if (rule_key != NULL && (slice_eq_lit(p->key, rule_key) || slice_eq_lit(p->key, "reentrant"))) {
             continue;
         } else {
-            return lower_fail(L, p->value->offset, "unknown key \"%.*s\" in a rule body (expected when, thread, do or form)", (int)p->key.len, p->key.ptr);
+            return lower_fail(L, p->value->offset, "unknown key \"%.*s\" in a rule body (expected when, pipeline or do; thread and form are compatibility aliases)", (int)p->key.len, p->key.ptr);
         }
     }
     if (when != NULL && when->value->kind == Y_MAP) {
-        return lower_fail(L, when->value->offset, "the when: {test, then} map form was removed; write `when: EXPR` beside one body key (thread, do or form)");
+        return lower_fail(L, when->value->offset, "the when: {test, then} map form was removed; write `when: EXPR` beside one body key (pipeline or do)");
     }
     if (bodies != 1) {
-        return lower_fail(L, n->offset, "expected exactly one of thread, do or form (found %zu)", bodies);
+        return lower_fail(L, n->offset, "expected exactly one body key: pipeline or do (thread and form are compatibility aliases; found %zu)", bodies);
     }
     pb_value inner = {0};
     bool ok;
-    if (slice_eq_lit(body->key, "thread")) {
-        ok = lower_thread(L, body->value, &inner);
+    if (slice_eq_lit(body->key, "pipeline") || slice_eq_lit(body->key, "thread")) {
+        ok = lower_pipeline(L, body->value, &inner);
     } else if (slice_eq_lit(body->key, "do")) {
         ok = lower_do(L, body->value, &inner);
     } else {
@@ -904,6 +977,9 @@ static bool lower_env_config_value(y_lower *L, y_node *n, pb_value *out) {
 
 static bool lower_config_value(y_lower *L, y_node *n, pb_value *out) {
     if (n->kind == Y_MAP) {
+        if (n->flow) {
+            return lower_fail(L, n->offset, "flow maps are only allowed as call arguments");
+        }
         if (n->pair_len == 1 && map_find(n, "env") != NULL) {
             return lower_env_config_value(L, n, out);
         }
@@ -948,8 +1024,8 @@ static bool lower_lvc(y_lower *L, y_node *n, pb_value *out) {
 }
 
 static bool lower_config_form(y_lower *L, const char *name, y_node *n, pb_value *out) {
-    if (n->kind != Y_MAP) {
-        return lower_fail(L, n->offset, "%s must be a map", name);
+    if (n->kind != Y_MAP || n->flow) {
+        return lower_fail(L, n->offset, "%s must be a block map", name);
     }
     pb_build_vec form = {0};
     pb_value head = {0};
@@ -973,8 +1049,8 @@ static bool lower_config_form(y_lower *L, const char *name, y_node *n, pb_value 
 // Lowers one `on` item to (on "SUB" [:reentrant B] BODY), or, with every set, one
 // `every` item to (every :ms N [:reentrant B] BODY).
 static bool lower_rule(y_lower *L, y_node *n, bool every, pb_value *out) {
-    if (n->kind != Y_MAP) {
-        return lower_fail(L, n->offset, "each %s item must be a map", every ? "every" : "on");
+    if (n->kind != Y_MAP || n->flow) {
+        return lower_fail(L, n->offset, "each %s item must be a block map", every ? "every" : "on");
     }
     pb_build_vec form = {0};
     pb_value head = {0};

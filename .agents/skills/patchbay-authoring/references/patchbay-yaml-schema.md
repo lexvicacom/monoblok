@@ -9,7 +9,7 @@ The mental model, in four lines:
 
 1. The first item of a flow array is the function: `[round, 1]`.
 2. `$name` is a contextual value: `$payload-float`, `$subject`.
-3. A bare word is an option: `[moving-avg, ms, 5000, $payload-float]`.
+3. An option map supplies keyword/value pairs: `[moving-avg, {ms: 5000}, $payload-float]`.
 4. Everything else is a quoted string: `[publish!, "clean.temp"]`.
 
 This is not general YAML. The supported syntax is deliberately narrow:
@@ -17,11 +17,12 @@ This is not general YAML. The supported syntax is deliberately narrow:
 - spaces for indentation; tabs are invalid
 - block maps and block lists
 - flow arrays, used for expression call forms: `[round, 1]`
+- nonempty flow option maps as direct call arguments: `{dp: 1}`
 - quoted or unquoted scalars (see the rules below)
 - numbers, booleans, `null` / `nil` / `~`
 - comments with `#`, outside quoted text and flow arrays
 
-Flow maps (`{...}`), anchors, aliases, tags, multiline strings, and other YAML
+Other flow maps, anchors, aliases, tags, multiline strings, and other YAML
 features are not part of the patchbay YAML subset.
 
 ## Root Document
@@ -49,10 +50,10 @@ export:
 
 on:
   - sub: "sensors.temp"
-    thread:
+    pipeline:
       - $payload-float
       - [round, 1]
-      - [publish!, "clean.temp", dp, 1]
+      - [publish!, "clean.temp", {dp: 1}]
 ```
 
 ## Scalars
@@ -110,13 +111,19 @@ parsers reject it inside flow arrays. Quoting a binding makes it literal text.
 
 ## Options
 
-Keyword options are written as plain words, with no colon. These are the
-accepted option words:
+Prefer flow option maps as direct arguments of calls. Keys lower to keywords
+and values lower to expressions, in source order. Maps must be nonempty and
+keys must be unquoted, unique and drawn from the following option words:
 
 `ms`, `dp`, `subject`, `lost`, `found`, `leaf`, `date`, `hour`, `minute`,
 `avg`, `sum`, `min`, `max`, `count`, `rate`, `reentrant`
 
-They lower to the matching EDN keywords (`ms` becomes `:ms`). The set is
+For example, `{ms: 5000}` lowers to `:ms 5000`. Values can include
+bindings, nested calls, and vectors; nested maps and arbitrary map data are
+not supported. Flow maps are not allowed at the root or in config positions.
+Use a space after each colon for standard YAML compatibility. Bare option
+words remain supported as compatibility syntax (`[moving-avg, ms, 5000]`),
+and standalone keyword flags such as `[now, date]` stay bare. The set is
 checked at load time: an unquoted word that is not an option, a binding, a
 number, a boolean or a null is an error, so `[moving-avg, mz, 5000, $payload-float]`
 fails instead of publishing the text `mz`.
@@ -125,18 +132,18 @@ fails instead of publishing the text `mz`.
 on:
   - sub: "sensors.*"
     do:
-      - [publish!, "sensors.rounded", dp, 1, $payload-float]
-      - [moving-avg, ms, 5000, $payload-float]
-      - [count!, subject, "metrics.temp.count"]
-      - [aggregate!, ms, 1000, "sensors.stats", avg, $payload-float]
+      - [publish!, "sensors.rounded", {dp: 1}, $payload-float]
+      - [moving-avg, {ms: 5000}, $payload-float]
+      - [count!, {subject: "metrics.temp.count"}]
+      - [aggregate!, {ms: 1000}, "sensors.stats", avg, $payload-float]
       - [publish!, "clock", [now, date]]
-      - [dropout, ms, 500, lost, [publish!, "sensors.lost"], found, [publish!, "sensors.found"]]
+      - [dropout, {ms: 500, lost: [publish!, "sensors.lost"], found: [publish!, "sensors.found"]}]
 ```
 
 `subject` is both a binding name and an option word. Bare `subject` is the
 option (`[count!, subject, "x"]`); write `$subject` for the value.
 
-For `publish!`, `dp N` formats a numeric payload with exactly `N` decimal
+For `publish!`, `{dp: N}` formats a numeric payload with exactly `N` decimal
 places, where `N` is an integer from 0 to 15.
 
 ## Environment Values
@@ -298,12 +305,12 @@ on:
     do:
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, $payload-float]]]
-      - [bar!, ms, 1000, $payload-float]
+      - [bar!, {ms: 1000}, $payload-float]
       - [if, $replaying, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
 
   - sub: "js.sensors.temp"
     when: [not, $replaying]
-    thread:
+    pipeline:
       - $payload-float
       - [deadband, 0.25]
       - [publish!, "js.live.deadband"]
@@ -356,7 +363,7 @@ operator name fails with `unknown form: NAME`.
 on:
   - sub: "sensors.temp"
     when: [">", $payload-float, 80.0]
-    form: [publish!, "alerts.temp", ["*", $payload-float, 2]]
+    do: [publish!, "alerts.temp", ["*", $payload-float, 2]]
 ```
 
 ## `on` And `every` Rules
@@ -368,7 +375,7 @@ on:
 ```yaml
 on:
   - sub: "raw.temp"
-    thread:
+    pipeline:
       - $payload-float
       - [round, 1]
       - [squelch]
@@ -377,7 +384,7 @@ on:
 every:
   - ms: 1000
     reentrant: false
-    form: [publish!, "tick", "alive"]
+    do: [publish!, "tick", "alive"]
 ```
 
 Rule fields:
@@ -388,23 +395,26 @@ Rule fields:
 | `ms` | number | `every` only: period in milliseconds |
 | `reentrant` | bool | optional; feed this rule's emissions back into evaluation |
 | `when` | expression | optional guard; lowers to `(when EXPR BODY)` |
-| `thread` | list | body: lowers to `(-> ...)` |
-| `do` | list of bodies | body: lowers to `(do BODY...)` |
-| `form` | expression | body: one expression, lowered directly |
+| `pipeline` | list | body: lowers to `(-> ...)` |
+| `do` | expression or list of bodies | body: one expression directly, or `(do BODY...)` for a sequence |
+| `thread` | list | compatibility alias for `pipeline` |
+| `form` | expression | compatibility spelling for one direct expression |
 
-Exactly one of `thread`, `do`, `form` is required. Any other key is a load
-error. `sub` is always a string. It does not become a symbol.
+Exactly one body key is required: `pipeline` or `do`. The existing `thread`
+and `form` spellings remain accepted for compatibility. Do not combine body
+keys, including aliases, in one rule or nested body map. Any other key is a
+load error. `sub` is always a string. It does not become a symbol.
 
-## Thread Bodies
+## Pipeline Bodies
 
-`thread` is a list. The first item is the start value and the rest are steps;
+`pipeline` is a list. The first item is the start value and the rest are steps;
 it lowers to the patchbay `->` form, where the current value is threaded as the
 last argument of each step.
 
 ```yaml
 on:
   - sub: "raw.temp"
-    thread:
+    pipeline:
       - $payload-float
       - [round, 1]
       - [squelch]
@@ -428,7 +438,7 @@ This lowers to:
 on:
   - sub: "sensors.temp"
     when: [">", $payload-float, 80.0]
-    thread:
+    pipeline:
       - $payload
       - [hold-off, 5000]
       - [publish!, "alerts.temp"]
@@ -446,8 +456,21 @@ This lowers to:
 
 ## Do Bodies
 
-Use `do` when one rule should run multiple effects. Items are expressions or
-nested body maps (`thread`, `do`, `form`, each optionally with its own `when`).
+Use `do` for one expression or a block list of bodies evaluated in order.
+Each body runs independently; results are not passed to the next body as they
+are in a `pipeline`. Items are expressions or nested body maps (`pipeline` or
+`do`, each optionally with its own `when`; `thread` and `form` also remain accepted).
+
+```yaml
+on:
+  - sub: "sensors.temp"
+    do: [publish!, "sensors.temp.raw", $payload]
+```
+
+A flow array headed by an operator is one call. A block list is a sequence of
+bodies, even if its first item is a scalar expression. Existing flow sequences
+of calls, such as `do: [[count!], [publish!, "out", $payload]]`, also remain
+accepted. Empty sequences are rejected.
 
 ```yaml
 on:
@@ -455,7 +478,7 @@ on:
     do:
       - [publish!, "sensors.temp.raw", $payload]
       - when: [">", $payload-float, 30]
-        thread:
+        pipeline:
           - $payload-float
           - [round, 1]
           - [publish!, "sensors.temp.clean"]
@@ -463,12 +486,18 @@ on:
 
 ## Direct Forms
 
-Use `form` when the rule body is already one expression.
+Use `do` when the rule body is already one expression. This also accepts scalar
+expressions such as `do: $payload`. The compatibility spelling `form: EXPR`
+continues to lower the expression directly.
+
+When migrating a `form` call written as a block list (operator first), rewrite
+it as a flow array under `do`. A block list under `do` always means separate
+bodies, not the arguments of one call.
 
 ```yaml
 on:
   - sub: "logs.*"
-    form: [when, ["contains?", $payload, "alert"], [publish!, "alerts.log", $payload]]
+    do: [when, ["contains?", $payload, "alert"], [publish!, "alerts.log", $payload]]
 ```
 
 ## Vectors
@@ -479,9 +508,9 @@ a call):
 ```yaml
 on:
   - sub: "sensors.*"
-    form: [when, ["contains?", [vector, "temp", "hum", "batt"], [subject-token, 1]], [publish!, "seen", $subject]]
+    do: [when, ["contains?", [vector, "temp", "hum", "batt"], [subject-token, 1]], [publish!, "seen", $subject]]
   - sub: "sensors.nums"
-    form: [when, ["contains?", [vector, 1, 2, 3], $payload-int], [publish!, [subject-with, [vector, "n", $subject]], $payload]]
+    do: [when, ["contains?", [vector, 1, 2, 3], $payload-int], [publish!, [subject-with, [vector, "n", $subject]], $payload]]
 ```
 
 ## Expression Arrays
@@ -493,9 +522,9 @@ remaining items are arguments. Nested arrays are nested calls.
 on:
   - sub: "sensors.*"
     do:
-      - [publish!, [subject-append, "stable"], $payload-float, dp, 1]
-      - [count!, subject, "metrics.temp.count", [">", $payload-float, 100]]
-      - [bar!, ms, 1000, $payload-float]
+      - [publish!, [subject-append, "stable"], $payload-float, {dp: 1}]
+      - [count!, {subject: "metrics.temp.count"}, [">", $payload-float, 100]]
+      - [bar!, {ms: 1000}, $payload-float]
 ```
 
 These lower to:
@@ -528,7 +557,7 @@ export:
 
 on:
   - sub: "raw.temp"
-    thread:
+    pipeline:
       - $payload-float
       - [round, 1]
       - [squelch]
@@ -560,9 +589,11 @@ For literal text that starts with `$`, write `{"str": "$text"}`. Config forms
 | `:ms`, `:dp`, `:subject` | `ms`, `dp`, `subject` |
 | `[>, a, b]`, `[*, a, b]`, `[->, a, b]` | `[">", a, b]`, `["*", a, b]`, `["->", a, b]` |
 | unquoted text such as `alert` | `"alert"` |
-| `thread: {from: X, steps: [...]}` | `thread: [X, ...]` (start value first, then steps) |
+| `thread: {from: X, steps: [...]}` | `pipeline: [X, ...]` (start value first, then steps) |
 | `when: {test: T, then: B}` | `when: T` beside one body key |
-| `body: EXPR` | `form: EXPR` |
+| `body: EXPR` | `do: EXPR` |
+| `thread: [X, ...]` | `pipeline: [X, ...]` (`thread` remains accepted) |
+| `form: EXPR` | `do: EXPR` (`form` remains accepted) |
 | no vector literal | `[vector, 1, 2, 3]` |
 | JSON `"payload"` as a bound value | JSON `"$payload"` |
 | JSON `{"vec": [...]}` | JSON `{"vector": [...]}` |

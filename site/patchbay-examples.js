@@ -2,7 +2,7 @@ const patchbayExamples = {
   clean: {
     yaml: `on:
   - sub: "sensors.*"
-    thread:
+    pipeline:
       - $payload-float
       - [round, 1]
       - [squelch]
@@ -16,7 +16,7 @@ const patchbayExamples = {
   smooth: {
     yaml: `on:
   - sub: "sensors.*"
-    thread:
+    pipeline:
       - $payload-float
       - [moving-avg, 10]
       - [deadband, 1.0]
@@ -30,7 +30,7 @@ const patchbayExamples = {
   alert: {
     yaml: `on:
   - sub: "sensors.*"
-    form: [transition, [">", $payload-float, 28.0], [publish!, [subject-append, "alert"], "hot"], [publish!, [subject-append, "ok"], "cool"]]`,
+    do: [transition, [">", $payload-float, 28.0], [publish!, [subject-append, "alert"], "hot"], [publish!, [subject-append, "ok"], "cool"]]`,
     code: '(on "sensors.*"\n  (transition (> payload-float 28.0)\n    (publish! (subject-append "alert") "hot")\n    (publish! (subject-append "ok") "cool")))',
     title: 'Publish on threshold crossings',
     description: 'Publish “hot” when the reading crosses above 28 and “cool” when it crosses back, with no messages between crossings.',
@@ -41,7 +41,7 @@ const patchbayExamples = {
   steady: {
     yaml: `on:
   - sub: "sensors.*"
-    form: [transition, [hysteresis, 27, 29, $payload-float], [publish!, [subject-append, "alert"], "hot"], [publish!, [subject-append, "ok"], "cool"]]`,
+    do: [transition, [hysteresis, 27, 29, $payload-float], [publish!, [subject-append, "alert"], "hot"], [publish!, [subject-append, "ok"], "cool"]]`,
     code: '(on "sensors.*"\n  (transition (hysteresis 27 29 payload-float)\n    (publish! (subject-append "alert") "hot")\n    (publish! (subject-append "ok") "cool")))',
     title: 'Alert without the flapping',
     description: 'Turn on at 29 and off only at 27. Readings that hover around a single threshold no longer flip the alert on and off.',
@@ -53,10 +53,13 @@ const patchbayExamples = {
     yaml: `on:
   - sub: "sensors.*"
     reentrant: true
-    form: [publish!, "all.sensors", $payload]
+    do: [publish!, "all.sensors", $payload]
   - sub: "all.sensors"
-    form: [publish!, "sensors.average", dp, 1, [moving-avg, 4, $payload-float]]`,
-    code: '(on "sensors.*" :reentrant true\n  (publish! "all.sensors" payload))\n\n(on "all.sensors"\n  (publish! "sensors.average" :dp 1\n    (moving-avg 4 payload-float)))',
+    pipeline:
+      - $payload-float
+      - [moving-avg, 4]
+      - [publish!, "sensors.average", {dp: 1}]`,
+    code: '(on "sensors.*" :reentrant true\n  (publish! "all.sensors" payload))\n\n(on "all.sensors"\n  (-> payload-float\n      (moving-avg 4)\n      (publish! "sensors.average" :dp 1)))',
     title: 'Funnel many subjects into one',
     description: 'Route readings from all sensors onto one subject to calculate a combined average.',
     inputLabel: 'sensors.kitchen, sensors.hall · alternating', outputLabel: 'sensors.average',
@@ -68,10 +71,10 @@ const patchbayExamples = {
 
 on:
   - sub: "temp.inside"
-    thread:
+    pipeline:
       - [last, "temp.outside"]
       - ["-", $payload-float]
-      - [publish!, "temp.difference", dp, 1]`,
+      - [publish!, "temp.difference", {dp: 1}]`,
     code: '(lvc ["temp.>"])\n\n(on "temp.inside"\n  (-> (last "temp.outside")\n      (- payload-float)\n      (publish! "temp.difference" :dp 1)))',
     title: 'Use the latest value from another subject',
     description: 'Read the last outside temperature while handling an inside reading, and publish the difference between the two.',
@@ -84,7 +87,7 @@ on:
 
 on:
   - sub: "ask.temp"
-    form: [reply!, [last, "sensors.temp"]]`,
+    do: [reply!, [last, "sensors.temp"]]`,
     code: '(lvc ["sensors.>"])\n\n(on "ask.temp"\n  (reply! (last "sensors.temp")))',
     title: 'Answer a request',
     description: 'Reply to a NATS request with the last reading, so a client can ask for the current value instead of waiting for the next one.',

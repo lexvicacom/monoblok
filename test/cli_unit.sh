@@ -333,7 +333,7 @@ expect_load_error bad-thread-map.yml 'from/steps map form was removed' 'on:
       from: $payload-float
       steps:
         - [round, 1]'
-expect_load_error bad-body.yml 'use form' 'on:
+expect_load_error bad-body.yml 'use do' 'on:
   - sub: "a"
     body: [publish!, "x"]'
 expect_load_error bad-when-map.yml 'map form was removed' 'on:
@@ -344,12 +344,33 @@ expect_load_error bad-when-map.yml 'map form was removed' 'on:
 expect_load_error bad-unknown-form.yml 'unknown form: bogus' 'on:
   - sub: "a"
     form: [bogus, 1]'
+expect_load_error bad-do-unknown-form.yml 'unknown form: bogus' 'on:
+  - sub: "a"
+    do: [bogus, 1]'
 expect_load_error bad-vec.json '{"vector": [...]}' '[["on", "a", ["contains?", {"vec": [1, 2]}, "$payload"]]]'
 expect_load_error bad-dollar.json 'unknown binding $nope' '[["on", "a", ["publish!", "x", "$nope"]]]'
 
+option_yaml="$tmp/options.yml"
+cat > "$option_yaml" <<'EOF'
+on:
+  - sub: "a"
+    when: [">", [moving-avg, {ms: 5000}, $payload-float], 0]
+    pipeline: [$payload-float, [moving-avg, {ms: 5000}], [publish!, "out", {dp: 1}]]
+  - sub: "b"
+    do: [dropout, {ms: 500, lost: [publish!, "lost"], found: [publish!, "found"]}]
+EOF
+"$bin" --validate "$option_yaml" > "$tmp/options.out" 2> "$tmp/options.err"
+grep ': ok (2 rules)' "$tmp/options.out" >/dev/null
+expect_load_error bad-option-duplicate.yml 'duplicate YAML option key' 'on:
+  - sub: "a"
+    do: [publish!, "x", {dp: 1, dp: 2}]'
+expect_load_error bad-option-unknown.yml 'unknown YAML option key' 'on:
+  - sub: "a"
+    do: [publish!, "x", {bogus: 1}]'
+
 # Every YAML example must also be valid YAML for a standard parser.
 if command -v ruby >/dev/null 2>&1; then
-    for yml in "$root"/examples/*.yml "$every_yaml" "$every_yaml_when"; do
+    for yml in "$root"/examples/*.yml "$every_yaml" "$every_yaml_when" "$option_yaml"; do
         ruby -ryaml -e 'YAML.load_file(ARGV[0])' "$yml"
     done
 else

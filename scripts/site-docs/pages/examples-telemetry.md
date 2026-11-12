@@ -74,7 +74,7 @@ Local subscribers can react to the same alert, for example by triggering a dashc
 
 {{include examples/rental-car.yml}}
 
-`thread` is the `->` pipeline with the start value first, and `when` beside it is the rule-level guard. Bound values carry a `$`, and operators that are YAML indicators (`">"`) are quoted. See [YAML sugar files](patchbay.html#yaml-sugar-files).
+`pipeline` is the `->` pipeline with the start value first, and `when` beside it is the rule-level guard. Bound values carry a `$`, and operators that are YAML indicators (`">"`) are quoted. See [YAML sugar files](patchbay.html#yaml-sugar-files).
 
 ## JSON frames from a gateway
 

@@ -80,19 +80,26 @@ Files ending in `.yml` or `.yaml` use a deliberately small patchbay
 YAML subset. The loader builds patchbay forms directly:
 YAML never evaluates and no EDN/JSON text is generated internally.
 Supported shapes are block maps/lists, flow arrays for call forms,
+flow option maps as direct call arguments,
 quoted or unquoted scalars, numbers, booleans, nulls, top-level `on`,
 `every`, `lvc`, `export`, `bridge`, and `import`. In top-level config
 string positions, `env: "NAME"` lowers to `(env "NAME")`. Every file is
 also valid standard YAML.
 
+Use `pipeline:` to pass a starting value through successive steps. Use `do:`
+for one expression (`do: [publish!, "out", $payload]`) or a block list of
+expressions evaluated independently, in order. Each rule or nested body map
+has exactly one body key. `thread:` remains an alias for `pipeline:`, and
+`form:` remains accepted for a single direct expression.
+
 ```yaml
 on:
   - sub: "car.*.rpm"
-    thread:
+    pipeline:
       - $payload-float
       - [quantize, 50]
       - [squelch]
-      - [publish!, [subject-append, "stable"], dp, 1]
+      - [publish!, [subject-append, "stable"], {dp: 1}]
 ```
 
 The EDN equivalent:
@@ -108,8 +115,11 @@ The EDN equivalent:
 Within expression arrays, the first item is a form symbol. A `$name`
 (`$payload`, `$payload-float`, `$payload-int`, `$payload-bool`,
 `$subject`, `$replaying`, `$reply-to`) lowers to the bound symbol, and
-a bare option word (`ms`, `dp`, `subject`, ...) lowers to the keyword
-(`:ms`, `:dp`). Every other string in a rule body must be quoted; an
+an option map such as `{ms: 5000}` lowers to keyword/value pairs.
+Bare option words (`ms`, `dp`, `subject`, ...) remain supported, including
+standalone flags. Option maps must be nonempty and use unique known keys;
+values may be expressions, but cannot be maps. Other flow maps are unsupported.
+Every other string in a rule body must be quoted; an
 unquoted word that is not a number, boolean, null, binding or option is
 a load error, so a typo cannot silently become text. Operators made of
 punctuation (`>`, `*`, `->`) must be quoted too, as in
@@ -227,7 +237,7 @@ on:
     do:
       - [count!]
       - [publish!, "js.metrics.avg20", [round, 2, [moving-avg, 20, $payload-float]]]
-      - [bar!, ms, 1000, $payload-float]
+      - [bar!, {ms: 1000}, $payload-float]
       - [if, $replaying, [publish!, "js.replay.last-temp", $payload], [publish!, "js.live.temp", $payload]]
 ```
 

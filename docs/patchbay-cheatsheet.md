@@ -32,21 +32,26 @@ A plain `"payload"` in JSON is just text, with no error, so old JSON
 files that used bare names now publish the word. Vector data is
 `{"vector": [...]}`.
 
-In YAML, `$name` is the bound value, a bare option word (`ms`, `dp`,
-`subject`) is the keyword, every other string in a rule body is quoted,
+In YAML, `$name` is the bound value and `{ms: 5000}` supplies a keyword/value
+option. Bare option words remain supported, including standalone flags. Every
+other string in a rule body is quoted,
 and operators that are YAML indicators are quoted (`[">", a, b]`). YAML
 files are valid standard YAML. In top-level config string positions,
 YAML `env: "NAME"` lowers to EDN `(env "NAME")`.
 
+`pipeline:` passes a starting value through steps (`->`); `do:` accepts one
+expression or a block list evaluated in order. Use exactly one body key.
+`thread:` and `form:` remain accepted as compatibility spellings.
+
 | EDN | JSON | YAML |
 |-----|------|------|
 | `(lvc ["demo.>"])` | `["lvc", "demo.>"]` | `lvc: ["demo.>"]` |
-| `(on "sensors.*" (publish! "out" payload))` | `["on", "sensors.*", ["publish!", "out", "$payload"]]` | `- sub: "sensors.*"` with `form: [publish!, "out", $payload]` |
-| `(moving-avg :ms 5000 payload-float)` | `["moving-avg", {"ms":5000}, "$payload-float"]` | `[moving-avg, ms, 5000, $payload-float]` |
-| `(on "MARKET.*" :reentrant true (bar! 60 payload-float))` | `["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "$payload-float"]]` | `sub: "MARKET.*"`, `reentrant: true`, `form: [bar!, 60, $payload-float]` |
+| `(on "sensors.*" (publish! "out" payload))` | `["on", "sensors.*", ["publish!", "out", "$payload"]]` | `- sub: "sensors.*"` with `do: [publish!, "out", $payload]` |
+| `(moving-avg :ms 5000 payload-float)` | `["moving-avg", {"ms":5000}, "$payload-float"]` | `[moving-avg, {ms: 5000}, $payload-float]` |
+| `(on "MARKET.*" :reentrant true (bar! 60 payload-float))` | `["on", "MARKET.*", {"reentrant":true}, ["bar!", 60, "$payload-float"]]` | `sub: "MARKET.*"`, `reentrant: true`, `do: [bar!, 60, $payload-float]` |
 | `(when (> payload-float 80) ...)` | `["when", [">", "$payload-float", 80], ...]` | `when: [">", $payload-float, 80]` beside the body key |
 | `[1 2 3]` | `{"vector": [1, 2, 3]}` | `[vector, 1, 2, 3]` |
-| `(every :ms 1000 (publish! "tick" "alive"))` | `["every", {"ms":1000}, ["publish!", "tick", "alive"]]` | `every:` list, item `ms: 1000` and `form: [publish!, "tick", "alive"]` |
+| `(every :ms 1000 (publish! "tick" "alive"))` | `["every", {"ms":1000}, ["publish!", "tick", "alive"]]` | `every:` list, item `ms: 1000` and `do: [publish!, "tick", "alive"]` |
 | `(export :servers ["nats://127.0.0.1:4223"] :export ["demo.>"])` | `["export", {"servers":["nats://127.0.0.1:4223"], "export":["demo.>"]}]` | `export:` map with `servers:` and `export:` |
 | `(import :servers ["nats://127.0.0.1:4223"] :subject ["raw.>"])` | `["import", {"servers":["nats://127.0.0.1:4223"], "subject":["raw.>"]}]` | `import:` map with `servers:` and `subject:` |
 

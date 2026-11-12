@@ -15,7 +15,7 @@ function showExample(key) {
   });
   document.getElementById('example-panel').setAttribute('aria-labelledby', `tab-${key}`);
   const yaml = formatSelect.value === 'yaml';
-  document.getElementById('example-thread-operator').textContent = yaml ? 'thread' : '->';
+  document.getElementById('example-thread-operator').textContent = yaml ? 'pipeline' : '->';
   document.getElementById('example-filename').textContent = yaml ? 'patchbay.yml' : 'patchbay.edn';
   renderPatchbayCode(document.getElementById('example-code'), yaml ? example.yaml : example.code);
   document.getElementById('example-title').textContent = example.title;

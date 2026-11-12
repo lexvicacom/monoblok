@@ -187,16 +187,21 @@ cmake --build build --target pb-dump
   subset is also valid standard YAML, so check ports with a normal parser too.
   The root is a map with `lvc`, `on`, `every`, `export`, deprecated `bridge`,
   and/or `import`; each `on` item is a rule map with `sub`, an optional
-  `when: EXPR` guard, and exactly one body key: `thread`, `do`, or `form`.
+  `when: EXPR` guard, and exactly one body key: `pipeline` or `do`.
+  `thread` and `form` remain accepted as compatibility spellings.
   `every` items use `ms: N` in place of `sub`.
 - Use flow arrays for call forms, with the operator as the first element. Use
-  `thread` (a list, start value first) for `->` and `form` for direct
-  expressions such as `transition`, `count!`, or `bar!`. Operators that are YAML
+  `pipeline` (a list, start value first) for `->` and `do` for one direct
+  expression or a block list of bodies evaluated independently in order.
+  Operators that are YAML
   indicators are quoted: `[">", $payload-float, 80]`. A literal vector is
   `[vector, 1, 2, 3]`.
 - Be precise with scalars. Bound values are written `$subject`, `$payload`,
   `$payload-float`, `$payload-int`, `$payload-bool`, `$replaying?`, and
-  `$reply-to`. Options are plain words (`ms`, `dp`, `subject`), never `:ms`.
+  `$reply-to`. Prefer option maps as direct call arguments (`{ms: 5000}`, `{dp: 1}`).
+  Keys must be unique known option words and values may be expressions, but not
+  maps. Bare option words remain supported, including standalone flags; never
+  write `:ms`. Other flow maps are unsupported.
   Every other string in a rule body must be quoted; an unquoted word that is not
   a number, boolean, null, binding, or option is a load error.
 - In top-level config string positions, `env: NAME` lowers to `(env "NAME")`.

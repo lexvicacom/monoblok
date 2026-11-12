@@ -17,7 +17,7 @@
 <div class="rule-file">patchbay.yaml</div>
 <pre><code class="language-yaml"><span class="syntax-key">on:</span>
   - <span class="syntax-key">sub:</span> <span class="syntax-string">&quot;sensors.*&quot;</span>
-    <span class="syntax-key">thread:</span>
+    <span class="syntax-key">pipeline:</span>
       - $payload-float
       - <span class="syntax-punctuation">[</span><span class="syntax-operator">round</span><span class="syntax-punctuation">,</span> <span class="syntax-number">1</span><span class="syntax-punctuation">]</span>
       - <span class="syntax-punctuation">[</span><span class="syntax-operator">squelch</span><span class="syntax-punctuation">]</span>

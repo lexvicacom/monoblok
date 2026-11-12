@@ -120,14 +120,14 @@
 <figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/rental-car.yml" target="_blank" rel="noopener noreferrer">examples/rental-car.yml</a></span></figcaption><pre><code><span class="tok-com"># YAML sugar for rental-car.edn. It lowers directly to patchbay AST forms.</span>
 <span class="tok-key">on:</span>
 <span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.rpm"</span>
-<span class="tok-key">    thread:</span>
+<span class="tok-key">    pipeline:</span>
       - <span class="tok-bind">$payload-float</span>
       - [quantize, <span class="tok-num">50</span>]
       - [squelch]
       - [publish!, [subject-append, <span class="tok-str">"stable"</span>]]
 
 <span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.coolant"</span>
-<span class="tok-key">    thread:</span>
+<span class="tok-key">    pipeline:</span>
       - <span class="tok-bind">$payload-float</span>
       - [round, <span class="tok-num">0</span>]
       - [deadband, <span class="tok-num">1.0</span>]
@@ -135,11 +135,11 @@
 
 <span class="tok-key">  - sub:</span> <span class="tok-str">"car.*.rpm"</span>
 <span class="tok-key">    when:</span> [<span class="tok-str">"&gt;"</span>, [moving-avg, <span class="tok-num">20</span>, <span class="tok-bind">$payload-float</span>], <span class="tok-num">7500.0</span>]
-<span class="tok-key">    thread:</span>
+<span class="tok-key">    pipeline:</span>
       - <span class="tok-bind">$payload</span>
       - [hold-off, <span class="tok-num">5000</span>]
       - [publish!, [subject-append, <span class="tok-str">"alert"</span>]]</code></pre></figure>
-<p><code>thread</code> is the <code>-&gt;</code> pipeline with the start value first, and <code>when</code> beside it is the rule-level guard. Bound values carry a <code>$</code>, and operators that are YAML indicators (<code>"&gt;"</code>) are quoted. See <a href="patchbay.html#yaml-sugar-files">YAML sugar files</a>.</p>
+<p><code>pipeline</code> is the <code>-&gt;</code> pipeline with the start value first, and <code>when</code> beside it is the rule-level guard. Bound values carry a <code>$</code>, and operators that are YAML indicators (<code>"&gt;"</code>) are quoted. See <a href="patchbay.html#yaml-sugar-files">YAML sugar files</a>.</p>
 <h2 id="json-frames-from-a-gateway">JSON frames from a gateway<a class="anchor" href="#json-frames-from-a-gateway" aria-label="Link to this section">#</a></h2>
 <p><span class="tag tag-intermediate">Intermediate</span> Most off-the-shelf sensors and gateways emit JSON frames, not bare scalars. The pattern is to break the frame out at the head, then treat every field as a normal scalar stream.</p>
 <figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-frames.edn" target="_blank" rel="noopener noreferrer">examples/json-frames.edn</a></span></figcaption><pre><code><span class="tok-com">; JSON-emitting sensor: one off-the-shelf gateway publishes a flat</span>

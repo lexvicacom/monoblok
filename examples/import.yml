@@ -12,7 +12,7 @@ export:
 
 on:
   - sub: "raw.temp"
-    thread:
+    pipeline:
       - $payload-float
       - [round, 1]
       - [squelch]

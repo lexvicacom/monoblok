@@ -44,7 +44,7 @@ What to notice:
 
 - **`env: "JS_URL"`** reads the server URL from the environment when the patchbay loads, so the file holds no addresses.
 - **`$replaying`** is true during catch-up and false afterwards. The first rule uses it to send historical values to `js.replay.last-temp` and live ones to `js.live.temp`; the second rule's `when: [not, $replaying]` guard keeps its deadband output live-only.
-- **`[bar!, ms, 1000, ...]`** closes one-second bars on event time during replay, because the replay clock is the JetStream message timestamp.
+- **`[bar!, {ms: 1000}, ...]`** closes one-second bars on event time during replay, because the replay clock is the JetStream message timestamp.
 - **`replay-header: true`** marks exported messages derived from replay with `x-monoblok-replay: true`, so the remote side can tell history from live output.
 - **Acks follow success.** A message is acknowledged only after its rules and downstream publishes succeed; anything else is left for JetStream to redeliver.
 

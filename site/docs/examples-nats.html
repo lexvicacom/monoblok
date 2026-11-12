@@ -105,7 +105,7 @@
 
 <span class="tok-key">on:</span>
 <span class="tok-key">  - sub:</span> <span class="tok-str">"raw.temp"</span>
-<span class="tok-key">    thread:</span>
+<span class="tok-key">    pipeline:</span>
       - <span class="tok-bind">$payload-float</span>
       - [round, <span class="tok-num">1</span>]
       - [squelch]
@@ -155,7 +155,7 @@
 <span class="tok-key">    do:</span>
       - [count!]
       - [publish!, <span class="tok-str">"js.metrics.avg20"</span>, [round, <span class="tok-num">2</span>, [moving-avg, <span class="tok-num">20</span>, <span class="tok-bind">$payload-float</span>]]]
-      - [bar!, ms, <span class="tok-num">1000</span>, <span class="tok-bind">$payload-float</span>]
+      - [bar!, {ms: <span class="tok-num">1000</span>}, <span class="tok-bind">$payload-float</span>]
       - [if, <span class="tok-bind">$replaying</span>, [publish!, <span class="tok-str">"js.replay.last-temp"</span>, <span class="tok-bind">$payload</span>], [publish!, <span class="tok-str">"js.live.temp"</span>, <span class="tok-bind">$payload</span>]]
 
   <span class="tok-com"># A few simple variants to try:</span>
@@ -163,20 +163,20 @@
   <span class="tok-com"># Publish only meaningful live movement:</span>
 <span class="tok-key">  - sub:</span> <span class="tok-str">"js.sensors.temp"</span>
 <span class="tok-key">    when:</span> [not, <span class="tok-bind">$replaying</span>]
-<span class="tok-key">    thread:</span>
+<span class="tok-key">    pipeline:</span>
       - <span class="tok-bind">$payload-float</span>
       - [deadband, <span class="tok-num">0.25</span>]
       - [publish!, <span class="tok-str">"js.live.deadband"</span>]
   <span class="tok-com">#</span>
   <span class="tok-com"># Publish a rounded stable signal from both replay and live data:</span>
   <span class="tok-com"># - sub: "js.sensors.temp"</span>
-  <span class="tok-com">#   thread:</span>
+  <span class="tok-com">#   pipeline:</span>
   <span class="tok-com">#     - $payload-float</span>
   <span class="tok-com">#     - [round, 1]</span>
   <span class="tok-com">#     - [squelch]</span>
   <span class="tok-com">#     - [publish!, "js.metrics.stable"]</span></code></pre></figure>
 <p>What to notice:</p>
-<ul><li><strong><code>env: "JS_URL"</code></strong> reads the server URL from the environment when the patchbay loads, so the file holds no addresses.</li><li><strong><code>$replaying</code></strong> is true during catch-up and false afterwards. The first rule uses it to send historical values to <code>js.replay.last-temp</code> and live ones to <code>js.live.temp</code>; the second rule's <code>when: [not, $replaying]</code> guard keeps its deadband output live-only.</li><li><strong><code>[bar!, ms, 1000, ...]</code></strong> closes one-second bars on event time during replay, because the replay clock is the JetStream message timestamp.</li><li><strong><code>replay-header: true</code></strong> marks exported messages derived from replay with <code>x-monoblok-replay: true</code>, so the remote side can tell history from live output.</li><li><strong>Acks follow success.</strong> A message is acknowledged only after its rules and downstream publishes succeed; anything else is left for JetStream to redeliver.</li></ul>
+<ul><li><strong><code>env: "JS_URL"</code></strong> reads the server URL from the environment when the patchbay loads, so the file holds no addresses.</li><li><strong><code>$replaying</code></strong> is true during catch-up and false afterwards. The first rule uses it to send historical values to <code>js.replay.last-temp</code> and live ones to <code>js.live.temp</code>; the second rule's <code>when: [not, $replaying]</code> guard keeps its deadband output live-only.</li><li><strong><code>[bar!, {ms: 1000}, ...]</code></strong> closes one-second bars on event time during replay, because the replay clock is the JetStream message timestamp.</li><li><strong><code>replay-header: true</code></strong> marks exported messages derived from replay with <code>x-monoblok-replay: true</code>, so the remote side can tell history from live output.</li><li><strong>Acks follow success.</strong> A message is acknowledged only after its rules and downstream publishes succeed; anything else is left for JetStream to redeliver.</li></ul>
 <figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/jetstream.sh
 JS_PORT=15999 COUNT=1000 examples/jetstream.sh</code></pre></figure>
 <p>The script starts a JetStream server and a plain NATS bridge target, populates 1000 events with a pause halfway (so the replay has enough event-time gap to close a bar), then runs monoblok through catch-up plus one live event.</p>
