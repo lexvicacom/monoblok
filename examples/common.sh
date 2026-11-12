@@ -2,17 +2,25 @@
 URL="nats://127.0.0.1:$PORT"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/build/monoblok"
+if [ -x "$ROOT/monoblok" ]; then
+    BIN="$ROOT/monoblok"
+else
+    BIN="$ROOT/build/monoblok"
+fi
 NAME="$(basename "${0%.sh}")"
 TMP="/tmp/monoblok-$NAME"
 
-echo $($BIN -V)
-echo
-
 if [ ! -x "$BIN" ]; then
+    if [ ! -f "$ROOT/CMakeLists.txt" ]; then
+        echo "monoblok binary not found: expected $ROOT/monoblok" >&2
+        exit 1
+    fi
     echo "building monoblok..."
     (cd "$ROOT" && cmake -S . -B build >/dev/null && cmake --build build --target monoblok) || exit 1
 fi
+
+"$BIN" -V
+echo
 
 if ! command -v nats >/dev/null; then
     echo "the nats CLI is required (https://github.com/nats-io/natscli)" >&2

@@ -1,6 +1,9 @@
 const examples = patchbayExamples;
 const tabs = [...document.querySelectorAll('[data-example]')];
+const formatSelect = document.getElementById('example-format');
+let activeExample = 'clean';
 function showExample(key) {
+  activeExample = key;
   const example = examples[key];
   const liveLink = document.getElementById('demo-live-link');
   liveLink.href = `demo.html?example=${key}`;
@@ -11,7 +14,10 @@ function showExample(key) {
     tab.tabIndex = selected ? 0 : -1;
   });
   document.getElementById('example-panel').setAttribute('aria-labelledby', `tab-${key}`);
-  renderPatchbayCode(document.getElementById('example-code'), example.code);
+  const yaml = formatSelect.value === 'yaml';
+  document.getElementById('example-thread-operator').textContent = yaml ? 'thread' : '->';
+  document.getElementById('example-filename').textContent = yaml ? 'patchbay.yml' : 'patchbay.edn';
+  renderPatchbayCode(document.getElementById('example-code'), yaml ? example.yaml : example.code);
   document.getElementById('example-title').textContent = example.title;
   document.getElementById('example-description').textContent = example.description;
   document.getElementById('input-label').textContent = example.inputLabel;
@@ -40,7 +46,8 @@ tabs.forEach((tab, index) => {
     }
   });
 });
-showExample('clean');
+formatSelect.addEventListener('change', () => showExample(activeExample));
+showExample(activeExample);
 document.querySelectorAll('[data-copy-command]').forEach(copyButton => {
 let copyResetTimer;
 copyButton.addEventListener('click', async event => {
