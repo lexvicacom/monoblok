@@ -283,10 +283,20 @@ h3 { letter-spacing: -.3px; }
 .patchbay-recording img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 7px; }
 .patchbay-recording figcaption { margin-top: 12px; color: var(--muted); line-height: 1.65; }
 .proof-strip { padding-top: 35px; }
+@media (min-width: 901px) {
+  .proof-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 .proof-strip h2 { margin-bottom: 12px; }
 .proof-strip p + p { margin-top: 14px; }
 
 .proof-strip .benchmark-note { font-size: var(--text-ui); }
+
+footer { flex-wrap: wrap; }
+@media (min-width: 681px) {
+  footer > div { align-items: baseline; }
+}
+footer .affiliation-note { flex-basis: 100%; text-align: left; }
+footer .affiliation-note small { font-size: 12px; }
 
 .install-section .install-alternative { margin: 14px 0 8px; max-width: none; font-size: var(--text-ui); }
 

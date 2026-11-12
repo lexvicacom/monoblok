@@ -61,30 +61,35 @@
 <section id="modes" class="modes"><div class="section-heading"><div><h2>Three ways to<br>run monoblok</h2></div><a class="text-link" href="https://github.com/lexvicacom/monoblok#readme" target="_blank" rel="noopener noreferrer">Project README</a></div><div class="mode-grid">
 <article class="mode-card mode-front">
 <svg class="mode-diagram" viewBox="0 0 320 180" role="img" aria-labelledby="front-diagram-title">
-<title id="front-diagram-title">Publishers send readings through monoblok to a NATS cluster</title>
-<path class="mode-wire" d="M35 48V90H109M35 132V90M211 90H275V48M275 90V132"/>
-<path class="mode-arrow" d="m100 85 9 5-9 5m132-10 9 5-9 5"/>
-<g class="mode-endpoint"><circle cx="35" cy="48" r="7"/><circle cx="35" cy="90" r="7"/><circle cx="35" cy="132" r="7"/><circle cx="275" cy="48" r="7"/><circle cx="275" cy="90" r="7"/><circle cx="275" cy="132" r="7"/></g>
-<rect class="mode-engine" x="109" y="65" width="102" height="50" rx="7"/>
-<text class="mode-engine-label" x="160" y="95">monoblok</text>
-<text class="mode-diagram-label" x="35" y="162">Publishers</text><text class="mode-diagram-label" x="275" y="162">NATS</text>
+<title id="front-diagram-title">Publishers send readings through monoblok to NATS, which delivers them to subscribers</title>
+<path class="mode-wire" d="M35 48V90H80M35 132V90M170 90H190M248 90H265V48H285M265 90H285M265 90V132H285"/>
+<path class="mode-arrow" d="m71 85 9 5-9 5m101-10 9 5-9 5m86-10 9 5-9 5"/>
+<g class="mode-endpoint"><circle cx="35" cy="48" r="7"/><circle cx="35" cy="90" r="7"/><circle cx="35" cy="132" r="7"/><circle cx="285" cy="48" r="7"/><circle cx="285" cy="90" r="7"/><circle cx="285" cy="132" r="7"/></g>
+<rect class="mode-cluster" x="190" y="65" width="58" height="50" rx="7"/><text class="mode-diagram-label" x="219" y="95">NATS</text>
+<rect class="mode-engine" x="80" y="65" width="90" height="50" rx="7"/>
+<text class="mode-engine-label" x="125" y="95">monoblok</text>
+<text class="mode-diagram-label" x="35" y="162">Publishers</text><text class="mode-diagram-label" x="280" y="162">Subscribers</text>
 </svg>
-<h3>Before your cluster</h3><p>Condition incoming readings before they reach your cluster. Forward selected subjects to NATS.</p>
+<h3>Before your cluster</h3><p>Use monoblok as a front door. Condition incoming readings before they reach your cluster. Forward selected subjects to NATS.</p>
 </article>
 <article class="mode-card mode-alongside">
 <svg class="mode-diagram" viewBox="0 0 320 180" role="img" aria-labelledby="alongside-diagram-title">
-<title id="alongside-diagram-title">Publishers send messages to your NATS server monoblok subscribes to its subjects and publishes processed results back</title>
+<title id="alongside-diagram-title">Publishers send messages to NATS for subscribers; monoblok subscribes to its subjects and publishes processed results back</title>
 <text class="mode-diagram-label" x="52" y="22">Publishers</text>
 <path class="mode-wire" d="M120 18V36H200V18M160 18V55"/>
 <path class="mode-arrow" d="m155 46 5 9 5-9"/>
 <g class="mode-endpoint"><circle cx="120" cy="18" r="6"/><circle cx="160" cy="18" r="6"/><circle cx="200" cy="18" r="6"/></g>
-<rect class="mode-cluster" x="75" y="55" width="170" height="38" rx="7"/><text class="mode-diagram-label" x="160" y="79">Your NATS server</text>
+<rect class="mode-cluster" x="75" y="55" width="170" height="38" rx="7"/><text class="mode-diagram-label" x="160" y="79">NATS</text>
+<path class="mode-wire" d="M245 74H265V44H285M265 74H285M265 74V104H285"/>
+<path class="mode-arrow" d="m251 69 9 5-9 5"/>
+<g class="mode-endpoint"><circle cx="285" cy="44" r="6"/><circle cx="285" cy="74" r="6"/><circle cx="285" cy="104" r="6"/></g>
+<text class="mode-diagram-label" x="272" y="22">Subscribers</text>
 <path class="mode-wire" d="M100 93V148H109M211 148H220V93"/>
 <path class="mode-arrow" d="m95 105 5 9 5-9m110 4 5-9 5 9"/>
-<text class="mode-diagram-label" x="47" y="122">Subscribe</text><text class="mode-diagram-label" x="270" y="122">Publish</text>
+<text class="mode-diagram-label" x="65" y="153">Subscribe</text><text class="mode-diagram-label" x="249" y="153">Publish</text>
 <rect class="mode-engine" x="109" y="123" width="102" height="50" rx="7"/><text class="mode-engine-label" x="160" y="153">monoblok</text>
 </svg>
-<h3>Alongside your cluster</h3><p>Subscribe to existing subjects, process the messages and publish the results back to your cluster.</p>
+<h3>Alongside your cluster</h3><p>Subscribe to existing subjects in NATS, process the messages with monoblok and have it publish the results back to your cluster.</p>
 </article>
 <article class="mode-card mode-standalone">
 <svg class="mode-diagram" viewBox="0 0 320 180" role="img" aria-labelledby="standalone-diagram-title">
@@ -95,7 +100,7 @@
 <rect class="mode-engine" x="109" y="65" width="102" height="50" rx="7"/><text class="mode-engine-label" x="160" y="95">monoblok</text>
 <text class="mode-diagram-label" x="35" y="162">Publishers</text><text class="mode-diagram-label" x="275" y="162">Subscribers</text>
 </svg>
-<h3>On its own</h3><p>A lightweight broker with processing built in. Connect your NATS clients directly to monoblok.</p>
+<h3>On its own</h3><p>monoblok is a lightweight broker with processing built in. Connect your NATS clients directly to monoblok.</p>
 </article>
 </div></section><section class="proof-strip" aria-labelledby="performance-heading">
 <div><h2 id="performance-heading">Written in C with libuv</h2>
@@ -105,6 +110,9 @@
 <div><h2>2–18 million messages a second</h2>
 <p><a href="https://github.com/lexvicacom/monoblok/tree/main/bench-results" target="_blank" rel="noopener noreferrer">Saved benchmark runs</a> reach peaks across this range for simple publish and fan-out workloads on a 2-core ARM VPS, an 8-core x86_64 VPS and an Apple Silicon M4 Mac mini.</p>
 <p class="benchmark-note">Throughput depends on hardware, subscriber count and processing rules. Run the benchmarks with your workload to estimate capacity.</p></div>
+<div><h2>NATS native, not a replacement</h2>
+<p>monoblok is designed to complement NATS. It works with self-hosted clusters and <a href="https://www.synadia.com/cloud" target="_blank" rel="noopener noreferrer">Synadia Cloud</a>.</p>
+<p>Export processed messages, import live subjects or replay JetStream history through patchbay. <a href="docs/bridge.html">Explore NATS integration</a>.</p></div>
 </section><section id="install" class="install-section" aria-labelledby="install-heading">
 <div class="install-intro"><div><h2 id="install-heading">Install</h2><p>Download a release binary, use the script below or run the Docker image.</p></div><span class="install-platforms">macOS or Linux</span></div>
 <div class="install-code"><div class="install-command-row"><pre tabindex="0" role="region" aria-label="Installation command"><span class="install-prompt" aria-hidden="true">$ </span><code id="install-command"><span class="install-executable">curl</span> <span class="install-option">-fsSL</span> <span class="install-url">https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh</span> <span class="install-pipe">|</span> <span class="install-executable">bash</span></code></pre><button id="copy-install" class="copy-command" data-copy-command="install-command" type="button" aria-label="Copy command" title="Copy command"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><g class="copy-glyph"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></g><path class="copy-check" d="m5 12 4 4L19 6"/></svg></button></div>
@@ -118,4 +126,4 @@
 <li><strong>macOS:</strong> <code>brew install openssl@3</code></li>
 </ul>
 </aside><span id="copy-status" class="sr-only" role="status"></span></div>
-</section><aside class="tinyblok"><p><strong>For ESP32:</strong> tinyblok runs Patchbay Lite, a subset of patchbay for <a href="esp32.html">ESP32 boards</a>.</p></aside></main><footer><div><a class="brand" href="index.html">monoblok</a><span>Stream processing for NATS.</span></div><p>MIT licensed · &copy; 2026 <a href="mailto:alex@lexvica.com">Alex Reid</a><br><a href="https://lexvica.com" target="_blank" rel="noopener noreferrer">Lexvica</a> offers solutions built with monoblok.</p></footer><script src="patchbay-examples.js?v=9fbbc12f571f"></script><script src="examples.js?v=3186bb0130dc"></script><script src="signal-carousel.js?v=86619b0cff88"></script></body></html>
+</section><aside class="tinyblok"><p><strong>For ESP32:</strong> tinyblok runs Patchbay Lite, a subset of patchbay for <a href="esp32.html">ESP32 boards</a>.</p></aside></main><footer><div><a class="brand" href="index.html">monoblok</a><span>Stream processing for NATS</span></div><p>&copy; 2026 <a href="mailto:alex@lexvica.com">Alex Reid</a><br><a href="https://lexvica.com" target="_blank" rel="noopener noreferrer">Lexvica</a> offers solutions built with monoblok.</p><p class="affiliation-note"><small>monoblok is an independent, MIT licensed project, not affiliated with or endorsed by NATS or Synadia.</small></p></footer><script src="patchbay-examples.js?v=9fbbc12f571f"></script><script src="examples.js?v=3186bb0130dc"></script><script src="signal-carousel.js?v=86619b0cff88"></script></body></html>
