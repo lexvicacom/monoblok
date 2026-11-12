@@ -1,26 +1,18 @@
-description: Use a coding agent such as Claude Code or Codex to write patchbay files: load the patchbay instructions, describe the streams, then check the result.
+description: Use a coding agent such as Claude Code or Codex to write patchbay files: install the portable Patchbay skill, describe the streams, then check the result.
 
-# Writing patchbays with an agent
+# Write patchbays with Claude or Codex
 
-{lede} Patchbay is small enough to fit in a coding agent's context. Give the agent the patchbay instructions, describe the stream you have and the stream you want, and it can write the rules, validate them and show you what they do with sample messages.
+{lede} Patchbay is small enough to fit in a coding agent's context. Install the Patchbay authoring skill, describe the stream you have and the stream you want, and it can write the rules, validate them and show you what they do with sample messages.
 
-## Load the instructions
+## The portable skill
 
-[`docs/AGENTS_PATCHBAY.md`](https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md) is a self-contained description of the language written for agents: every form, the YAML and JSON spellings, the idioms to prefer, the forms that do not exist, and the commands to check a file. It does not assume the agent has seen the monoblok repository. Without it, an agent will guess at Clojure and invent forms that fail to load.
+The [`patchbay-authoring` skill](https://github.com/lexvicacom/monoblok/tree/main/.agents/skills/patchbay-authoring) teaches Codex and Claude Code the actual DSL: forms, state, runtime differences, YAML/JSON spellings, idioms, and validation. One package serves both agents, with references loaded as needed. It works outside the Monoblok repository.
 
-Put it where your agent reads project instructions. Run this in the directory where you want the agent to work:
+{{section docs/AGENTS_PATCHBAY.md "Install without a checkout" level=2}}
 
-```sh
-# Codex and other agents that read AGENTS.md
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
+{{section docs/AGENTS_PATCHBAY.md "Use the skill" level=2}}
 
-# Claude Code
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./CLAUDE.md
-```
-
-For other tools, paste or reference the file in the equivalent place: Cursor rules, Aider conventions or a ChatGPT project. For a one-off, save the file next to your patchbay and name it in the prompt: "Follow AGENTS_PATCHBAY.md while editing patchbay.edn."
-
-Install monoblok on the same machine ([Install and run](running.html)). The instructions tell the agent to run `monoblok --validate` and `monoblok --soundcheck` on what it writes, and it can only do that if the binary is on the path.
+{{section docs/AGENTS_PATCHBAY.md "Use from a checkout" level=2}}
 
 ## What to ask for
 
@@ -106,6 +98,6 @@ If a rule is hard to read, ask the agent to explain that line, or to rewrite it 
 
 ## Going further
 
-- Ask for a pump script as well: a small program that publishes realistic sample traffic, so you can watch the rules against a running server. The instructions include a skeleton for one.
+- Ask for a pump script as well: a small program that publishes realistic sample traffic, so you can watch the rules against a running server. The skill includes a template for one.
 - Ask for the same file in YAML or JSON, and compare the two with the same soundcheck rows.
 - Two much larger generated patchbays are walked through in [Large patchbays](examples-large.html), with a [recorded session](https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html) of a coding assistant building one.

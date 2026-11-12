@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -39,7 +40,7 @@ PAGES = [
     ("running", "Install and run", "Start"),
     ("patchbay", "Patchbay guide", "Patchbay"),
     ("forms", "Forms reference", "Patchbay"),
-    ("agents", "Writing with an agent", "Patchbay"),
+    ("agents", "Use Claude or Codex", "Patchbay"),
     ("examples", "Start here", "Examples"),
     ("examples-telemetry", "Sensors and telemetry", "Examples"),
     ("examples-market", "Market data", "Examples"),
@@ -57,6 +58,7 @@ DOC_HOMES = {
     "docs/patchbay-cheatsheet.md": "forms.html",
     "docs/overview.md": "index.html",
     "docs/README.md": "index.html",
+    "docs/AGENTS_PATCHBAY.md": "agents.html",
     "README.md": "index.html",
 }
 ANCHOR_HOMES = {
@@ -479,6 +481,29 @@ TEMPLATE = """<!doctype html>
 """
 
 
+def package_patchbay_skill():
+    """Ship the whole portable skill so readers need no repository checkout."""
+    source = os.path.join(ROOT, ".agents", "skills", "patchbay-authoring")
+    output = os.path.join(ROOT, "site", "downloads", "patchbay-authoring.zip")
+    if not os.path.isfile(os.path.join(source, "SKILL.md")):
+        die("missing Patchbay skill entrypoint")
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for directory, dirs, files in os.walk(source):
+            dirs.sort()
+            for name in sorted(files):
+                if name != "SKILL.md" and not name.endswith((".md", ".py")):
+                    continue
+                path = os.path.join(directory, name)
+                relative = os.path.relpath(path, os.path.dirname(source)).replace(os.sep, "/")
+                # Fixed metadata makes repeated docs builds byte-for-byte stable.
+                entry = zipfile.ZipInfo(relative, date_time=(2026, 1, 1, 0, 0, 0))
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                entry.external_attr = 0o100644 << 16
+                with open(path, "rb") as handle:
+                    archive.writestr(entry, handle.read())
+
+
 def main():
     pages, bodies, descriptions = {}, {}, {}
     for slug, _, _ in PAGES:
@@ -505,6 +530,7 @@ def main():
                 print("warning: %s.md links to missing %s" % (slug, target))
                 problems += 1
 
+    package_patchbay_skill()
     css, js = asset_version("docs.css"), asset_version("docs.js")
     for index, (slug, label, group) in enumerate(PAGES):
         page = TEMPLATE.format(

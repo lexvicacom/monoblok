@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Writing patchbays with an agent | monoblok docs</title>
-<meta name="description" content="Use a coding agent such as Claude Code or Codex to write patchbay files: load the patchbay instructions, describe the streams, then check the result.">
+<title>Write patchbays with Claude or Codex | monoblok docs</title>
+<meta name="description" content="Use a coding agent such as Claude Code or Codex to write patchbay files: install the portable Patchbay skill, describe the streams, then check the result.">
 <meta name="theme-color" content="#f5f4ed">
 <link rel="stylesheet" href="docs.css?v=4a4ab3648084">
 </head>
@@ -21,24 +21,47 @@
 </header>
 <div class="docs-shell">
 <details class="docs-side" open>
-<summary>Docs menu · Writing with an agent</summary>
-<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li><li><a href="agents.html" aria-current="page">Writing with an agent</a><ul class="toc"><li><a href="#load-the-instructions">Load the instructions</a></li><li><a href="#what-to-ask-for">What to ask for</a></li><li><a href="#a-worked-example">A worked example</a></li><li><a href="#read-every-line">Read every line</a></li><li><a href="#going-further">Going further</a></li></ul></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-waf.html">Filtering and privacy</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+<summary>Docs menu · Use Claude or Codex</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li><li><a href="agents.html" aria-current="page">Use Claude or Codex</a><ul class="toc"><li><a href="#the-portable-skill">The portable skill</a></li><li><a href="#install-without-a-checkout">Install without a checkout</a></li><li><a href="#use-the-skill">Use the skill</a></li><li><a href="#use-from-a-checkout">Use from a checkout</a></li><li><a href="#what-to-ask-for">What to ask for</a></li><li><a href="#a-worked-example">A worked example</a></li><li><a href="#read-every-line">Read every line</a></li><li><a href="#going-further">Going further</a></li></ul></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-waf.html">Filtering and privacy</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
 </details>
 <main id="main" class="docs-main">
 <article class="docs-article">
 <p class="kicker">Patchbay</p>
-<h1>Writing patchbays with an agent</h1>
-<p class="lede">Patchbay is small enough to fit in a coding agent's context. Give the agent the patchbay instructions, describe the stream you have and the stream you want, and it can write the rules, validate them and show you what they do with sample messages.</p>
-<h2 id="load-the-instructions">Load the instructions<a class="anchor" href="#load-the-instructions" aria-label="Link to this section">#</a></h2>
-<p><a href="https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md" target="_blank" rel="noopener noreferrer"><code>docs/AGENTS_PATCHBAY.md</code></a> is a self-contained description of the language written for agents: every form, the YAML and JSON spellings, the idioms to prefer, the forms that do not exist, and the commands to check a file. It does not assume the agent has seen the monoblok repository. Without it, an agent will guess at Clojure and invent forms that fail to load.</p>
-<p>Put it where your agent reads project instructions. Run this in the directory where you want the agent to work:</p>
-<figure class="code"><figcaption><span>shell</span></figcaption><pre><code><span class="tok-com"># Codex and other agents that read AGENTS.md</span>
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md &gt;&gt; ./AGENTS.md
+<h1>Write patchbays with Claude or Codex</h1>
+<p class="lede">Patchbay is small enough to fit in a coding agent's context. Install the Patchbay authoring skill, describe the stream you have and the stream you want, and it can write the rules, validate them and show you what they do with sample messages.</p>
+<h2 id="the-portable-skill">The portable skill<a class="anchor" href="#the-portable-skill" aria-label="Link to this section">#</a></h2>
+<p>The <a href="https://github.com/lexvicacom/monoblok/tree/main/.agents/skills/patchbay-authoring" target="_blank" rel="noopener noreferrer"><code>patchbay-authoring</code> skill</a> teaches Codex and Claude Code the actual DSL: forms, state, runtime differences, YAML/JSON spellings, idioms, and validation. One package serves both agents, with references loaded as needed. It works outside the Monoblok repository.</p>
+<h2 id="install-without-a-checkout">Install without a checkout<a class="anchor" href="#install-without-a-checkout" aria-label="Link to this section">#</a></h2>
+<p>Download <a href="https://lexvicacom.github.io/monoblok/downloads/patchbay-authoring.zip" target="_blank" rel="noopener noreferrer">patchbay-authoring.zip</a>. The archive contains a <code>patchbay-authoring/</code> directory with <code>SKILL.md</code>, references, and assets. Extract the whole directory, not just <code>SKILL.md</code>.</p>
+<p>Run these commands in the project where you want to author patchbays. Choose the installation for your agent:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fL https://lexvicacom.github.io/monoblok/downloads/patchbay-authoring.zip \
+  -o /tmp/patchbay-authoring.zip
 
-<span class="tok-com"># Claude Code</span>
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md &gt;&gt; ./CLAUDE.md</code></pre></figure>
-<p>For other tools, paste or reference the file in the equivalent place: Cursor rules, Aider conventions or a ChatGPT project. For a one-off, save the file next to your patchbay and name it in the prompt: "Follow AGENTS_PATCHBAY.md while editing patchbay.edn."</p>
-<p>Install monoblok on the same machine (<a href="running.html">Install and run</a>). The instructions tell the agent to run <code>monoblok --validate</code> and <code>monoblok --soundcheck</code> on what it writes, and it can only do that if the binary is on the path.</p>
+<span class="tok-com"># Codex: project installation</span>
+mkdir -p .agents/skills
+unzip /tmp/patchbay-authoring.zip -d .agents/skills
+
+<span class="tok-com"># Claude Code: project installation</span>
+mkdir -p .claude/skills
+unzip /tmp/patchbay-authoring.zip -d .claude/skills</code></pre></figure>
+<p>For a personal installation available across projects, extract into <code>~/.agents/skills</code> for Codex or <code>~/.claude/skills</code> for Claude Code instead. Install in one scope per agent to avoid duplicate entries. To update, download the current archive and replace the installed <code>patchbay-authoring</code> directory. Restart the agent if the skill does not appear.</p>
+<p>The ZIP is rebuilt from the skill source whenever the docs site is built. For a version-pinned copy, use a checkout at the desired release or commit instead.</p>
+<h2 id="use-the-skill">Use the skill<a class="anchor" href="#use-the-skill" aria-label="Link to this section">#</a></h2>
+<p>In Codex, mention <code>$patchbay-authoring</code>. In Claude Code, invoke <code>/patchbay-authoring</code>. Both agents can also select it automatically when the request matches its description.</p>
+<p>For example, in Codex:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>$patchbay-authoring
+Target Monoblok. Write patchbay.edn for sensors.*.temp with numeric payloads.
+Round to one decimal place and publish only changed values to &lt;subject&gt;.stable.
+Validate it and show a soundcheck with repeated, changed, and negative readings.</code></pre></figure>
+<p>For Claude Code, use the same brief after <code>/patchbay-authoring</code>. Specify Tinyblok/Patchbay Lite when targeting firmware, and request YAML or JSON when wanted; EDN is the default.</p>
+<p>Give the agent concrete input subjects, representative payloads, desired outputs, and thresholds or windows. Ask for an explanation or review in ordinary prose; ask for a file-only response when you want only the configuration text.</p>
+<p>Install <a href="https://github.com/lexvicacom/monoblok#run-it" target="_blank" rel="noopener noreferrer">Monoblok</a> on the same machine so the agent can run <code>monoblok --validate</code> and <code>monoblok --soundcheck</code>. Inside a Monoblok checkout it uses <code>./build/monoblok</code>; Tinyblok projects should use their firmware host validator. The skill itself installs no binary or dependencies. If tools are unavailable, the agent should say so and give you the check commands.</p>
+<p>Read generated rules before deploying them. Validation checks well-formedness; a soundcheck transcript covers only the messages supplied. Check real timing and request-reply behavior against a running target when those matter.</p>
+<h2 id="use-from-a-checkout">Use from a checkout<a class="anchor" href="#use-from-a-checkout" aria-label="Link to this section">#</a></h2>
+<p>The canonical package is <a href="https://github.com/lexvicacom/monoblok/blob/main/.agents/skills/patchbay-authoring/SKILL.md" target="_blank" rel="noopener noreferrer"><code>.agents/skills/patchbay-authoring</code></a>. Codex discovers it in this repository. Claude Code discovers the same package through <code>.claude/skills/patchbay-authoring</code>, a relative symlink. No global install is needed for work in this tree.</p>
+<p>To install from a checkout into another project, copy the whole canonical <code>patchbay-authoring</code> directory into that project's <code>.agents/skills/</code> or <code>.claude/skills/</code>. Copy the canonical directory rather than the Claude symlink, which points back into this repository.</p>
+<p>For a tool without skill discovery, extract the ZIP and ask it to read <code>patchbay-authoring/SKILL.md</code>, following the relevant reference links while working on your rules. This file is now the usage guide; the former standalone prompt has moved into the skill's references.</p>
+<p>See <a href="https://learn.chatgpt.com/docs/build-skills" target="_blank" rel="noopener noreferrer">Codex skill documentation</a> and <a href="https://code.claude.com/docs/en/skills" target="_blank" rel="noopener noreferrer">Claude Code skill documentation</a> for discovery locations and invocation details.</p>
 <h2 id="what-to-ask-for">What to ask for<a class="anchor" href="#what-to-ask-for" aria-label="Link to this section">#</a></h2>
 <p>Describe the messages, not the forms. A good brief has four things:</p>
 <ul><li><strong>The input subjects</strong>, with their shape: <code>coldstore.&lt;site&gt;.&lt;unit&gt;</code>.</li><li><strong>A sample payload</strong>, copied from the real stream if you can.</li><li><strong>What you want out</strong>, in plain words: "only when it changes", "one alert and one all-clear", "a count".</li><li><strong>The numbers</strong>: thresholds, window sizes, decimal places.</li></ul>
@@ -143,7 +166,7 @@ Validate it and show me a soundcheck transcript.</code></pre></figure>
 <ul><li><strong>Filters.</strong> Does each <code>on</code> filter match the subjects you publish, and nothing else? <code>*</code> is one token and <code>&gt;</code> is one or more.</li><li><strong>Numbers.</strong> Are the thresholds, windows and decimal places yours, or values the agent assumed? In the example above, the brief said "last five readings", and the rule says <code>(moving-avg 5 ...)</code>.</li><li><strong>Output subjects.</strong> Where does each <code>publish!</code> go, and does anything export or subscribe to it?</li><li><strong><code>:reentrant true</code>.</strong> Every rule with it feeds its output back into the rules. Make sure that is intended.</li><li><strong>Cardinality.</strong> Stateful forms keep one slot per subject. A wildcard over many subjects is many slots.</li><li><strong>The cases the transcript skipped.</strong> Feed your own rows through <code>--soundcheck</code>: the boundary values, a malformed payload, the message that must not get through.</li><li><strong>Wall-clock behaviour.</strong> Soundcheck rows arrive in one burst, so <code>:ms</code> windows, <code>hold-off</code> and <code>throttle</code> need a run against a real server.</li></ul>
 <p>If a rule is hard to read, ask the agent to explain that line, or to rewrite it more plainly. Rules that gate or filter what leaves a system (<a href="examples-waf.html">Filtering and privacy</a>) deserve the closest reading of all.</p>
 <h2 id="going-further">Going further<a class="anchor" href="#going-further" aria-label="Link to this section">#</a></h2>
-<ul><li>Ask for a pump script as well: a small program that publishes realistic sample traffic, so you can watch the rules against a running server. The instructions include a skeleton for one.</li><li>Ask for the same file in YAML or JSON, and compare the two with the same soundcheck rows.</li><li>Two much larger generated patchbays are walked through in <a href="examples-large.html">Large patchbays</a>, with a <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">recorded session</a> of a coding assistant building one.</li></ul>
+<ul><li>Ask for a pump script as well: a small program that publishes realistic sample traffic, so you can watch the rules against a running server. The skill includes a template for one.</li><li>Ask for the same file in YAML or JSON, and compare the two with the same soundcheck rows.</li><li>Two much larger generated patchbays are walked through in <a href="examples-large.html">Large patchbays</a>, with a <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">recorded session</a> of a coding assistant building one.</li></ul>
 <nav class="pager" aria-label="Previous and next page"><a class="prev" href="forms.html"><small>Previous</small>Forms reference</a><a class="next" href="examples.html"><small>Next</small>Start here</a></nav>
 <p class="docs-foot">MIT licensed · &copy; 2026 <a href="mailto:alex@lexvica.com">Alex Reid</a><br><a href="https://lexvica.com" target="_blank" rel="noopener noreferrer">Lexvica</a> offers solutions built with monoblok.</p>
 </article>

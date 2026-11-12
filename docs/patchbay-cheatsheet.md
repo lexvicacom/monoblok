@@ -1,6 +1,6 @@
 # patchbay cheatsheet
 
-For more details see [`patchbay.md`](./patchbay.md). If you're a coding assistant, see [`AGENTS_PATCHBAY.md`](./AGENTS_PATCHBAY.md).
+For more details see [`patchbay.md`](./patchbay.md). For agent-assisted authoring, install the [Patchbay skill](./AGENTS_PATCHBAY.md) for Codex or Claude Code.
 
 ## Top-level forms
 

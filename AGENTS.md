@@ -146,6 +146,9 @@ cmake --build build --target pb-dump
 
 ## Patchbay model
 
+- For authoring, reviewing, or porting rule files, use the
+  `patchbay-authoring` skill in `.agents/skills/patchbay-authoring/SKILL.md`.
+  Claude Code reads the same package through `.claude/skills/patchbay-authoring`.
 - Lists are call forms. A list must be non-empty and headed by a symbol.
 - Vectors are data.
 - JSON patchbay files use arrays as call forms and `{"vector":[...]}` for vector

@@ -71,13 +71,7 @@ The pump scripts default to `127.0.0.1:4222`. Use `--host` and `--port` if monob
 
 ## Making your own
 
-To make more examples like these, give your coding agent the patchbay-specific instructions first. Append `docs/AGENTS_PATCHBAY.md` to an `AGENTS.md` (or `CLAUDE.md`) in the directory where you want the agent to work:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
-```
-
-[Writing patchbays with an agent](agents.html) covers the workflow and what to check in the result. Then ask for a complete pair: one patchbay `.edn` file and one pump script that publishes matching test data.
+To make more examples like these, [download and install the Patchbay authoring skill](agents.html#install-without-a-checkout). No repository checkout is needed. Invoke `$patchbay-authoring` in Codex or `/patchbay-authoring` in Claude Code, then ask for a complete pair: one patchbay `.edn` file and one pump script that publishes matching test data.
 
 ```text
 Create a patchbay .edn file and a matching Python script that publishes test data.

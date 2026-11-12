@@ -9,4 +9,7 @@ dist/
 perf.data*
 *.prof
 .claude/settings.local.json
-.claude
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/patchbay-authoring

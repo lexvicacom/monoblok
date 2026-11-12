@@ -161,4 +161,4 @@ nats sub '$STATS.>'
 
 {{section docs/overview.md "Coding assistants" level=2}}
 
-[Writing patchbays with an agent](agents.html) has a worked example and a review checklist. Two generated patchbays of this kind are walked through in [Large patchbays](examples-large.html).
+[Use Claude or Codex](agents.html) has a worked example and a review checklist. Two generated patchbays of this kind are walked through in [Large patchbays](examples-large.html).

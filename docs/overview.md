@@ -106,13 +106,9 @@ trace: conn 2 PUB sensors.temp 4
 
 ### Coding assistants
 
-A nice way to learn it is with an LLM that has the DSL loaded as project context. [docs/AGENTS_PATCHBAY.md](./AGENTS_PATCHBAY.md) is a self-contained, agent-neutral prompt that teaches Codex and other coding agents Patchbay. Append it to your project's `AGENTS.md` so compatible tools pick it up automatically when editing `.edn` rule files:
+The portable [`patchbay-authoring` skill](./AGENTS_PATCHBAY.md) teaches Codex and Claude Code the DSL and how to validate rules. [Download the standalone ZIP](https://lexvicacom.github.io/monoblok/downloads/patchbay-authoring.zip), then extract it into `.agents/skills/` for Codex or `.claude/skills/` for Claude Code. No repository checkout is needed. The [usage guide](./AGENTS_PATCHBAY.md) covers project and personal installation, updates, and examples.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
-```
-
-For Claude Code, append the same file to `CLAUDE.md` instead. Once loaded, describe the stream you have and the stream you want, and ask the agent to run `monoblok --validate` and `monoblok --soundcheck` on the result.
+Invoke `$patchbay-authoring` in Codex or `/patchbay-authoring` in Claude Code. Describe your input subjects and payloads, desired outputs, and thresholds or windows; ask the agent to run `monoblok --validate` and `monoblok --soundcheck` and show the transcript. Install Monoblok locally to run those checks. In this repository the skill is already available to both agents.
 
 Scrutinise every line of a generated patchbay before you run it anywhere that matters. A file that validates is well-formed, not correct, and a soundcheck transcript only covers the rows that were fed in.
 
