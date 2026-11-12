@@ -66,6 +66,9 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 | [`ticker.edn`](../examples/ticker.edn)             | market data: round, squelch, big-jump alerts, export            |
 | [`bars.edn`](../examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
 | [`latency-stats.edn`](../examples/latency-stats.edn) | live p50/p95/p99/stddev over a sliding window                 |
+| [`waf.edn`](../examples/waf.edn)                   | a WAF for NATS: payload scan, p99 outlier gate, flood detection |
+| [`deidentify.edn`](../examples/deidentify.edn)     | de-identify patient frames: allow-list fields, age bands, ward aggregates |
+| [`cold-store.edn`](../examples/cold-store.edn)     | freezer monitoring written by a coding agent: demux, dedupe, hysteresis alert, door count |
 | [`clocked.edn`](../examples/clocked.edn)             | silence detection, debounce, sampling, clocked aggregates, an `every` heartbeat, and a funnel |
 | [`json-frames.edn`](../examples/json-frames.edn)   | `json-demux!` a JSON-emitting device into scalar sub-subjects   |
 | [`rental-car.edn`](../examples/rental-car.edn)     | quantize + deadband + over-rev hold-off alert                   |
@@ -109,7 +112,9 @@ A nice way to learn it is with an LLM that has the DSL loaded as project context
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
 ```
 
-For Claude Code, append the same file to `CLAUDE.md` instead. Once loaded, describe the stream you have and the stream you want.
+For Claude Code, append the same file to `CLAUDE.md` instead. Once loaded, describe the stream you have and the stream you want, and ask the agent to run `monoblok --validate` and `monoblok --soundcheck` on the result.
+
+Scrutinise every line of a generated patchbay before you run it anywhere that matters. A file that validates is well-formed, not correct, and a soundcheck transcript only covers the rows that were fed in.
 
 For some elaborate generated demos, see [`advanced-examples/`](../advanced-examples/). They are intentionally a bit over the top, but they give a feel for what is possible.
 
@@ -196,8 +201,8 @@ the normal NATS `CONNECT` fields: `auth_token` for token auth, or `user` and
 `pass` for username/password auth. Missing or wrong credentials receive
 `-ERR 'Authorization Violation'` and the socket is closed.
 
-This is intentionally only simple CONNECT-time authentication. It does not add
-per-subject authorization, accounts, bcrypt hashes, JWTs, NKEYs, or reloadable
+Authentication is checked at CONNECT time. It does not add
+per-subject authorisation, accounts, bcrypt hashes, JWTs, NKEYs, or reloadable
 user maps. Use TLS, a trusted network, or a fronting proxy if credentials cross
 anything outside your control.
 
@@ -343,7 +348,7 @@ Serve browser clients from the same nginx origin when possible. monoblok does
 not add CORS headers itself, and same-origin `/sub/...`, `/pub/...`, and
 `/latest/...` requests avoid needing browser-specific CORS handling. If monoblok
 auth is enabled, make sure nginx forwards the `Authorization` header; the
-default proxy behavior does unless you override it.
+default proxy behaviour does unless you override it.
 
 Use the Node demo server to serve the page and proxy `/sub`, `/pub`, and
 `/latest` from the same origin, which avoids browser CORS. It can also start a local monoblok
@@ -440,9 +445,9 @@ Patchbay state is per call site and subject (two uses of the same stateful form 
 
 ## Design
 
-monoblok is intentionally simple at runtime: one process, one libuv loop, one application thread for protocol parsing, subject matching, patchbay evaluation, fan-out, write buffering, and LVC state. That makes the behavior predictable and keeps coordination costs out of the publish path.
+One libuv loop handles protocol parsing, subject matching, patchbay evaluation, fan-out, write buffering and LVC state. Import workers hand messages to that loop for evaluation, keeping router and rule state on one thread.
 
-For lower-level details on ownership boundaries, snapshot I/O, libuv behavior, borrowed slices, and allocation policy, see [implementation notes](../design/implementation-notes.md).
+For lower-level details on ownership boundaries, snapshot I/O, libuv behaviour, borrowed slices, and allocation policy, see [implementation notes](../design/implementation-notes.md).
 
 ## Deploying
 
@@ -464,12 +469,12 @@ Drops the binary at `/usr/local/bin/monoblok`, the patchbay at `/etc/monoblok/pa
 
 ## How fast is it?
 
-tl;dr: It's likely to be fast enough. The saved low-end VPS run is already in the low millions of messages/sec for simple pub/sub and fan-out cases. Getting meaningful benchmarks turned out to be trickier than I first realised, though, so run `scripts/bench-with-nats-server.sh` on your own hardware if numbers matter to you.
+The saved low-end VPS runs reach the low millions of messages per second for basic pub/sub and fan-out workloads. Run `scripts/bench-with-nats-server.sh` on your own hardware to compare performance for your deployment.
 
-The **shape** of the comparison vs. nats-server, though, is consistent across runs:
+The saved comparisons with nats-server show these trends:
 
 - **nats-server wins on pure publish throughput on big machines.** Multi-threaded acceptance and a more battle-hardened parse loop both help when there's no fan-out work to spread the cost over and there are spare cores to spread it across. On small ARM VPSes the gap narrows or disappears: nats-server has less parallelism to exploit, and monoblok has less coordination overhead to pay.
 - **The two are roughly comparable at low fan-out** (1-10 subscribers per publish).
 - **monoblok scales better with subscriber count.** Its fan-out model has low per-subscriber coordination overhead. Crossover happens somewhere around 10-30 subscribers; the further past that you go, the bigger monoblok's lead.
 
-Worth keeping in mind: nats-server has a decade of production-grade performance work behind it. Any monoblok win in these benches should be read as "the single-threaded design happens to fit this specific workload shape well," not "monoblok is faster than nats." The right tool for most pub/sub deployments is still nats-server; monoblok is for the cases where the patchbay or LVC features earn their place, and "fast enough on a small box" is a happy side-effect of the design, not the headline.
+These results apply to the measured workloads. Use nats-server for general pub/sub deployments; consider monoblok where patchbay processing or its last-value cache is useful.

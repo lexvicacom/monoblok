@@ -22,13 +22,13 @@
 <div class="docs-shell">
 <details class="docs-side" open>
 <summary>Docs menu · LVC, stats and snapshots</summary>
-<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html" aria-current="page">LVC, stats and snapshots</a><ul class="toc"><li><a href="#lvc-last-value-cache-stream">$LVC.*: last-value-cache stream</a></li><li><a href="#stats-live-counters">$STATS.*: live counters</a></li><li><a href="#snapshots">Snapshots</a></li></ul></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li><li><a href="agents.html">Writing with an agent</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-waf.html">Filtering and privacy</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html" aria-current="page">LVC, stats and snapshots</a><ul class="toc"><li><a href="#lvc-last-value-cache-stream">$LVC.*: last-value-cache stream</a></li><li><a href="#stats-live-counters">$STATS.*: live counters</a></li><li><a href="#snapshots">Snapshots</a></li></ul></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
 </details>
 <main id="main" class="docs-main">
 <article class="docs-article">
 <p class="kicker">Server</p>
 <h1>LVC, stats and snapshots</h1>
-<p class="lede">Three pieces of server state sit beside the rules: a last-value cache that makes late-joining subscribers a non-event, live counters for every rule, and snapshots that carry both across a restart.</p>
+<p class="lede">The last-value cache supplies recent values to new subscribers, live counters report rule activity, and snapshots preserve cached values and patchbay state across restarts.</p>
 <h2 id="lvc-last-value-cache-stream"><code>$LVC.*</code>: last-value-cache stream<a class="anchor" href="#lvc-last-value-cache-stream" aria-label="Link to this section">#</a></h2>
 <p>Top-level <code>(lvc ...)</code> forms opt subjects into the last-value cache. Subscribing to <code>$LVC.foo.bar</code> joins a live stream of <code>foo.bar</code>: current cached value first (if any), then every subsequent opted-in publish. Wildcards work. <code>PUB $LVC.*</code> is rejected.</p>
 <figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">lvc</span> [<span class="tok-str">"sensors.&gt;"</span> <span class="tok-str">"alerts.&gt;"</span>])</code></pre></figure>
@@ -39,15 +39,15 @@ PUB foo.bar 13      ; -&gt; subscriber receives 13</code></pre></figure>
 <p>Absent <code>(lvc ...)</code>, LVC is off and the publish path does no cache work. <code>--no-lvc</code> disables configured LVC filters.</p>
 <p><code>$STATS.*</code> can be cached too, but only with an explicit stats filter such as <code>(lvc ["$STATS.&gt;"])</code>. A broad <code>(lvc ["&gt;"])</code> keeps stats out of the LVC unless you opt in.</p>
 <h3 id="why-it-matters">Why it matters<a class="anchor" href="#why-it-matters" aria-label="Link to this section">#</a></h3>
-<p>A dashboard that opens in the morning wants the current state of everything, immediately, with no "waiting for first reading" spinner. A logger that restarts wants to know where things stood. Subscribe to <code>$LVC.car.*.*.stable</code> and you receive the last known value for every matching subject, then the live stream. No JetStream, no external KV store: the broker remembers the last thing it saw.</p>
-<figure class="code"><figcaption><span>shell</span></figcaption><pre><code><span class="tok-com"># Publish a value, then walk away.</span>
+<p>Subscribe to <code>$LVC.car.*.*.stable</code> to receive the last cached value for each matching subject, followed by live updates. This lets a dashboard display recent readings even when no new messages are arriving.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code><span class="tok-com"># Publish a value before subscribing.</span>
 nats pub sensors.temp 23.5
 
 <span class="tok-com"># Later, subscribe.</span>
 nats sub <span class="tok-str">'$LVC.sensors.temp'</span>
 <span class="tok-com"># -&gt; prints "23.5" immediately</span></code></pre></figure>
 <p>Single-quote any subject starting with <code>$</code> so your shell does not try to expand it.</p>
-<p>The cache pairs particularly well with conditioning rules. A rule's own publishes are cached too, so a subscriber to <code>$LVC.sensors.temp.stable</code> gets the most recent rule-produced value on connect, not the raw input. A dedupe rule is what makes that cached value useful: without <code>squelch</code>, the cache would hold whatever noisy reprint happened to land last.</p>
+<p>Rule output is cached when its subject matches an LVC filter. A subscriber to <code>$LVC.sensors.temp.stable</code> therefore receives the latest processed value on connection.</p>
 <h3 id="reading-the-cache-from-a-rule">Reading the cache from a rule<a class="anchor" href="#reading-the-cache-from-a-rule" aria-label="Link to this section">#</a></h3>
 <p>Rules can read the cache with <a href="forms.html#last-values"><code>(last SUBJECT)</code></a>, which is how one subject's rule sees another subject's value, and answer NATS requests from it with <a href="forms.html#request-reply"><code>reply!</code></a>. The <a href="clients.html#http-sse-adapter">HTTP adapter</a> exposes the same cache at <code>GET /latest/&lt;subject&gt;</code>.</p>
 <figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">lvc</span> [<span class="tok-str">"temp.&gt;"</span>])
@@ -70,7 +70,7 @@ nats sub <span class="tok-str">'$LVC.sensors.temp'</span>
 <p>Rule state is identified by the rule's position and filter plus the call site and subject of each slot. Time-window slots are re-armed on load; a slot whose deadline passed while the server was down fires immediately on startup. <code>every</code> timers are not stored; they are recreated when the patchbay loads.</p>
 <p>The <a href="running.html#systemd">systemd unit</a> writes a snapshot every 10 seconds and on stop, so a crash or reboot loses at most one snapshot interval of conditioning state.</p>
 <nav class="pager" aria-label="Previous and next page"><a class="prev" href="examples-large.html"><small>Previous</small>Large patchbays</a><a class="next" href="clients.html"><small>Next</small>NATS clients, auth and HTTP</a></nav>
-<p class="docs-foot">MIT licensed · <a href="https://github.com/lexvicacom/monoblok/tree/main/docs" target="_blank" rel="noopener noreferrer">Markdown sources on GitHub</a> · Generated by <code>scripts/site-docs/build.py</code>, so edit the page sources there.</p>
+<p class="docs-foot">MIT licensed · &copy; 2026 <a href="mailto:alex@lexvica.com">Alex Reid</a><br><a href="https://lexvica.com" target="_blank" rel="noopener noreferrer">Lexvica</a> offers solutions built with monoblok.</p>
 </article>
 </main>
 </div>

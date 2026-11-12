@@ -29,15 +29,15 @@ Run `examples/office-temp.sh` to drive enough samples to trip the alert and the 
 
 {tag:Intermediate} The worked example from the [introductory blog post](https://alexjreid.dev/posts/monoblok/): catching over-revs at Peter's Porsche Rentals.
 
-Peter runs a boutique rental outfit with a dozen 911s on the books. Customers pay a lot of money per day and in exchange may enjoy bouncing off the rev limiter for fun. Peter would like to know about that, ideally while the car is still out, so he can have a conversation at handover instead of discovering a trashed engine three services later.
+Peter rents out a dozen Porsche 911s and wants to record sustained high engine speeds while each car is on hire.
 
-A £10 Bluetooth OBD2 dongle plugged into the diagnostic port exposes a firehose of PIDs: RPM, coolant temperature, throttle position, fuel trims, O2 sensor voltages, intake manifold pressure, the lot. A small script on a Raspberry Pi tucked behind the glovebox polls the dongle and publishes each reading to `car.<vin>.<pid>`. Because monoblok compiles for ARM, the broker itself runs on the same Pi. A 5G hat gives it an uplink, so conditioned streams go straight to Peter's reporting system without ever shipping raw PIDs over the cellular link. Conditioning at the edge, analysis in the cloud.
+A script on a Raspberry Pi polls a Bluetooth OBD2 dongle for RPM, coolant temperature and other readings, publishing each to `car.<vin>.<pid>`. monoblok runs on the Pi and forwards processed subjects over a 5G connection to the reporting system.
 
 What Peter wants:
 
-- A clean per-car telemetry stream for the fleet dashboard. RPM, coolant, speed, the usual.
-- An over-rev alert when a car holds the engine above 7500rpm. One brief blip past redline on a downshift is forgivable; ten seconds in the limiter is a phone call.
-- When he opens the dashboard in the morning, the current state of every car on hire, immediately. No "waiting for first reading" spinner.
+- A per-car stream of RPM, coolant temperature and speed for the fleet dashboard.
+- An alert when the moving average of engine speed exceeds 7500rpm.
+- The latest cached readings for each car when the dashboard connects.
 
 RPM updates many times a second and wobbles constantly at a steady throttle. Coolant barely moves once the engine is warm. Publishing all of this unconditioned over a metered 5G connection is wasteful.
 
@@ -53,9 +53,9 @@ car.wp0ab.coolant|90.2
 car.wp0ab.coolant|91.4
 ```
 
-[`quantize 50`](forms.html#idempotent-filters) snaps RPM to 50rpm buckets, so the uplink only carries RPM when it moves into a new bucket, and coolant when it shifts by a degree. Deadband, incidentally, is exactly what most consumer cars already do to their own gauges: the coolant needle on a modern dash sits stubbornly in the middle across roughly 75-105°C of actual sensor reading, and only twitches if things get properly cold or hot.
+[`quantize 50`](forms.html#idempotent-filters) snaps RPM to 50rpm buckets, so the uplink only carries RPM when it moves into a new bucket, and coolant when it shifts by a degree. The coolant rule uses a deadband to suppress changes smaller than one degree.
 
-The over-rev rule is the one Peter cares about. A single sample over 7500 gets averaged with the surrounding values and ignored; twenty samples in a row up there and the rule fires. [`hold-off 5000`](forms.html#time-based-gates) then lets one alert through every five seconds, so a long stretch of redline does not publish once per incoming sample. State is per subject, so each car has its own ring buffer and its own hold-off timer.
+The over-rev rule tests a 20-sample moving average against 7500rpm, reducing sensitivity to brief spikes. [`hold-off 5000`](forms.html#time-based-gates) then lets one alert through every five seconds, so a long stretch of redline does not publish once per incoming sample. State is per subject, so each car has its own ring buffer and its own hold-off timer.
 
 To get a single alert and a single all-clear instead of a repeating alert, swap the last rule for a `transition`, as the [office temperature](#office-temperature) example does:
 
@@ -68,7 +68,7 @@ To get a single alert and a single all-clear instead of a repeating alert, swap 
 
 Peter's backend subscribes to `car.*.*.stable` and `car.*.*.alert` and gets a tidy, low-volume feed it can log, graph or react to without doing its own conditioning. Add `(lvc ["car.>"])` and a dashboard subscribing to `$LVC.car.*.*.stable` receives the last known value for every PID on every car without waiting for the next change. Add an [`export`](bridge.html#export) form listing `car.*.*.stable` and `car.*.*.alert` and only those subjects cross the 5G link to the office NATS cluster.
 
-Once the over-rev alert is sitting on a pub/sub subject instead of buried in a log file, it becomes a hook for anything else you want to hang off it. A subscriber on the Pi can poke the dashcam over the local network the instant the alert lands, with no uplink required. A notification service back at the office picks up the same alert through the export. These are plain subscribers to a clean, meaningful stream; you can add or remove them without touching the car, the Pi or the patchbay rules.
+Local subscribers can react to the same alert, for example by triggering a dashcam over the local network. An office notification service can subscribe through the export. Neither needs changes to the patchbay rules.
 
 ### The same rules in YAML
 

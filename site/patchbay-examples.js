@@ -16,7 +16,7 @@ const patchbayExamples = {
   alert: {
     code: '(on "sensors.*"\n  (transition (> payload-float 28.0)\n    (publish! (subject-append "alert") "hot")\n    (publish! (subject-append "ok") "cool")))',
     title: 'Publish on threshold crossings',
-    description: 'Emit “hot” when the reading crosses above 28. Emit “cool” when it crosses back. Stay quiet in between.',
+    description: 'Publish “hot” when the reading crosses above 28 and “cool” when it crosses back, with no messages between crossings.',
     inputLabel: 'sensors.temp', outputLabel: '.alert / .ok · after an initial reading of 27',
     input: ['29', '30', '29', '27'], output: ['hot', 'cool']
   },
@@ -32,7 +32,7 @@ const patchbayExamples = {
   funnel: {
     code: '(on "sensors.*" :reentrant true\n  (publish! "all.sensors" payload))\n\n(on "all.sensors"\n  (publish! "sensors.average" :dp 1\n    (moving-avg 4 payload-float)))',
     title: 'Funnel many subjects into one',
-    description: 'Route every sensor onto one subject, then average that. Each reading from any sensor updates a single combined stream.',
+    description: 'Route readings from all sensors onto one subject to calculate a combined average.',
     inputLabel: 'sensors.kitchen, sensors.hall · alternating', outputLabel: 'sensors.average',
     input: ['20', '22', '21', '23'], output: ['20.0', '21.0', '21.0', '21.5'],
     live: false

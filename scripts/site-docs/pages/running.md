@@ -25,9 +25,20 @@ sudo bash ./monoblok-*/install-systemd.sh
 sudo systemctl enable --now monoblok
 ```
 
-Release binaries require the OpenSSL 3 runtime libraries. On macOS, install them with `brew install openssl@3` before running monoblok. On Linux, install your distribution's OpenSSL 3 runtime package. Container images include these libraries.
+Release binaries require the system OpenSSL 3 runtime libraries. Install the package for your platform before running monoblok:
+
+| Platform | Command |
+|---|---|
+| [Ubuntu 24.04](https://packages.ubuntu.com/noble/libssl3t64) / [Debian 13](https://packages.debian.org/trixie/libssl3t64) | `sudo apt-get install libssl3t64` |
+| [Ubuntu 22.04](https://packages.ubuntu.com/jammy/libssl3) / [Debian 12](https://packages.debian.org/bookworm/libssl3) | `sudo apt-get install libssl3` |
+| RHEL 9 | `sudo yum install openssl-libs` |
+| macOS | `brew install openssl@3` |
+
+On other Linux releases, install your distribution's OpenSSL 3 runtime package. Container images already include these libraries.
 
 The unpacked directory contains the runnable [examples](examples.html). Run the `.sh` files.
+
+Alternatively, [download the latest release from GitHub](https://github.com/lexvicacom/monoblok/releases/latest) and extract the archive for your platform. This avoids piping the download script into `bash`.
 
 ### Container
 
@@ -95,7 +106,7 @@ cmake --build build --target smoke
 
 {{section docs/overview.md "How fast is it?" level=2}}
 
-The [saved benchmark runs](https://github.com/lexvicacom/monoblok/tree/main/bench-results) span up to 2-18 million msgs/sec across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Treat those numbers as directional samples and trends, not capacity promises.
+The [saved benchmark runs](https://github.com/lexvicacom/monoblok/tree/main/bench-results) record peak rates of 2-18 million messages per second across a 2-core ARM VPS, an 8-core x86_64 VPS, and an Apple Silicon M4 Mac mini for simple publish and fan-out workloads. Capacity depends on hardware, subscriber count and processing rules; benchmark your own workload.
 
 Patchbay overhead scales with matching rules per PUB, not total rules in the file. On Linux the benchmark scripts default to monoblok's opt-in io_uring path to match the saved runs; pass `--epoll` to benchmark the production-default epoll path.
 

@@ -6,11 +6,11 @@ description: What monoblok is, the three ways to run it, and a five-minute first
 
 ## The problem it solves
 
-A car publishes its engine RPM ten times a second. A market data feed ticks on every quote. A cheap temperature sensor posts a fresh reading every two seconds, mostly identical to the last one. Data moves quickly, but most of it is noise: a publisher that does not know what its subscribers care about, and a fleet of subscribers each writing the same defensive code to round, debounce, and ignore the boring readings.
+Sensor and market data feeds often publish more frequently, or at greater precision, than subscribers need. Each subscriber then implements similar rounding, filtering and deduplication logic.
 
-Many systems grow small *caretaker* services to deal with this. Each one subscribes to a raw subject, tidies it and republishes it. They work, but each is another program to write, deploy and keep in step with the others.
+A separate processing service can republish these feeds, but it also needs deployment and maintenance.
 
-monoblok does that work once, before a message reaches any subscriber. The cleanup logic is declared once, as rules, instead of being re-implemented in every consumer:
+monoblok applies patchbay rules before fan-out. For example, this rule rounds sensor readings and suppresses duplicates:
 
 ```edn
 ; Round to 1dp, drop duplicates, emit on the .stable sub-subject.
@@ -41,7 +41,7 @@ monoblok speaks the NATS protocol, so existing clients connect without changes.
 - **Signal conditioning front door.** Publishers send raw events to monoblok, monoblok cleans them, then forwards selected subjects to a NATS cluster. See [export](bridge.html#export).
 - **Standalone broker.** NATS clients connect directly to monoblok for lightweight NATS-core pub/sub with signal conditioning built in.
 
-The front door pattern needs no code changes: publishers PUB to monoblok instead of directly to NATS, using the exact same NATS client. monoblok does the conditioning, then forwards the tidy subjects to your real cluster. Consumers of the processed subjects are none the wiser; they connect to the same production NATS environment as before.
+For the front door pattern, change the publishers' server address to monoblok and configure an export to the cluster. Subscribers continue to connect to the cluster and use the processed subjects.
 
 ## Five-minute start
 
@@ -67,7 +67,7 @@ You can try rules without a server or a NATS client at all. `--soundcheck` reads
 printf 'sensors.temp|31\n' | monoblok --soundcheck examples/sensors.edn
 ```
 
-No install at all: a [public demo server](https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md) runs on `demo.monoblok.host:4222`, and the [live demo](../demo.html) page drives it from the browser.
+A [public demo server](https://github.com/lexvicacom/monoblok/blob/main/docs/demo.md) runs on `demo.monoblok.host:4222`, and the [live demo](../demo.html) page connects to it without a local install.
 
 ## Where to go next
 
@@ -82,15 +82,13 @@ No install at all: a [public demo server](https://github.com/lexvicacom/monoblok
 
 ## Why put this at the broker
 
-The conventional logic is "broker moves bytes, application does logic." That is fine and largely correct, but there is a category of logic, signal conditioning, that you could argue belongs at the broker. It is stateless from the application's point of view, it is the same boring code reimplemented in every consumer, and it benefits enormously from being applied once, centrally, before fan-out.
+Processing before fan-out avoids repeating the same operations in every subscriber. A patchbay rule can round temperatures, suppress GPS jitter or filter price changes, and publish the result on a subject shared by all consumers.
 
-Putting a small DSL at the broker for this kind of work is a nice middle ground. It is not trying to be Flink, Beam or Kafka Streams. It is a few primitives, declared once, that turn raw sensor noise into something useful before it ever leaves the broker. The last-value cache then makes late-joining subscribers a non-event, which is the other thing every realtime app ends up reinventing.
-
-Swap office temperature sensors for market data ticks where you want to deadband out the noise and only emit on meaningful moves, fleet telemetry from a few thousand vehicles where most of the GPS jitter is uninteresting, IoT estates with flaky sensors that need smoothing before anyone trusts the readings, or dashboards where late-joining clients should not have to wait for the next event to see current state. Same primitives, different domains.
+The last-value cache serves a different purpose: a new subscriber can receive the most recent value immediately rather than waiting for the next event. See [LVC, stats and snapshots](state.html) for cache configuration and restart behaviour.
 
 ## When it is not the right tool
 
-monoblok is a core NATS server with rules, not a replacement for a cluster. It has no JetStream storage, no clustering and no message headers on its own listener. It can read from JetStream consumers and forward subjects to a real NATS cluster, which is how the two are meant to be paired.
+monoblok is a core NATS server with rules, not a replacement for a cluster. It has no JetStream storage, no clustering and no message headers on its own listener. It can consume JetStream messages and forward selected subjects to a NATS cluster.
 
 If plain publish and subscribe is all you need, nats-server is the better choice.
 

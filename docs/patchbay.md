@@ -10,18 +10,17 @@ common scenarios live in [`examples/`](../examples/).
 
 ## S-expression syntax in 30 seconds
 
-If the parens look alien: every list `(head arg1 arg2 ...)` is a call
-where `head` is the operator and the rest are its arguments. No commas,
-no infix, no precedence to memorise; `(+ 1 2 3)` is `1 + 2 + 3` and
-`(> x 10)` is `x > 10`. Nesting is just a list inside a list:
+Every list `(head arg1 arg2 ...)` is a call
+where `head` is the operator and the rest are its arguments. Operators
+precede their arguments, without commas or infix notation; `(+ 1 2 3)` is `1 + 2 + 3` and
+`(> x 10)` is `x > 10`. Calls can be nested:
 `(publish! (subject-append "high") payload)` calls `publish!` with two
 args, the first of which is itself the result of calling
 `subject-append`. Strings are double-quoted, numbers bare, and
 everything else (`subject`, `payload`, `when`, `+`) is a symbol
 resolved by the evaluator.
 
-That's the whole grammar. The rest of this doc is just which
-operators exist and what they do.
+The following sections describe the available operators.
 
 ### JSON patchbay files
 
@@ -37,7 +36,7 @@ matching, paren coloring, and Parinfer-style editing. In Emacs,
 tree-sitter option. Parinfer, paredit, and smartparens are all good ways
 to make S-expressions feel less manual.
 
-JSON is read into the same patchbay AST, not a separate DSL: arrays are
+The JSON spelling is not a separate DSL: arrays are
 forms and the first array item is always the operator symbol. In
 argument positions, plain objects become keyword options, and strings
 with a leading `$` (`"$subject"`, `"$payload"`, `"$payload-float"`,
@@ -78,7 +77,7 @@ literal vector (the old `{"vec":[...]}` key is a load error). See
 ### YAML sugar files
 
 Files ending in `.yml` or `.yaml` use a deliberately small patchbay
-YAML subset. It is also lowered directly into the same patchbay AST:
+YAML subset. The loader builds patchbay forms directly:
 YAML never evaluates and no EDN/JSON text is generated internally.
 Supported shapes are block maps/lists, flow arrays for call forms,
 quoted or unquoted scalars, numbers, booleans, nulls, top-level `on`,
@@ -96,7 +95,7 @@ on:
       - [publish!, [subject-append, "stable"], dp, 1]
 ```
 
-That lowers to the same AST as:
+The EDN equivalent:
 
 ```edn
 (on "car.*.rpm"
@@ -256,7 +255,7 @@ messages do not carry these replay headers.
 During JetStream catch-up, rules see `replaying?` as true. After the listener
 opens, `replaying?` is false. Rules that do not mention `replaying?` produce
 the same subjects during replay and live operation; rules that want to suppress
-or redirect historical output should gate that behavior explicitly. See
+or redirect historical output should gate that behaviour explicitly. See
 [`examples/jetstream.yml`](../examples/jetstream.yml) and
 [`examples/jetstream.sh`](../examples/jetstream.sh) for a runnable example that
 starts JetStream on `JS_PORT` (default `15889`), exports `JS_URL`, populates
@@ -341,7 +340,7 @@ on an empty payload are type errors, and so is `payload-bool`.
 
 Evaluate their arguments lazily / with short-circuiting.
 
-| form                        | behavior                                                     |
+| form                        | behaviour                                                     |
 |-----------------------------|--------------------------------------------------------------|
 | `(if C T E?)`               | `T` if `C` is truthy, else `E` (or `nil` if omitted)         |
 | `(when C BODY...)`          | evaluate `BODY` sequentially iff `C` is truthy               |
@@ -585,7 +584,7 @@ never share a slot. It is also per subject, so `sensors.*` keeps one
 slot for every concrete subject it has seen. To combine several
 subjects into one slot, see "Funnel" below.
 
-| form                  | behavior                                                                       |
+| form                  | behaviour                                                                       |
 |-----------------------|--------------------------------------------------------------------------------|
 | `(round N X)`         | round number `X` to `N` decimal places (pure)                                  |
 | `(quantize STEP X)`   | snap `X` to the nearest multiple of `STEP` (pure)                              |
@@ -631,7 +630,7 @@ when the upstream is chatty at a faster cadence than downstream
 consumers want, and you don't care which of the suppressed samples you
 drop.
 
-| form                 | behavior                                                                     |
+| form                 | behaviour                                                                     |
 |----------------------|------------------------------------------------------------------------------|
 | `(hold-off MS X)`    | pass `X` through on first sight, then suppress further `X` for `MS` ms       |
 
@@ -831,7 +830,7 @@ store per-slot deadlines driven by the server's single rescheduled
 patchbay timer, so they can publish after time passes even if the feed
 goes quiet.
 
-| form                                  | behavior                                      |
+| form                                  | behaviour                                      |
 |---------------------------------------|-----------------------------------------------|
 | `(on-silence :ms N BODY...)`          | evaluate BODY if no matching PUB arrives for N ms |
 | `(dropout :ms N :lost LOST :found FOUND)` | silence runs LOST once; next match runs FOUND once |
@@ -1033,9 +1032,8 @@ skips it silently rather than emitting an error. Numbers come out
 canonically formatted, strings are unquoted, booleans render as `true` /
 `false`.
 
-Both ops are arity-flexible at the **value-last** end (`PAYLOAD` is the
-last argument), matching the rest of the dialect, so you can just as
-easily write the threaded form `(-> payload (json-get "temp") ...)`.
+Both JSON forms take `PAYLOAD` as their last argument, so they can be
+used in a pipeline: `(-> payload (json-get "temp") ...)`.
 
 ## Bars
 

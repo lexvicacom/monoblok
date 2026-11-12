@@ -1,0 +1,47 @@
+;; De-identify patient telemetry before it leaves the ward network.
+;;
+;; A bedside gateway publishes one JSON frame per reading on
+;; ward.<ward>.<patient>:
+;;   {"name":"Ada Example","mrn":"000-11-2222","age":47,"hr":72,"spo2":97}
+;; and nurses' free-text notes on notes.<ward>.
+;;
+;; Patchbay has no hashing or in-place masking form, so nothing here
+;; scrambles a value. The rules de-identify by leaving things out: they
+;; name the fields that may leave, coarsen the ones that identify, and
+;; drop the patient token from the subject. Anything not named stays
+;; behind, including fields added to the frame later.
+;;
+;; Only `clean.>` and `phi.>` are meant to leave this box. Pair the file
+;; with (export :export ["clean.>" "phi.>"]) or an (import ...) tap.
+
+;; Allow-list. Pull the clinical fields out by name and publish them
+;; under the ward only: ward.icu.p4471 becomes clean.icu.hr. name and
+;; mrn are never read, so they are never forwarded.
+(on "ward.*.*" :reentrant true
+  (do
+    (-> payload (json-get "hr")   (publish! (str-concat "clean." (subject-token 1) ".hr")))
+    (-> payload (json-get "spo2") (publish! (str-concat "clean." (subject-token 1) ".spo2")))))
+
+;; Generalise. An exact age narrows a small ward down to one person, so
+;; forward it snapped to the nearest ten.
+(on "ward.*.*"
+  (-> payload
+      (json-get "age")
+      (quantize 10)
+      (publish! (str-concat "clean." (subject-token 1) ".age-band"))))
+
+;; Aggregate. The ward-level heart rate is the mean of the last 20
+;; readings across every patient on that ward (the funnel pattern: the
+;; first rule is re-entrant, so its output feeds this one).
+(on "clean.*.hr"
+  (publish! (subject-append "avg") :dp 0 (moving-avg 20 payload-float)))
+
+;; Tripwire. Free text cannot be allow-listed field by field, so hold
+;; any note that mentions an identifier label. The hold message carries
+;; the subject, never the note itself.
+(on "notes.*"
+  (if (or (contains? payload "MRN")
+          (contains? payload "DOB")
+          (contains? payload "NHS"))
+    (publish! "phi.held" subject)
+    (publish! (str-concat "clean.notes." (subject-token 1)) payload)))

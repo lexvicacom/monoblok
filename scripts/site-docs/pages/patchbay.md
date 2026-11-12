@@ -27,7 +27,9 @@ The first rule copies any reading above 30 to `sensors.<name>.high`. The second 
 
 The vocabulary is borrowed from electronics (`squelch` suppresses until the value changes, `deadband` ignores movement smaller than a threshold) because the names already mean the right thing. A "patchbay" in a studio is a grid of jacks you wire between sources and destinations, which is exactly what the DSL looks like on the page.
 
-{{section docs/patchbay.md "S-expression syntax in 30 seconds" level=2}}
+## S-expression syntax in 30 seconds
+
+{{between docs/patchbay.md "Every list `(head arg1 arg2 ...)`" "resolved by the evaluator."}}
 
 ## The shape of a patchbay file
 
@@ -55,7 +57,7 @@ Forms fall into a few families, and most rules are a short chain drawn from them
 | JSON | `json-get`, `json-demux!` | read fields out of JSON payloads |
 | effects | `publish!`, `reply!`, `count!`, `bar!`, `print!` | put bytes on the wire (the `!` forms) |
 
-Scan a rule and the bangs are the lines that publish; everything else is pure or value-returning.
+The `!` suffix identifies effectful forms, including publishing and debug output.
 
 ## Pipelines
 
@@ -97,7 +99,7 @@ Mark a rule `:reentrant true` and its emissions are matched against the other ru
       (publish! (subject-append "stable"))))
 ```
 
-A rule that emits a subject which matches itself is a feedback loop: howl, except in subject-space. Re-entry is capped at depth 8, long enough for any reasonable staged pipeline (demux, condition, mirror, alert is 3 or 4) and short enough that a misconfigured rule terminates, with a warning, almost immediately. See [Re-entry](forms.html#re-entry).
+A rule can trigger itself if its output subject matches its own filter. Re-entry is capped at depth 8; reaching the limit stops further evaluation and logs a warning. See [Re-entry](forms.html#re-entry).
 
 ## File formats
 
@@ -159,4 +161,4 @@ nats sub '$STATS.>'
 
 {{section docs/overview.md "Coding assistants" level=2}}
 
-Two generated patchbays of this kind are walked through in [Large patchbays](examples-large.html).
+[Writing patchbays with an agent](agents.html) has a worked example and a review checklist. Two generated patchbays of this kind are walked through in [Large patchbays](examples-large.html).

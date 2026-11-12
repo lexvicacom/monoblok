@@ -25,6 +25,10 @@ memory file. For one-off use, reference `docs/AGENTS_PATCHBAY.md` in
 the prompt and ask the model to follow it while editing `.edn` or `.yml`
 patchbay files.
 
+Scrutinise every line of a generated patchbay before running it anywhere
+that matters. A file that passes `--validate` is well-formed, not correct,
+and a `--soundcheck` transcript only covers the rows that were fed in.
+
 Agent guidance
 ---
 
@@ -64,9 +68,10 @@ In full monoblok there are also top-level config forms: `(lvc ["filter"
 ...])` opts matching subjects into `$LVC.*` last-value streams, and optional
 `(export ...)` forwards local publishes to a remote NATS cluster. Deprecated
 `(bridge ...)` is accepted as a compatibility alias. Optional
-`(import ...)` subscribes to a remote NATS cluster and feeds matching messages
-into patchbay as private ingress. Imported raw subjects are not visible to
-direct monoblok subscribers unless a rule republishes them explicitly.
+`(import ...)` subscribes to a remote NATS cluster (core subjects, JetStream
+durable consumers, or both) and feeds matching messages into patchbay as
+private ingress. Imported raw subjects are not visible to direct monoblok
+subscribers unless a rule republishes them explicitly.
 
 ## Target runtime: monoblok vs Tinyblok
 
@@ -90,8 +95,9 @@ forms. This subset works for both runtimes unless a local build disables a form.
 Alert the user before using or recommending full monoblok-only features for a
 Tinyblok file. This includes top-level `(every ...)`, `(lvc ...)` and `(export ...)`,
 `hysteresis`, `ewma`, `last`, the funnel pattern, monoblok's `reply!` (see
-"Request-reply" below; Tinyblok's `reply!` is different), daemon
-or `(import ...)`, daemon flags such as `--snapshot`, runtime patch/config
+"Request-reply" below; Tinyblok's `reply!` is different),
+`(import ...)` and JetStream ingress, `replaying?`, daemon flags such as
+`--snapshot`, runtime patch/config
 loading, dynamic graph edits, server-side subscriptions beyond Tinyblok's fixed
 request subjects, inbound/outbound bridges, LVC/snapshot policy, and
 fleet-management behavior. Tinyblok's vendored core can parse `lvc` and
@@ -182,7 +188,11 @@ comparison. The compact schema is:
   `ping-interval-ms`, `max-reconnect`, `reconnect-wait-ms`, and `export`.
   `bridge` has the same shape but is deprecated.
 - `import` is a config map with the connection fields above plus `subject` /
-  `subjects`, `origin-header`, and `max-pending`.
+  `subjects`, `origin-header`, and `max-pending`. That flat shape is one core
+  NATS import. The nested shape uses `core:` and/or `streams:`, each a list of
+  entry maps with their own connection fields; `streams` entries add `stream`,
+  `consumer`, and optional `catch-up` (default true) and take one subject
+  filter each.
 - In top-level config string positions, `env: "NAME"` lowers to `(env "NAME")`.
   Do not use it inside rule bodies.
 - `on` is a list of rule maps. Each rule requires `sub`, may include
@@ -200,8 +210,10 @@ comparison. The compact schema is:
   YAML indicators must be quoted: `[">", $payload-float, 80]`, `["*", a, b]`,
   `["->", ...]`. `[vector, 1, 2, 3]` is a literal vector.
 - `$name` is a bound value: `$subject`, `$payload`, `$payload-float`,
-  `$payload-int`, `$payload-bool`, `$replaying?`, `$reply-to`. Bare `payload`
-  without the `$` is a load error.
+  `$payload-int`, `$payload-bool`, `$replaying`, `$reply-to`. Write
+  `$replaying` in YAML (it lowers to `replaying?`); `$replaying?` is still
+  accepted by monoblok but older standard YAML parsers reject it inside flow
+  arrays. Bare `payload` without the `$` is a load error.
 - A bare word that is an option (`ms`, `dp`, `subject`, `lost`, `found`, `leaf`,
   `date`, `hour`, `minute`, `avg`, `sum`, `min`, `max`, `count`, `rate`,
   `reentrant`) lowers to the keyword (`:ms`). Never write the colon form.
@@ -230,7 +242,7 @@ every:
 ```
 
 JSON patchbays follow the same ideas: arrays are call forms, bound values are
-strings with a leading `$` (`"$payload"`, `"$payload-float"`), and vector data
+strings with a leading `$` (`"$payload"`, `"$payload-float"`, `"$replaying?"`), and vector data
 is `{"vector": [...]}`. A plain `"payload"` string in JSON is just text, not an
 error, so always write `"$payload"`. Do not use `{"vec": [...]}`.
 
@@ -246,7 +258,9 @@ rows.
 - `payload-bool` (`true`/`1`/`on` is true, `false`/`0`/`off` is false, ASCII
   case-insensitive; anything else is a type error)
 - `reply-to` (the request's reply subject, or nil when the message had none)
-- `replaying?` (true during JetStream catch-up)
+- `replaying?` (true while JetStream catch-up is evaluating historical
+  messages, false once the listener is open and for every non-JetStream
+  message)
 
 An empty payload is not the number 0: `payload-float`, `payload-int`, and
 `payload-bool` on an empty payload are type errors. Unknown forms and unknown
@@ -361,6 +375,65 @@ Per group, build the funnel subject from a token and match it with a wildcard:
 (on "group.*"
   (publish! (subject-append "average") :dp 1 (moving-avg 8 payload-float)))
 ```
+
+## Gating: deciding what is forwarded
+
+A rule can be a gate instead of a transform: publish the message onward under
+a different prefix only when it passes, and publish a verdict elsewhere when it
+does not. The gate is only real when the raw subjects have no other way out,
+so pair it with `(export :export ["clean.>" ...])` (publishers connect to
+monoblok, only the clean prefix reaches the cluster) or with `(import ...)`
+(raw input is private). Rules see subject and payload only, never which
+connection published, so every decision is per subject, not per client.
+
+```edn
+; Payload scan. Report the subject, not the offending payload.
+(on "in.event.*"
+  (if (or (contains? payload "<script") (contains? payload "DROP TABLE"))
+    (publish! "waf.blocked" subject)
+    (publish! (str-concat "clean.event." (subject-token 2)) payload)))
+
+; Outlier gate: forward only values at or below the rolling p99.
+(on "in.reading.*"
+  (when (<= payload-float (percentile 100 0.99 payload-float))
+    (publish! (str-concat "clean.reading." (subject-token 2)) payload)))
+
+; Flood verdict: one "block" on the way up, one "clear" on the way down.
+(on "in.*.*"
+  (transition (> (rate :ms 5000 payload) 2)
+    (publish! (str-concat "waf.flood." subject) "block")
+    (publish! (str-concat "waf.flood." subject) "clear")))
+
+; De-identify by allow-list: name the fields that may leave and drop the
+; identifying subject token. Fields that are not named are never forwarded.
+(on "ward.*.*"
+  (-> payload (json-get "hr") (publish! (str-concat "clean." (subject-token 1) ".hr"))))
+```
+
+Things to tell the user when you write gates like these:
+
+- The percentile window includes the current sample, so a value that sets a
+  new window maximum is always held back (about 1 in 100 on a steady stream,
+  every message on a stream that only climbs), and held-back samples still
+  count towards later percentiles. Add a fixed ceiling with `and` when there
+  is a hard limit.
+- `transition` only runs when a message arrives, so the "clear" is published
+  on the first message after the rate has dropped, not when the window empties.
+  The verdict does not stop the traffic; use `throttle` in the forwarding
+  thread to cap it.
+- `contains?` is a case-sensitive substring test with no decoding.
+- Prefer an allow-list of fields over hunting for bad values: it needs no
+  pattern matching and fails closed when a new field appears.
+
+## Forms that do not exist
+
+Patchbay has no regular expressions, no string replace, substring, split,
+upper/lower or length, no hashing, tokenising or masking, no JSON
+construction or field deletion, no arrays or JSON paths deeper than four
+tokens, no variables, `let`, user-defined functions, macros or quote, and no
+state shared across subjects. Do not invent a form to fill one of these gaps:
+an unknown form is a load error. Say what cannot be expressed and suggest
+doing it upstream (in the publisher or gateway) or downstream instead.
 
 ## Last values and the nil-safe idiom
 
@@ -515,7 +588,34 @@ Imported messages run through `(on ...)` rules but are not routed to local
 subscribers as raw publishes; only explicit rule outputs become visible.
 `:origin-header true` ignores remote messages that carry monoblok's
 `x-monoblok` header. `:max-pending` bounds the NATS-to-loop queue; default is
-4096 messages.
+4096 messages. `:subjects` is accepted as an alias for `:subject`. Import
+counters are published as `$STATS.import.received`, `.processed`, `.dropped`,
+and `.failed`.
+
+The flat shape above is one core NATS import. The nested shape scopes several
+sources, each entry a vector with its own connection keywords:
+
+```edn
+(import
+  :core    [[:servers ["nats://a.example:4222"] :subject ["raw.>"]]]
+  :streams [[:servers ["nats://a.example:4222"]
+             :subject  "sensors.>"
+             :stream   "SENSORS"
+             :consumer "monoblok-sensors"
+             :catch-up true]])
+```
+
+`:streams` entries consume JetStream durable pull consumers. Each entry takes
+one subject filter plus `:stream` and `:consumer` (both required) and optional
+`:catch-up` (default true). monoblok is a JetStream consumer only, never a
+JetStream server. With catch-up on, the stream is replayed up to its startup
+high-water before the local listener opens, using each message's JetStream
+timestamp as the clock, so `:ms` windows and time bars close on event time.
+During that phase rules see `replaying?` as true; afterwards the same consumer
+continues live with `replaying?` false. A rule that should not act on history
+(alerts, notifications) guards itself with `(when (not replaying?) ...)`. A
+message is acked only after its rules and downstream publishes succeed, so a
+failing rule causes redelivery.
 
 ## Worked examples
 
@@ -603,12 +703,19 @@ subscribers as raw publishes; only explicit rule outputs become visible.
 
 ## Cheap validation
 
-When you can run local commands, validate patchbay edits before handing
-them back:
+When you can run local commands, run both of these on every patchbay you
+write or edit before handing it back. Do not report a patchbay as working on
+the strength of reading it.
 
 ```sh
 monoblok --validate patchbay.edn
+printf 'sensors.temp|31\nsensors.temp|32\n' | monoblok --soundcheck --soundcheck-label --soundcheck-linger-ms 0 patchbay.edn
 ```
+
+Use `./build/monoblok` inside the monoblok repo. If you cannot run commands,
+say so and give the user these two lines to run themselves. Show the user the
+soundcheck transcript, and state any threshold, window, or subject name you
+assumed instead of taking it from their request, so they can review each line.
 
 `--validate` form-lints the file and exits without opening a NATS
 socket. It catches parse errors, invalid subjects, arity/type mistakes,
@@ -623,9 +730,28 @@ printf 'sensors.temp|31\n' | monoblok --soundcheck patchbay.edn
 printf 'sensors.temp|31\n' | monoblok --soundcheck --soundcheck-label patchbay.edn
 ```
 
-Use `--soundcheck` when you need cheap confidence that a real input
-subject matches the intended rules and produces the expected derived
-subjects/payloads.
+With `--soundcheck-label` every output row is prefixed `in|` or `out|`, so
+an input row with no `out|` row after it produced nothing. Feed at least one
+row per rule, on a concrete subject that the rule's filter matches, and
+include rows that should be suppressed as well as rows that should pass.
+
+Things that behave differently under `--soundcheck`:
+
+- Clock and window state lingers after EOF (10 seconds by default) so
+  delayed forms (`debounce!`, `on-silence`, `aggregate!`, time bars) and
+  `every` bodies can fire. `--soundcheck-linger-ms 0` exits at EOF, so none
+  of those emit; use it for rules with no clocked forms, and set the linger
+  just above the longest `:ms` when you need to see a delayed emit.
+- All rows arrive within the same few milliseconds, so `:ms` windows see one
+  burst: `rate` reads high and `hold-off` / `throttle` suppress everything
+  after their first passes. Check wall-clock behaviour against a running
+  server.
+- `:reentrant true` publishes are followed as on the server, and `last`
+  reads a table that honours the file's `(lvc ...)` filters.
+- `reply-to` is always nil, so `reply!` publishes nothing. Check request-reply
+  against a running server with `nats req`.
+- Negative payloads are fine in rows (`sensors.temp|-5`). With `nats pub`,
+  pass them after `--`: `nats pub sensors.temp -- -5`.
 
 For Tinyblok/Patchbay Lite, prefer the firmware repo's `make soundcheck` or
 `make test` because they build the host validator against the vendored
@@ -766,3 +892,5 @@ Before returning a patchbay file, verify:
 5. Pipelines built with `->` end in a side-effecting form (`publish!`); a pipeline that ends in a pure value is dead code.
 6. Tinyblok `(pump ...)` and `(fn ...)` declarations name registered native symbols, and `on-req` handlers reply with `reply!` rather than assuming arbitrary runtime subscriptions.
 7. Comments start with `;` and never leak prose outside them.
+8. Every form you used is in this document. If the request needs something from "Forms that do not exist", say so instead of inventing a form.
+9. You ran `monoblok --validate` and a `--soundcheck` with at least one row per rule (see "Cheap validation"), or told the user that you could not and gave them the commands.

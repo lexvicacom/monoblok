@@ -2,16 +2,16 @@ description: The last-value cache for late joiners, live $STATS counters, and sn
 
 # LVC, stats and snapshots
 
-{lede} Three pieces of server state sit beside the rules: a last-value cache that makes late-joining subscribers a non-event, live counters for every rule, and snapshots that carry both across a restart.
+{lede} The last-value cache supplies recent values to new subscribers, live counters report rule activity, and snapshots preserve cached values and patchbay state across restarts.
 
 {{section docs/overview.md "`$LVC.*`: last-value-cache stream" level=2}}
 
 ### Why it matters
 
-A dashboard that opens in the morning wants the current state of everything, immediately, with no "waiting for first reading" spinner. A logger that restarts wants to know where things stood. Subscribe to `$LVC.car.*.*.stable` and you receive the last known value for every matching subject, then the live stream. No JetStream, no external KV store: the broker remembers the last thing it saw.
+Subscribe to `$LVC.car.*.*.stable` to receive the last cached value for each matching subject, followed by live updates. This lets a dashboard display recent readings even when no new messages are arriving.
 
 ```sh
-# Publish a value, then walk away.
+# Publish a value before subscribing.
 nats pub sensors.temp 23.5
 
 # Later, subscribe.
@@ -21,7 +21,7 @@ nats sub '$LVC.sensors.temp'
 
 Single-quote any subject starting with `$` so your shell does not try to expand it.
 
-The cache pairs particularly well with conditioning rules. A rule's own publishes are cached too, so a subscriber to `$LVC.sensors.temp.stable` gets the most recent rule-produced value on connect, not the raw input. A dedupe rule is what makes that cached value useful: without `squelch`, the cache would hold whatever noisy reprint happened to land last.
+Rule output is cached when its subject matches an LVC filter. A subscriber to `$LVC.sensors.temp.stable` therefore receives the latest processed value on connection.
 
 ### Reading the cache from a rule
 

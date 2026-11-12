@@ -2,7 +2,7 @@ description: Market data patchbays: a price ticker, OHLC bars, and a multi-asset
 
 # Market data
 
-{lede} High-frequency market data is a poster case for monoblok: data moves fast, most of the movement is not worth a downstream message, and every subscriber would otherwise re-implement the same rounding, dedupe and demux logic.
+{lede} These examples process market data using rounding, deduplication, JSON field extraction and OHLC bars.
 
 ## Price ticker
 
@@ -33,7 +33,7 @@ examples/bars.sh
 
 ## A market data firehose
 
-{tag:Advanced} Imagine your data provider gives you a stream of JSON frames that carry several fields per message, and every downstream subscriber re-implements the same demux, round, dedupe and alert logic. At scale, doing this n times causes read/write amplification and much wasted work, not to mention subtle bugs. Doing it once at the broker means subscribers can use subject filtering to pick the slice they actually need and ignore the rest.
+{tag:Advanced} This example splits JSON market data frames into scalar subjects, then applies price filters and alert rules. Subscribers select the fields they need by subject.
 
 The [`json-massive`](https://github.com/lexvicacom/monoblok/tree/main/examples/json-massive) example simulates a Massive-shape websocket feed (stocks, options, crypto, forex). It has two pieces: `mock_producer.js`, a synthetic producer that speaks the NATS protocol over a plain socket and publishes frames on subjects shaped `<ev>.<symbol>`, and `massive.edn`, the patchbay below. There is more background in the [blog post](https://alexjreid.dev/posts/monoblok-massive/).
 
@@ -43,7 +43,7 @@ For stock trades the whole conditioning layer is three rules, each feeding the n
 2. A rule on the demuxed `T.*.p` rounds to 2dp, drops duplicates and mirrors to `T.<SYM>.p.stable`.
 3. A second rule on `T.*.p` alerts on a jump of 1.00 or more between consecutive ticks on the same symbol.
 
-Rule 2 matches `T.*.p`, a subject that only exists because rule 1 emitted it. That works because rule 1 is marked [`:reentrant true`](forms.html#re-entry). Options come along free (the `T.*` wildcard matches `T.O:AAPL250620C00200000` too), and crypto and FX repeat the pattern with their own thresholds.
+Rule 2 matches `T.*.p`, a subject that only exists because rule 1 emitted it. That works because rule 1 is marked [`:reentrant true`](forms.html#re-entry). The same wildcard also matches options (`T.O:AAPL250620C00200000`), and crypto and FX repeat the pattern with their own thresholds.
 
 {{include examples/json-massive/massive.edn}}
 
@@ -59,7 +59,7 @@ XT.BTC-USD|{"p":64700,"s":0.2}
 
 The second AAPL trade rounds to the same 187.42, so the stable mirror stays quiet. The third moves 1.526 and raises `alerts.trade.AAPL`. The second BTC trade is a 1.08% move and raises `alerts.crypto.BTC-USD`.
 
-A subscriber that only cares about price changes subscribes to `T.*.p.stable` and gets a clean, per-symbol stream of rounded floats. No JSON parsing, and no need for every consumer to chew through the firehose and repeat the same logic.
+A subscriber to `T.*.p.stable` receives rounded prices by symbol without parsing the original JSON frames.
 
 ### Run it
 
@@ -89,7 +89,7 @@ A dashboard opening on Sunday afternoon wants to render the last print for every
 (lvc ["T.*.p.stable"])
 ```
 
-Subscribe to `$LVC.T.*.p.stable` and the broker hands back the most recent rounded price for every symbol it has seen, then nothing else until trading resumes. The same subscribe works for a logger restarting mid-session, or a tool that wants the last print on a thinly-traded name where ticks arrive minutes apart. The dedupe rule is what makes the `.stable` cache useful: without `squelch`, the cached value would be whatever noisy reprint happened to land last, not the last meaningful price.
+Subscribe to `$LVC.T.*.p.stable` and the broker hands back the most recent rounded price for every symbol it has seen, then nothing else until trading resumes. The same subscribe works for a logger restarting mid-session, or a tool that wants the last print on a thinly-traded name where ticks arrive minutes apart. The cache stores the latest rounded price; `squelch` suppresses repeated publications of that value.
 
 ### Already-aggregated channels
 
@@ -97,7 +97,7 @@ The `AM` / `XA` / `CA` channels deliver server-side OHLC bars on delayed feeds, 
 
 ### Bridging to NATS
 
-Subscribers can hook up directly to monoblok. Most of the time, though, you already have a NATS cluster doing the heavy lifting for the rest of the system, and you want the conditioned market data to land there too. Add an [`export`](bridge.html#export) form pointing at `T.*.p.stable` and JetStream on the far side stores the deduplicated, rounded prices, not the raw firehose:
+Subscribers can connect directly to monoblok, or receive processed market data through an existing NATS cluster. Add an [`export`](bridge.html#export) form pointing at `T.*.p.stable` and JetStream on the far side stores the deduplicated, rounded prices, not the raw firehose:
 
 ```edn
 (export
@@ -106,7 +106,7 @@ Subscribers can hook up directly to monoblok. Most of the time, though, you alre
   :export  ["T.*.p.stable" "alerts.>"])
 ```
 
-Less write amplification, less retained noise, and only the precision a consumer needs. Replays are smaller and faster, and consumers reading from the stream get the same shape of data as live subscribers on the broker, so a backfill and a live tail stitch together cleanly. The raw frames stay on the monoblok side for anyone who wants them.
+A remote stream configured for these subjects stores rounded prices and alerts. Replayed messages have the same payload format as live output. Raw frames remain available to local subscribers.
 
 ## Budgeting bar state
 

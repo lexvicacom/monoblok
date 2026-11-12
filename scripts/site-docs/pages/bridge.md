@@ -4,9 +4,9 @@ description: Forward conditioned subjects to a real NATS cluster, tap remote sub
 
 {lede} monoblok is meant to be paired with a real NATS cluster. `export` forwards chosen subjects out, `import` feeds remote subjects in as rule input, and JetStream import replays history before going live.
 
-Sensors publish to a local monoblok, patchbay rules do the conditioning, and only the tidy subjects of interest are forwarded to a remote NATS cluster. The subjects remain in the local monoblok for local subscribers. An edge monoblok can therefore do its conditioning work locally and send only the meaningful subjects on to a production NATS deployment.
+For example, sensors can publish to a local monoblok that rounds and filters readings before forwarding selected subjects to a remote NATS cluster. Local subscribers can also receive the processed output.
 
-Both directions connect through vendored [nats.c](https://github.com/nats-io/nats.c), so TLS and `.creds` files are supported and reconnects are handled for you. Leaving the forms out makes the runtime cost zero. Runnable versions of everything here are in [NATS integration examples](examples-nats.html).
+Both directions connect through vendored [nats.c](https://github.com/nats-io/nats.c), so TLS and `.creds` files are supported and nats.c handles reconnects. Leaving the forms out makes the runtime cost zero. Runnable versions of everything here are in [NATS integration examples](examples-nats.html).
 
 ## Export
 
@@ -25,7 +25,7 @@ Zero or one `(export ...)` form in the patchbay file configures the outbound for
 
 {{between docs/overview.md "A local publish (from a NATS client or a patchbay rule)" "Reconnects are handled inside nats.c."}}
 
-It is export-only: remote replies are not routed back. A good export list names the conditioned subjects, not the raw ones. Point it at `T.*.p.stable` and a JetStream stream on the far side stores deduplicated, rounded prices instead of the raw firehose: less write amplification, less retained noise, and smaller, faster replays.
+Export does not route remote replies back. To store processed prices in a remote JetStream stream, include `T.*.p.stable` in the export filters and configure the stream to capture that subject. Raw prices remain local unless exported separately.
 
 {{section docs/patchbay-cheatsheet.md "Export keywords" level=3}}
 

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Writing patchbays with an agent | monoblok docs</title>
+<meta name="description" content="Use a coding agent such as Claude Code or Codex to write patchbay files: load the patchbay instructions, describe the streams, then check the result.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=4a4ab3648084">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · Writing with an agent</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li><li><a href="agents.html" aria-current="page">Writing with an agent</a><ul class="toc"><li><a href="#load-the-instructions">Load the instructions</a></li><li><a href="#what-to-ask-for">What to ask for</a></li><li><a href="#a-worked-example">A worked example</a></li><li><a href="#read-every-line">Read every line</a></li><li><a href="#going-further">Going further</a></li></ul></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-waf.html">Filtering and privacy</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Patchbay</p>
+<h1>Writing patchbays with an agent</h1>
+<p class="lede">Patchbay is small enough to fit in a coding agent's context. Give the agent the patchbay instructions, describe the stream you have and the stream you want, and it can write the rules, validate them and show you what they do with sample messages.</p>
+<h2 id="load-the-instructions">Load the instructions<a class="anchor" href="#load-the-instructions" aria-label="Link to this section">#</a></h2>
+<p><a href="https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md" target="_blank" rel="noopener noreferrer"><code>docs/AGENTS_PATCHBAY.md</code></a> is a self-contained description of the language written for agents: every form, the YAML and JSON spellings, the idioms to prefer, the forms that do not exist, and the commands to check a file. It does not assume the agent has seen the monoblok repository. Without it, an agent will guess at Clojure and invent forms that fail to load.</p>
+<p>Put it where your agent reads project instructions. Run this in the directory where you want the agent to work:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code><span class="tok-com"># Codex and other agents that read AGENTS.md</span>
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md &gt;&gt; ./AGENTS.md
+
+<span class="tok-com"># Claude Code</span>
+curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md &gt;&gt; ./CLAUDE.md</code></pre></figure>
+<p>For other tools, paste or reference the file in the equivalent place: Cursor rules, Aider conventions or a ChatGPT project. For a one-off, save the file next to your patchbay and name it in the prompt: "Follow AGENTS_PATCHBAY.md while editing patchbay.edn."</p>
+<p>Install monoblok on the same machine (<a href="running.html">Install and run</a>). The instructions tell the agent to run <code>monoblok --validate</code> and <code>monoblok --soundcheck</code> on what it writes, and it can only do that if the binary is on the path.</p>
+<h2 id="what-to-ask-for">What to ask for<a class="anchor" href="#what-to-ask-for" aria-label="Link to this section">#</a></h2>
+<p>Describe the messages, not the forms. A good brief has four things:</p>
+<ul><li><strong>The input subjects</strong>, with their shape: <code>coldstore.&lt;site&gt;.&lt;unit&gt;</code>.</li><li><strong>A sample payload</strong>, copied from the real stream if you can.</li><li><strong>What you want out</strong>, in plain words: "only when it changes", "one alert and one all-clear", "a count".</li><li><strong>The numbers</strong>: thresholds, window sizes, decimal places.</li></ul>
+<p>Then ask it to prove the result: "validate it, run a soundcheck with sample rows, and show me the transcript."</p>
+<h2 id="a-worked-example">A worked example<a class="anchor" href="#a-worked-example" aria-label="Link to this section">#</a></h2>
+<p>The brief:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>Freezers publish JSON on coldstore.&lt;site&gt;.&lt;unit&gt;, like
+{"temp":-18.2,"door":"closed"}.
+
+Write a patchbay that gives me:
+1. the temperature to one decimal place, only when it changes
+2. a "warm" alert when the average of the last five readings reaches
+   -15, and a "cold" all-clear once it is back down to -17
+3. a running count of door openings
+
+Validate it and show me a soundcheck transcript.</code></pre></figure>
+<p>Claude wrote this file from that brief with the instructions loaded:</p>
+<figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/cold-store.edn" target="_blank" rel="noopener noreferrer">examples/cold-store.edn</a></span></figcaption><pre><code><span class="tok-com">;; Cold-store monitoring, written by a coding agent from a plain-English</span>
+<span class="tok-com">;; brief with docs/AGENTS_PATCHBAY.md loaded (see the "Writing patchbays</span>
+<span class="tok-com">;; with an agent" docs page for the prompt).</span>
+<span class="tok-com">;;</span>
+<span class="tok-com">;; Each freezer publishes one JSON frame on coldstore.&lt;site&gt;.&lt;unit&gt;:</span>
+<span class="tok-com">;;   {"temp":-18.2,"door":"closed"}</span>
+
+<span class="tok-com">;; Break the frame into scalar subjects so the other rules stay simple:</span>
+<span class="tok-com">;;   coldstore.leeds.f1.temp  -18.2</span>
+<span class="tok-com">;;   coldstore.leeds.f1.door  closed</span>
+(<span class="tok-op">on</span> <span class="tok-str">"coldstore.*.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">json-demux!</span> <span class="tok-str">"temp"</span> <span class="tok-str">"door"</span> payload))
+
+<span class="tok-com">;; Dashboard stream: one decimal place, only when the value changes.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"coldstore.*.*.temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">squelch</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>) <span class="tok-kw">:dp</span> <span class="tok-num">1</span>)))
+
+<span class="tok-com">;; Warm alert on the average of the last five readings. Turns on at -15</span>
+<span class="tok-com">;; and off only at -17, so a freezer hovering near the limit does not</span>
+<span class="tok-com">;; flap.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"coldstore.*.*.temp"</span>
+  (<span class="tok-op">transition</span> (<span class="tok-op">hysteresis</span> <span class="tok-num">-17</span> <span class="tok-num">-15</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">5</span> payload-float))
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"alert"</span>) <span class="tok-str">"warm"</span>)
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"ok"</span>) <span class="tok-str">"cold"</span>)))
+
+<span class="tok-com">;; Count door openings: one per closed-to-open change, not one per frame</span>
+<span class="tok-com">;; while the door stays open.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"coldstore.*.*.door"</span>
+  (<span class="tok-op">count!</span> <span class="tok-kw">:subject</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"opened"</span>) (<span class="tok-op">rising-edge</span> (<span class="tok-op">=</span> payload <span class="tok-str">"open"</span>))))</code></pre></figure>
+<p>It picked the idioms the instructions recommend: <a href="forms.html#json-payloads"><code>json-demux!</code></a> at the head so the other rules work on scalars, <code>round</code> into <code>squelch</code> for the dashboard stream, <a href="forms.html#hysteresis"><code>hysteresis</code></a> inside <code>transition</code> for an alert that does not flap, and <code>rising-edge</code> so a door held open counts once.</p>
+<p>Then the two checks. The first confirms the file loads:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>monoblok --validate examples/cold-store.edn</code></pre></figure>
+<p>The second runs sample rows through the rules with no server. Each row is <code>SUBJECT|payload</code>; <code>in</code> lines are the rows fed in, <code>out</code> lines are everything the rules published, including the scalars that <code>json-demux!</code> breaks out:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>printf <span class="tok-str">'%s\n'</span> \
+  <span class="tok-str">'coldstore.leeds.f1|{"temp":-18.21,"door":"closed"}'</span> \
+  <span class="tok-str">'coldstore.leeds.f1|{"temp":-18.24,"door":"closed"}'</span> \
+  <span class="tok-str">'coldstore.leeds.f1|{"temp":-12.5,"door":"open"}'</span> \
+  | monoblok --soundcheck --soundcheck-label --soundcheck-linger-ms 0 examples/cold-store.edn</code></pre></figure>
+<p>The transcript for a longer run, generated by this site's build from the same command:</p>
+<figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/cold-store.edn" target="_blank" rel="noopener noreferrer">examples/cold-store.edn</a></span></figcaption><pre><code><span class="sc-in">in   coldstore.leeds.f1  {"temp":-18.21,"door":"closed"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -18.21</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.stable  -18.2</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  closed</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-18.24,"door":"closed"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -18.24</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  closed</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-12.5,"door":"open"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -12.5</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.stable  -12.5</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  open</span>
+<span class="sc-out">out  coldstore.leeds.f1.door.opened  1</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-9.0,"door":"open"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -9</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.stable  -9.0</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.alert  warm</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  open</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-8.5,"door":"closed"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -8.5</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.stable  -8.5</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  closed</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-19.0,"door":"closed"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -19</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.stable  -19.0</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  closed</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-22.0,"door":"open"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -22</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.stable  -22.0</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  open</span>
+<span class="sc-out">out  coldstore.leeds.f1.door.opened  2</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-22.5,"door":"closed"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -22.5</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.stable  -22.5</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  closed</span>
+<span class="sc-in">in   coldstore.leeds.f1  {"temp":-22.5,"door":"closed"}</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp  -22.5</span>
+<span class="sc-out">out  coldstore.leeds.f1.temp.ok  cold</span>
+<span class="sc-out">out  coldstore.leeds.f1.door  closed</span></code></pre></figure>
+<p>Reading it against the brief: the second frame rounds to the same -18.2 and publishes nothing; <code>warm</code> arrives on the fourth frame, when the five-reading average reaches -15; the door count goes to 1 and then 2, and the frame where the door stays open does not count again; <code>cold</code> arrives on the last frame, once the average is back at -17.</p>
+<h2 id="read-every-line">Read every line<a class="anchor" href="#read-every-line" aria-label="Link to this section">#</a></h2>
+<p>A patchbay decides which messages reach your subscribers, so treat a generated one as you would any generated configuration: scrutinise every line before it runs anywhere that matters. A file that validates is well-formed, not correct. The agent can misread the brief, and the transcript only covers the rows it chose to feed in.</p>
+<p>Things to check by hand:</p>
+<ul><li><strong>Filters.</strong> Does each <code>on</code> filter match the subjects you publish, and nothing else? <code>*</code> is one token and <code>&gt;</code> is one or more.</li><li><strong>Numbers.</strong> Are the thresholds, windows and decimal places yours, or values the agent assumed? In the example above, the brief said "last five readings", and the rule says <code>(moving-avg 5 ...)</code>.</li><li><strong>Output subjects.</strong> Where does each <code>publish!</code> go, and does anything export or subscribe to it?</li><li><strong><code>:reentrant true</code>.</strong> Every rule with it feeds its output back into the rules. Make sure that is intended.</li><li><strong>Cardinality.</strong> Stateful forms keep one slot per subject. A wildcard over many subjects is many slots.</li><li><strong>The cases the transcript skipped.</strong> Feed your own rows through <code>--soundcheck</code>: the boundary values, a malformed payload, the message that must not get through.</li><li><strong>Wall-clock behaviour.</strong> Soundcheck rows arrive in one burst, so <code>:ms</code> windows, <code>hold-off</code> and <code>throttle</code> need a run against a real server.</li></ul>
+<p>If a rule is hard to read, ask the agent to explain that line, or to rewrite it more plainly. Rules that gate or filter what leaves a system (<a href="examples-waf.html">Filtering and privacy</a>) deserve the closest reading of all.</p>
+<h2 id="going-further">Going further<a class="anchor" href="#going-further" aria-label="Link to this section">#</a></h2>
+<ul><li>Ask for a pump script as well: a small program that publishes realistic sample traffic, so you can watch the rules against a running server. The instructions include a skeleton for one.</li><li>Ask for the same file in YAML or JSON, and compare the two with the same soundcheck rows.</li><li>Two much larger generated patchbays are walked through in <a href="examples-large.html">Large patchbays</a>, with a <a href="https://lexvicacom.github.io/monoblok/show-n-tell/moonwell_linkedin_demo.html" target="_blank" rel="noopener noreferrer">recorded session</a> of a coding assistant building one.</li></ul>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="forms.html"><small>Previous</small>Forms reference</a><a class="next" href="examples.html"><small>Next</small>Start here</a></nav>
+<p class="docs-foot">MIT licensed · &copy; 2026 <a href="mailto:alex@lexvica.com">Alex Reid</a><br><a href="https://lexvica.com" target="_blank" rel="noopener noreferrer">Lexvica</a> offers solutions built with monoblok.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

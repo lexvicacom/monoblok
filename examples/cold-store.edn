@@ -1,0 +1,32 @@
+;; Cold-store monitoring, written by a coding agent from a plain-English
+;; brief with docs/AGENTS_PATCHBAY.md loaded (see the "Writing patchbays
+;; with an agent" docs page for the prompt).
+;;
+;; Each freezer publishes one JSON frame on coldstore.<site>.<unit>:
+;;   {"temp":-18.2,"door":"closed"}
+
+;; Break the frame into scalar subjects so the other rules stay simple:
+;;   coldstore.leeds.f1.temp  -18.2
+;;   coldstore.leeds.f1.door  closed
+(on "coldstore.*.*" :reentrant true
+  (json-demux! "temp" "door" payload))
+
+;; Dashboard stream: one decimal place, only when the value changes.
+(on "coldstore.*.*.temp"
+  (-> payload-float
+      (round 1)
+      (squelch)
+      (publish! (subject-append "stable") :dp 1)))
+
+;; Warm alert on the average of the last five readings. Turns on at -15
+;; and off only at -17, so a freezer hovering near the limit does not
+;; flap.
+(on "coldstore.*.*.temp"
+  (transition (hysteresis -17 -15 (moving-avg 5 payload-float))
+    (publish! (subject-append "alert") "warm")
+    (publish! (subject-append "ok") "cold")))
+
+;; Count door openings: one per closed-to-open change, not one per frame
+;; while the door stays open.
+(on "coldstore.*.*.door"
+  (count! :subject (subject-append "opened") (rising-edge (= payload "open"))))

@@ -2,7 +2,7 @@ description: Runnable patchbay examples graded from a five-line sensor rule to a
 
 # Examples
 
-{lede} Every example here is a real file in the repository, shown in full and checked with `monoblok --validate`. They are graded so you can start small and stop when you have what you need.
+{lede} Every example here is a real file in the repository, shown in full and checked with `monoblok --validate`. The level labels indicate the amount of configuration and number of forms involved.
 
 ## How to run them
 
@@ -20,7 +20,7 @@ nats sub 'sensors.>'
 nats pub sensors.temp 42.04
 ```
 
-To see what a file does with no server at all, pipe `SUBJECT|payload` rows through `--soundcheck`. The transcripts on these pages are produced this way when the site is built, so they are real output:
+To see what a file does with no server at all, pipe `SUBJECT|payload` rows through `--soundcheck`. The site build uses this command to generate the transcripts on these pages:
 
 ```sh
 printf 'sensors.temp|42.01\nsensors.temp|42.04\n' | monoblok --soundcheck --soundcheck-label examples/sensors.edn
@@ -48,6 +48,9 @@ When testing with `nats pub`, pass negative bodies after `--`, for example `nats
 | [`bridge.edn`](examples-nats.html#export-to-a-nats-server) | {tag:Intermediate} | export selected subjects to a real NATS server |
 | [`import.edn`](examples-nats.html#tap-an-existing-nats-server) | {tag:Intermediate} | tap remote subjects, keep raw input private, export the clean stream |
 | [`jetstream.yml`](examples-nats.html#jetstream-replay) | {tag:Advanced} | replay a populated JetStream stream, then continue live |
+| [`waf.edn`](examples-waf.html#a-waf-for-nats) | {tag:Intermediate} | a WAF for NATS: payload scan, p99 outlier gate, flood detection |
+| [`deidentify.edn`](examples-waf.html#de-identifying-records) | {tag:Intermediate} | strip identifiers from patient frames: allow-list fields, age bands, ward aggregates |
+| [`cold-store.edn`](agents.html#a-worked-example) | {tag:Intermediate} | freezer monitoring written by a coding agent: demux, dedupe, hysteresis alert, door count |
 | [`moonwell_patchbay.edn`](examples-large.html#moonwell) | {tag:Advanced} | 24 rules over nested JSON telemetry, using most of the language |
 | [`cloudhook_patchbay.edn`](examples-large.html#cloudhook) | {tag:Advanced} | 23 rules: a second large generated patchbay |
 
@@ -78,7 +81,7 @@ Seven readings in, three out. State is per subject, so `sensors.temp` and `senso
 {{include examples/lvc.edn}}
 
 ```sh
-# Publish a value, then walk away.
+# Publish a value before subscribing.
 nats pub sensors.temp 23.5
 
 # Later, subscribe. A normal SUB would see nothing until the next publish.
@@ -90,7 +93,7 @@ Single-quote any subject starting with `$` so your shell does not try to expand 
 
 ## A tour of the primitives
 
-{tag:Starter} This is the patchbay loaded on the public demo server. It gives one compact example of every primitive family so you hit all of them in a single sitting: `squelch` for value dedup, `deadband` for "ignore small wobbles", `moving-avg` for smoothing, `delta` for per-tick change, `transition` for boolean edge detection, `rising-edge` for one-shot crossings, `hold-off` for time-based rate limiting, and `count!` for tallies.
+{tag:Starter} This is the patchbay loaded on the public demo server. It includes examples from each form family: `squelch` for value dedup, `deadband` for "ignore small wobbles", `moving-avg` for smoothing, `delta` for per-tick change, `transition` for boolean edge detection, `rising-edge` for one-shot crossings, `hold-off` for time-based rate limiting, and `count!` for tallies.
 
 {{include examples/demo.edn}}
 

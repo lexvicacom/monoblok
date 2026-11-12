@@ -4,7 +4,7 @@ description: Two large generated patchbays, Moonwell and Cloudhook, that use mos
 
 {lede} Two patchbays of two dozen rules each, showing how the small forms compose into a whole conditioning layer: JSON demux at the head, stable dashboard channels, safety alerts, roll-ups, liveness and audit trails.
 
-Both files live in [`advanced-examples/`](https://github.com/lexvicacom/monoblok/tree/main/advanced-examples). They were written by a coding agent with [`AGENTS_PATCHBAY.md`](https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md) loaded, for deliberately fictional domains. They are not reference deployments or domain-accurate models, but they validate, they run, and they give a feel for what is possible. Each has a matching Python pump script that publishes randomised telemetry.
+Both files live in [`advanced-examples/`](https://github.com/lexvicacom/monoblok/tree/main/advanced-examples). They were written by a coding agent with [`AGENTS_PATCHBAY.md`](https://github.com/lexvicacom/monoblok/blob/main/docs/AGENTS_PATCHBAY.md) loaded, for deliberately fictional domains. They demonstrate rule composition and can be validated and run locally; their fictional domain models are not intended for production use. Each has a matching Python pump script that publishes randomised telemetry.
 
 ## How a large patchbay is laid out
 
@@ -59,7 +59,7 @@ The structure matches Moonwell, with a few different techniques:
 - **Compound conditions in a `transition`.** The altitude and voltage rules use `(or (< avg LO) (> avg HI))` to alert when a smoothed value leaves a band in either direction. Each `moving-avg` inside the `or` is its own call site with its own ring.
 - **Operator commands as subjects.** The tether and shear rules publish to `ops.<kite>.winch.ease` and `ops.<kite>.pattern.widen`: the alert is addressed to whatever acts on it.
 - **Integer payloads.** `(= payload-int 1)` through `rising-edge` records the moment a brake engages, once.
-- **Quantized bands.** `moving-avg`, `quantize 10`, `squelch` reports altitude in 10-unit bands, so a dashboard updates only when the kite changes band.
+- **Quantised bands.** `moving-avg`, `quantize 10`, `squelch` reports altitude in 10-unit bands, so a dashboard updates only when the kite changes band.
 
 ```sh
 cd advanced-examples
@@ -77,15 +77,15 @@ To make more examples like these, give your coding agent the patchbay-specific i
 curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/docs/AGENTS_PATCHBAY.md >> ./AGENTS.md
 ```
 
-Then ask for a complete pair: one patchbay `.edn` file and one pump script that publishes matching test data.
+[Writing patchbays with an agent](agents.html) covers the workflow and what to check in the result. Then ask for a complete pair: one patchbay `.edn` file and one pump script that publishes matching test data.
 
 ```text
-Give me a cool patchbay .edn file plus a matching Python pump driver script.
+Create a patchbay .edn file and a matching Python script that publishes test data.
 
-Make it a weird fictional telemetry domain, optionally with JSON input subjects, scalar
+Use a fictional telemetry domain, optionally with JSON input subjects, scalar
 demux rules, alerts, stable dashboard outputs, audit subjects, and a few
 windowed stats. The pump script should connect to monoblok on 127.0.0.1:4222
-and publish realistic randomized data for the subjects the patchbay expects.
+and publish randomised test data for the subjects the patchbay expects.
 ```
 
 Check whatever comes back before running it:
