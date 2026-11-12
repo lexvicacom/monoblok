@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>tinyblok on ESP32 | monoblok docs</title>
+<meta name="description" content="tinyblok runs a subset of patchbay on ESP32 boards. How it differs from monoblok and why, how to install and set it up, and how to add sensors and rules.">
+<meta name="theme-color" content="#f5f4ed">
+<link rel="stylesheet" href="docs.css?v=93523c2c9a1c">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="docs-bar">
+<a class="docs-brand" href="index.html" aria-label="monoblok docs home">monoblok <span>docs</span></a>
+<nav aria-label="Site">
+<a href="../index.html">Main site</a>
+<a href="../demo.html">Live demo</a>
+<a class="optional" href="https://alexjreid.dev/tags/monoblok/" target="_blank" rel="noopener noreferrer">Blog</a>
+<a href="https://github.com/lexvicacom/monoblok" target="_blank" rel="noopener noreferrer">GitHub</a>
+</nav>
+</header>
+<div class="docs-shell">
+<details class="docs-side" open>
+<summary>Docs menu · tinyblok on ESP32</summary>
+<nav class="side-inner" aria-label="Docs"><h2>Start</h2><ul><li><a href="index.html">Introduction</a></li><li><a href="running.html">Install and run</a></li></ul><h2>Patchbay</h2><ul><li><a href="patchbay.html">Patchbay guide</a></li><li><a href="forms.html">Forms reference</a></li><li><a href="agents.html">Use Claude or Codex</a></li></ul><h2>Examples</h2><ul><li><a href="examples.html">Start here</a></li><li><a href="examples-telemetry.html">Sensors and telemetry</a></li><li><a href="examples-market.html">Market data</a></li><li><a href="examples-nats.html">NATS integration</a></li><li><a href="examples-waf.html">Filtering and privacy</a></li><li><a href="examples-large.html">Large patchbays</a></li></ul><h2>Server</h2><ul><li><a href="state.html">LVC, stats and snapshots</a></li><li><a href="clients.html">NATS clients, auth and HTTP</a></li><li><a href="bridge.html">Export, import and JetStream</a></li></ul><h2>Microcontrollers</h2><ul><li><a href="tinyblok.html" aria-current="page">tinyblok on ESP32</a><ul class="toc"><li><a href="#what-it-is">What it is</a></li><li><a href="#where-it-might-fit">Where it might fit</a></li><li><a href="#how-it-differs-from-monoblok">How it differs from monoblok</a></li><li><a href="#patchbay-lite">Patchbay Lite</a></li><li><a href="#install">Install</a></li><li><a href="#first-time-setup">First-time setup</a></li><li><a href="#settings-and-reset">Settings and reset</a></li><li><a href="#change-the-rules">Change the rules</a></li><li><a href="#add-a-sensor">Add a sensor</a></li><li><a href="#request-and-reply">Request and reply</a></li><li><a href="#when-the-network-drops">When the network drops</a></li><li><a href="#more-reading">More reading</a></li></ul></li></ul></nav>
+</details>
+<main id="main" class="docs-main">
+<article class="docs-article">
+<p class="kicker">Microcontrollers</p>
+<h1>tinyblok on ESP32</h1>
+<p class="lede">tinyblok is the miniature counterpart to monoblok. It is firmware for ESP32 boards that reads local sensors, conditions the readings with patchbay rules on the board, and publishes the results to NATS.</p>
+<blockquote><p><strong>Experimental.</strong> tinyblok is an early project. The firmware, Patchbay Lite forms and setup flow may change between releases, and the prebuilt image targets one board, the ESP32-C6.</p></blockquote>
+<h2 id="what-it-is">What it is<a class="anchor" href="#what-it-is" aria-label="Link to this section">#</a></h2>
+<p>monoblok conditions messages at the broker, before fan-out. tinyblok moves the same idea one step earlier, to the sensor. A board that samples free heap ten times a second does not need to send ten messages a second: a rule can drop the jitter, average the rest, and publish only what a dashboard would use.</p>
+<p>tinyblok is a NATS client, not a server. It connects to a NATS server over Wi-Fi (plain TCP or TLS), publishes its conditioned subjects, and answers a fixed set of request subjects. It can point at nats-server, a hosted NATS service such as Synadia Cloud, or monoblok.</p>
+<p>The rule engine is monoblok's own C patchbay parser and evaluator, pinned as a submodule in the <a href="https://github.com/lexvicacom/tinyblok" target="_blank" rel="noopener noreferrer">tinyblok repository</a>. The dialect it runs is called Patchbay Lite.</p>
+<figure class="shot">
+<img src="../assets/esp32/breadboard.jpg" width="420" alt="tinyblok running on a breadboard with an OLED display showing its NATS connection and message count" loading="lazy">
+<figcaption>tinyblok on an ESP32-C6 with the optional OLED display.</figcaption>
+</figure>
+<h2 id="where-it-might-fit">Where it might fit<a class="anchor" href="#where-it-might-fit" aria-label="Link to this section">#</a></h2>
+<p>tinyblok suits places where the reading starts on a wire, not on a network, and where sending every raw sample would be wasteful. These are scenarios it is designed for, not a list of shipped drivers. The stock firmware publishes heap, Wi-Fi signal, uptime and temperature; anything else is a short C function behind a <a href="#add-a-sensor"><code>(pump ...)</code></a>.</p>
+<ul><li><strong>Sensors on GPIO pins.</strong> Temperature, humidity, pressure, light or current sensors on I2C, SPI, ADC or a plain digital pin. The board samples fast, and rules publish a rounded, deduplicated value only when it changes.</li><li><strong>Values piped from custom hardware.</strong> A UART, RS-485 or pulse-counter link to a machine, meter or instrument that has no network stack of its own. The pump function reads the latest value, and the board becomes that device's NATS publisher.</li><li><strong>Industrial and building monitoring.</strong> Vibration, flow, tank level, door and relay state. Deadbands and edge detection turn a noisy signal into a few meaningful events, and alert subjects are raised on the board without a round trip to a server.</li><li><strong>Constrained or metered links.</strong> On a weak Wi-Fi link or a paid uplink, conditioning at the source cuts the message rate before anything is sent, and the <a href="#when-the-network-drops">transmit queue</a> rides out short outages.</li><li><strong>Fleets of identical boards.</strong> One firmware image with one set of rules, with each board given its own name and NATS credentials in the setup portal. A shared <a href="#request-and-reply">request subject</a> queries every board at once, and monoblok or NATS upstream does the fan-out, last-value caching and cross-device rules.</li><li><strong>Small control actions.</strong> A request handler can switch a relay, start a sweep or take a one-off sample, so the same board reports and responds.</li></ul>
+<p>It is a poor fit when rules must change without reflashing, when the device needs to subscribe to arbitrary subjects, or when the work is really JSON document processing. Those belong on monoblok.</p>
+<h3 id="on-a-64-bit-raspberry-pi-use-monoblok">On a 64-bit Raspberry Pi, use monoblok<a class="anchor" href="#on-a-64-bit-raspberry-pi-use-monoblok" aria-label="Link to this section">#</a></h3>
+<p>tinyblok's limits exist because a microcontroller has no operating system, no filesystem and a few hundred kilobytes of RAM. A 64-bit Raspberry Pi has none of those problems. The full monoblok server runs on it as it is: the Linux ARM64 <a href="running.html#install">release binary and container image</a> work unchanged on a 64-bit OS, with no special build. For now this covers 64-bit Raspberry Pi devices only; 32-bit boards and 32-bit OS installs are not supported.</p>
+<p>That gives you everything tinyblok leaves out: rules in an external patchbay file that you edit and reload with a restart, the complete <a href="forms.html">forms reference</a>, JSON processing, the <a href="state.html">last-value cache and snapshots</a>, local subscribers, and <a href="bridge.html#export">export</a> to a NATS cluster. A sensor script on the Pi publishes raw readings to monoblok on localhost, and monoblok does the conditioning.</p>
+<p>Choose tinyblok when the device is a microcontroller: cheaper, lower power, instant boot, and nothing to administer. Choose monoblok when the device is a 64-bit Raspberry Pi running Linux.</p>
+<h2 id="how-it-differs-from-monoblok">How it differs from monoblok<a class="anchor" href="#how-it-differs-from-monoblok" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th></th><th>monoblok</th><th>tinyblok</th></tr></thead><tbody><tr><td>Role</td><td>A NATS-compatible server that clients connect to</td><td>A NATS client that publishes outwards</td></tr><tr><td>Where rules live</td><td>A patchbay file read at start-up with <code>--patchbay</code></td><td>Embedded in the firmware image at build time, parsed once at boot</td></tr><tr><td>Changing rules</td><td>Edit the file and restart</td><td>Rebuild and reflash</td></tr><tr><td>Input</td><td>Client publishes, plus optional <a href="bridge.html#import">import</a></td><td><code>(pump ...)</code> sources: C functions read on a timer</td></tr><tr><td>Output</td><td>Fan-out to subscribers, plus optional <a href="bridge.html#export">export</a></td><td>Publishes to one NATS server through a bounded queue</td></tr><tr><td>Subscribers</td><td>Any NATS client</td><td>None. There is no listener on the board</td></tr><tr><td>Request and reply</td><td><code>reply!</code> inside ordinary <code>(on ...)</code> rules</td><td><code>(on-req ...)</code> handlers on fixed subjects</td></tr><tr><td>LVC and snapshots</td><td><a href="state.html">Yes</a></td><td>No. Rule state lives in RAM and starts fresh on each boot</td></tr><tr><td>File formats</td><td>EDN, YAML and JSON</td><td>EDN by default. YAML and JSON are a build option</td></tr><tr><td>Forms</td><td>The full <a href="forms.html">forms reference</a></td><td>Patchbay Lite, a subset with a few additions</td></tr><tr><td>Settings</td><td>Command line flags</td><td>A browser setup portal, stored in flash</td></tr></tbody></table></div>
+<h3 id="why-the-rules-are-baked-into-the-firmware">Why the rules are baked into the firmware<a class="anchor" href="#why-the-rules-are-baked-into-the-firmware" aria-label="Link to this section">#</a></h3>
+<p>monoblok takes an external <code>.edn</code> file because it is a daemon on a machine with a filesystem and an operator. A microcontroller is a different shape, and tinyblok leans into that instead of imitating the server.</p>
+<ul><li><strong>Rules name compiled code.</strong> A <code>(pump ...)</code> source is a C function linked into the image. A rule file that arrived at runtime could name a symbol the firmware does not contain, so the rules and the code they call have to ship together anyway.</li><li><strong>Memory is fixed up front.</strong> The patchbay is parsed once at boot into an arena, and every window, ring and state slot is sized then. There is no heap allocation per pump tick, per publish or per clock fire. Loading new rules on a running board would break that guarantee.</li><li><strong>Firmware size.</strong> Embedding the source keeps the small EDN parser as the only parser on the board. There is no filesystem, no upload endpoint and no reload path to carry.</li><li><strong>Bad rules fail on your desk.</strong> The same C sources build into a host validator, so <code>make soundcheck</code> checks the patchbay before it is flashed. A rule mistake is caught at build time, not on a device you cannot reach.</li><li><strong>One artefact per device.</strong> The image is the whole behaviour of the board. There is no rule file to drift out of step with the firmware version.</li></ul>
+<p>What does vary per device (Wi-Fi, device name, NATS server and credentials) is not baked in. Those settings are entered in the <a href="#first-time-setup">setup portal</a> and stored in flash.</p>
+<h3 id="why-there-is-no-broker-on-the-board">Why there is no broker on the board<a class="anchor" href="#why-there-is-no-broker-on-the-board" aria-label="Link to this section">#</a></h3>
+<p>Fan-out, last-value caching and snapshots are server concerns, and they are what monoblok is for. tinyblok keeps one outbound connection and a bounded transmit queue, which is a job an ESP32 does comfortably. Runtime rule loading, inbound bridges, JetStream consumers and fleet management are deliberately out of scope.</p>
+<h2 id="patchbay-lite">Patchbay Lite<a class="anchor" href="#patchbay-lite" aria-label="Link to this section">#</a></h2>
+<p>Ordinary <code>(on ...)</code> rules work as they do on monoblok: the scalar bound values (<code>subject</code>, <code>payload</code>, <code>payload-float</code>, <code>payload-int</code>), arithmetic and comparison, <code>when</code>, threading with <code>-&gt;</code>, and the conditioning forms such as <code>round</code>, <code>deadband</code>, <code>squelch</code>, <code>quantize</code>, <code>clamp</code>, <code>throttle</code>, <code>moving-avg</code>, <code>moving-min</code>, <code>moving-max</code>, <code>rising-edge</code>, <code>sample!</code>, <code>debounce!</code>, <code>bar!</code>, <code>count!</code> and <code>publish!</code>. The <a href="patchbay.html">patchbay guide</a> and <a href="forms.html">forms reference</a> apply to these unchanged.</p>
+<p>Patchbay Lite adds four forms for the things a board has and a server does not:</p>
+<div class="table-wrap"><table><thead><tr><th>form</th><th>meaning</th></tr></thead><tbody><tr><td><code>(pump "subject" :from c_symbol :type TYPE :hz N)</code></td><td>Read a compiled C function <code>N</code> times a second and feed the value into the rules as <code>subject</code></td></tr><tr><td><code>(fn name :from c_symbol :type TYPE)</code></td><td>Expose a compiled C function as a value or transform that rules can call</td></tr><tr><td><code>(on-req "subject" BODY)</code></td><td>Subscribe to a fixed NATS request subject and run <code>BODY</code> for each request</td></tr><tr><td><code>(reply! VALUE)</code></td><td>Inside <code>on-req</code>, send a reply to the requester's inbox</td></tr></tbody></table></div>
+<p>These monoblok features are not available on tinyblok:</p>
+<ul><li>Top-level <code>(every ...)</code> timer rules, and the <code>hysteresis</code>, <code>ewma</code> and <code>last</code> forms.</li><li><code>(lvc ...)</code>, <code>(export ...)</code> and <code>(import ...)</code>. The parser accepts them, but the firmware does not act on them.</li><li><code>replaying?</code>, snapshots and the other daemon flags.</li><li><code>json-get</code> and <code>json-demux!</code>, unless the firmware is built with <code>CONFIG_TINYBLOK_PATCHBAY_JSON</code>. It is off by default to keep the image small.</li></ul>
+<p>A short patchbay for one sensor looks like this:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code><span class="tok-com">; Read free heap ten times a second.</span>
+(<span class="tok-op">pump</span> <span class="tok-str">"tinyblok.heap"</span> <span class="tok-kw">:from</span> tinyblok_free_heap <span class="tok-kw">:type</span> u32 <span class="tok-kw">:hz</span> <span class="tok-num">10</span>)
+
+<span class="tok-com">; Ignore jitter under 1 KiB and publish the stable value.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"tinyblok.heap"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">deadband</span> <span class="tok-num">1024</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"stable"</span>))))
+
+<span class="tok-com">; Alert once when the stable value drops below 20 KiB.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"tinyblok.heap.stable"</span>
+  (<span class="tok-op">when</span> (<span class="tok-op">&lt;</span> payload-float <span class="tok-num">20480</span>)
+    (<span class="tok-op">-&gt;</span> payload (<span class="tok-op">rising-edge</span>) (<span class="tok-op">publish!</span> <span class="tok-str">"tinyblok.alert.heap.low"</span>))))</code></pre></figure>
+<p>The <a href="https://github.com/lexvicacom/tinyblok/blob/main/patchbay.edn" target="_blank" rel="noopener noreferrer">default patchbay</a> in the repository publishes heap, Wi-Fi signal strength, uptime and temperature subjects this way.</p>
+<h2 id="install">Install<a class="anchor" href="#install" aria-label="Link to this section">#</a></h2>
+<p>The prebuilt firmware supports the <strong>ESP32-C6</strong>. For other boards, or to change the rules, <a href="#build-from-source">build from source</a>.</p>
+<h3 id="flash-from-the-browser">Flash from the browser<a class="anchor" href="#flash-from-the-browser" aria-label="Link to this section">#</a></h3>
+<ol><li>Plug the board in with a USB data cable.</li><li>Open the <a href="../esp32.html">browser installer</a> in Chrome or Edge on a desktop computer. Other browsers do not support Web Serial.</li><li>Click <strong>Install tinyblok</strong> and choose the board's serial port. On macOS, look for <code>cu.usbmodem…</code>.</li><li>Choose <strong>Install tinyblok</strong> in the dialog, then wait for the board to reboot.</li></ol>
+<h3 id="build-from-source">Build from source<a class="anchor" href="#build-from-source" aria-label="Link to this section">#</a></h3>
+<p>This needs <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/get-started/index.html" target="_blank" rel="noopener noreferrer">ESP-IDF</a> installed.</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>git clone https://github.com/lexvicacom/tinyblok
+cd tinyblok
+git submodule update --init --recursive
+make build
+make flash
+make monitor</code></pre></figure>
+<p><code>make flash</code> detects the serial port. Pass <code>PORT=/dev/cu.usbmodem101</code> (or similar) to override it. Run the commands from a shell where ESP-IDF is already exported, or pass <code>IDF_PATH=/path/to/esp-idf</code>. Exit <code>make monitor</code> with Ctrl+]; the monitor traps Ctrl+C.</p>
+<h3 id="optional-oled-display">Optional OLED display<a class="anchor" href="#optional-oled-display" aria-label="Link to this section">#</a></h3>
+<p>The firmware can show NATS connection status and publish counters on an I2C OLED. The defaults are a 128x64 panel on <strong>SDA GPIO14</strong> and <strong>SCL GPIO15</strong>. Connect the display before flashing. Other panel sizes and pins are set with <code>make menuconfig</code>.</p>
+<h2 id="first-time-setup">First-time setup<a class="anchor" href="#first-time-setup" aria-label="Link to this section">#</a></h2>
+<p>After flashing, the board starts its own Wi-Fi network and setup portal. No serial console or built-in credentials are needed.</p>
+<ol><li>Join the <code>TINYBLOK</code> Wi-Fi network.</li><li>The setup portal should open by itself. If it does not, visit <code>http://10.42.0.1</code>.</li><li>Enter your Wi-Fi, a device name and the NATS settings. Authentication can be none, user and password, or a NATS <code>.creds</code> file.</li><li>Save. The board tries the Wi-Fi connection, keeps the settings if it succeeds, and reboots.</li></ol>
+<figure class="shot">
+<img src="../assets/esp32/captive.png" width="560" alt="tinyblok setup portal with Wi-Fi, device name and NATS connection settings" loading="lazy">
+<figcaption>The setup portal runs on the board itself.</figcaption>
+</figure>
+<p>Then watch the board's output on your NATS server:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>nats sub <span class="tok-str">'tinyblok.&gt;'</span>
+nats req tinyblok.req.uptime <span class="tok-str">''</span></code></pre></figure>
+<h2 id="settings-and-reset">Settings and reset<a class="anchor" href="#settings-and-reset" aria-label="Link to this section">#</a></h2>
+<p>Once configured, the settings page is at <code>http://tinyblok.local</code> on the same network. The device name becomes the hostname, so a board named <code>kitchen</code> is at <code>http://kitchen.local</code>. Use letters, numbers, spaces, underscores or hyphens; the firmware lowercases the name and turns separators into hyphens.</p>
+<p>The same page is available as an HTTP API:</p>
+<div class="table-wrap"><table><thead><tr><th>request</th><th>meaning</th></tr></thead><tbody><tr><td><code>GET /api/status</code></td><td>connection state and counters</td></tr><tr><td><code>GET /api/settings</code></td><td>current settings</td></tr><tr><td><code>GET /api/wifi-scan</code></td><td>nearby Wi-Fi networks</td></tr><tr><td><code>POST /api/settings</code></td><td>save settings</td></tr><tr><td><code>POST /api/reboot</code></td><td>reboot the board</td></tr><tr><td><code>POST /api/factory-reset</code></td><td>erase settings and return to the setup portal</td></tr></tbody></table></div>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl http://tinyblok.local/api/status
+curl -X POST http://tinyblok.local/api/reboot</code></pre></figure>
+<p>A factory reset erases the stored settings, and the board comes back up with the <code>TINYBLOK</code> network and setup portal. While developing, <code>make erase-flash-monitor</code> wipes the whole flash over serial.</p>
+<h2 id="change-the-rules">Change the rules<a class="anchor" href="#change-the-rules" aria-label="Link to this section">#</a></h2>
+<p>Rules live in <code>patchbay.edn</code> at the root of the tinyblok repository. Edit it, check it on your computer, then rebuild and flash:</p>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>make soundcheck
+make build
+make flash</code></pre></figure>
+<p><code>make soundcheck</code> builds a host validator from the same C sources the firmware uses. Pass <code>PATCHBAY_FILE=path/to/patchbay.yml</code> to check a different file.</p>
+<p>To embed a YAML or JSON patchbay, pass <code>-DTINYBLOK_PATCHBAY_SOURCE=patchbay.yml</code> through CMake. That build includes the structured parser as well, so the image is larger. EDN keeps the small parser only.</p>
+<p>The <a href="agents.html">patchbay authoring skill</a> covers Patchbay Lite, so Claude or Codex can write and check tinyblok rules too.</p>
+<h2 id="add-a-sensor">Add a sensor<a class="anchor" href="#add-a-sensor" aria-label="Link to this section">#</a></h2>
+<p>A sensor driver is a C function with no arguments that returns a reading:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>static float board_temp_c(void)
+{
+    return 21.5f;
+}</code></pre></figure>
+<p>Register it in the native symbol table so the patchbay can find it by name. C cannot look up linked functions by name at runtime, so the table is explicit:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>#include "tinyblok_patchbay.h"
+
+size_t tinyblok_app_native_symbols(const tinyblok_native_symbol **out)
+{
+    static const tinyblok_native_symbol symbols[] = {
+        {.name = "board_temp_c", .type = TINYBLOK_TYPE_F32, .fn.read_f32 = board_temp_c},
+    };
+    *out = symbols;
+    return sizeof(symbols) / sizeof(symbols[0]);
+}</code></pre></figure>
+<p>Then declare the pump and write rules against its subject:</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">pump</span> <span class="tok-str">"board.temp"</span> <span class="tok-kw">:from</span> board_temp_c <span class="tok-kw">:type</span> f32 <span class="tok-kw">:hz</span> <span class="tok-num">1</span>)
+
+(<span class="tok-op">on</span> <span class="tok-str">"board.temp"</span>
+  (<span class="tok-op">-&gt;</span> payload-float
+      (<span class="tok-op">moving-avg</span> <span class="tok-num">30</span>)
+      (<span class="tok-op">round</span> <span class="tok-num">1</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"avg30s"</span>))))</code></pre></figure>
+<p>The <code>:type</code> decides the C signature:</p>
+<div class="table-wrap"><table><thead><tr><th><code>:type</code></th><th>C signature</th></tr></thead><tbody><tr><td><code>u32</code></td><td><code>uint32_t name(void)</code></td></tr><tr><td><code>i32</code></td><td><code>int name(void)</code></td></tr><tr><td><code>f32</code></td><td><code>float name(void)</code></td></tr><tr><td><code>u64</code> or <code>uptime-s</code></td><td><code>uint64_t name(void)</code></td></tr></tbody></table></div>
+<p>Each pump gets its own timer. A pump read should return quickly and must not block or allocate.</p>
+<h3 id="use-tinyblok-as-a-component">Use tinyblok as a component<a class="anchor" href="#use-tinyblok-as-a-component" aria-label="Link to this section">#</a></h3>
+<p>A project of your own does not have to fork the repository. An ESP-IDF project can import tinyblok's <code>main/</code> directory as its firmware component and supply only a patchbay and its native symbols. tinyblok keeps the boot flow, setup portal, Wi-Fi, NATS client and rule runtime.</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>cmake_minimum_required(VERSION 3.16)
+
+set(EXTRA_COMPONENT_DIRS "/path/to/tinyblok/main")
+set(TINYBLOK_PATCHBAY_SOURCE "patchbay.yml" CACHE FILEPATH "")
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(my_sensor)</code></pre></figure>
+<p>The <a href="https://github.com/lexvicacom/tinyblok/tree/main/examples/component-firmware" target="_blank" rel="noopener noreferrer">component example</a> in the repository is a complete project in this shape.</p>
+<h2 id="request-and-reply">Request and reply<a class="anchor" href="#request-and-reply" aria-label="Link to this section">#</a></h2>
+<p><code>on-req</code> declares a NATS subject the board answers. tinyblok subscribes to each one after every connect, and replies go to the inbox the requester supplied.</p>
+<figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">fn</span> hello-c <span class="tok-kw">:from</span> tinyblok_hello_c <span class="tok-kw">:input</span> bytes <span class="tok-kw">:type</span> bytes)
+
+(<span class="tok-op">on-req</span> <span class="tok-str">"tinyblok.req.uptime"</span>
+  (<span class="tok-op">-&gt;</span> uptime-s
+      (<span class="tok-op">round</span> <span class="tok-num">3</span>)
+      (<span class="tok-op">reply!</span>)))
+
+(<span class="tok-op">on-req</span> <span class="tok-str">"tinyblok.req.hello-c"</span>
+  (<span class="tok-op">reply!</span> (<span class="tok-op">hello-c</span> payload)))</code></pre></figure>
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>nats req tinyblok.req.uptime <span class="tok-str">''</span>
+nats req tinyblok.req.hello-c tinyhi</code></pre></figure>
+<p>A reply can be a literal, a numeric rule result, the original request payload (<code>reply!</code> with no argument), or the output of a <code>(fn ...)</code> declared with <code>:input bytes :type bytes</code>.</p>
+<p>This suits small control actions that are not continuous telemetry: reading uptime, starting a sensor sweep, switching a relay, or taking a one-off diagnostic sample. The subjects are fixed at build time, like the rest of the patchbay. There are no runtime subscriptions and no pending request table on the board.</p>
+<p>If many boards share one request subject, a single request reaches all of them and each replies. A client asking a fleet should wait for several replies, not stop at the first.</p>
+<h2 id="when-the-network-drops">When the network drops<a class="anchor" href="#when-the-network-drops" aria-label="Link to this section">#</a></h2>
+<p><code>publish!</code> does not write to the socket. It queues a subject and payload in a fixed-size ring, and the main loop drains the ring to NATS. If Wi-Fi or the server stalls, the ring drops the oldest samples and rule evaluation carries on. For telemetry this is usually what you want: after an outage the board sends recent readings, not a backlog.</p>
+<h2 id="more-reading">More reading<a class="anchor" href="#more-reading" aria-label="Link to this section">#</a></h2>
+<ul><li>The <a href="https://github.com/lexvicacom/tinyblok" target="_blank" rel="noopener noreferrer">tinyblok repository</a> has the source, wiring notes and the full <code>make</code> command list.</li><li><a href="https://alexjreid.dev/posts/tinyblok/" target="_blank" rel="noopener noreferrer">Meet tinyblok</a> is the introductory blog post.</li></ul>
+<nav class="pager" aria-label="Previous and next page"><a class="prev" href="bridge.html"><small>Previous</small>Export, import and JetStream</a></nav>
+<p class="docs-foot">MIT licensed · &copy; 2026 <a href="mailto:alex@lexvica.com">Alex Reid</a><br><a href="https://lexvica.com" target="_blank" rel="noopener noreferrer">Lexvica</a> offers solutions built with monoblok.</p>
+</article>
+</main>
+</div>
+<script src="docs.js?v=f437340a5fdd"></script>
+</body>
+</html>

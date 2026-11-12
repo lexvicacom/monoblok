@@ -128,6 +128,9 @@ figure.code figcaption {
 figure.code figcaption a { color: #c5d8aa; }
 figure.code pre { margin: 0; padding: 18px; overflow-x: auto; color: var(--code-ink); font: .8125rem/1.75 var(--mono); tab-size: 2; scrollbar-color: #7e9270 var(--code-bg); }
 figure.code pre code { font-size: inherit; }
+figure.shot { margin: 0 0 22px; }
+figure.shot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+figure.shot figcaption { margin-top: 8px; color: var(--muted); font-size: .875rem; }
 .copy { border: 1px solid #56705b; border-radius: 3px; background: transparent; color: #c5d8aa; font: .72rem var(--mono); padding: 5px 9px; cursor: pointer; }
 .copy:hover { background: #2d4935; }
 .tok-str { color: #dbeaa4; }

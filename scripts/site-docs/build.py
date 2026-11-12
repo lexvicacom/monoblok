@@ -51,6 +51,7 @@ PAGES = [
     ("state", "LVC, stats and snapshots", "Server"),
     ("clients", "NATS clients, auth and HTTP", "Server"),
     ("bridge", "Export, import and JetStream", "Server"),
+    ("tinyblok", "tinyblok on ESP32", "Microcontrollers"),
 ]
 
 # Repo Markdown files that have a home on the docs site.

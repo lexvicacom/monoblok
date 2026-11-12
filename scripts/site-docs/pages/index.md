@@ -95,5 +95,5 @@ If plain publish and subscribe is all you need, nats-server is the better choice
 ## More reading
 
 - [The introductory blog post](https://alexjreid.dev/posts/monoblok/) covers where the idea came from, and there are [more posts about monoblok](https://alexjreid.dev/tags/monoblok/) on the blog.
-- [tinyblok](https://github.com/lexvicacom/tinyblok) runs a subset of patchbay on [ESP32 boards](../esp32.html), relaying cleaned sensor data into NATS.
+- [tinyblok](tinyblok.html) runs a subset of patchbay on ESP32 boards, relaying cleaned sensor data into NATS.
 - The Markdown docs these pages are built from live in the [repository](https://github.com/lexvicacom/monoblok/tree/main/docs).
