@@ -32,9 +32,9 @@
 <h2 id="the-portable-skill">The portable skill<a class="anchor" href="#the-portable-skill" aria-label="Link to this section">#</a></h2>
 <p>The <a href="https://github.com/lexvicacom/monoblok/tree/main/.agents/skills/patchbay-authoring" target="_blank" rel="noopener noreferrer"><code>patchbay-authoring</code> skill</a> teaches Codex and Claude Code the actual DSL: forms, state, runtime differences, YAML/JSON spellings, idioms, and validation. One package serves both agents, with references loaded as needed. It works outside the Monoblok repository.</p>
 <h2 id="install-without-a-checkout">Install without a checkout<a class="anchor" href="#install-without-a-checkout" aria-label="Link to this section">#</a></h2>
-<p>Download <a href="https://lexvicacom.github.io/monoblok/downloads/patchbay-authoring.zip" target="_blank" rel="noopener noreferrer">patchbay-authoring.zip</a>. The archive contains a <code>patchbay-authoring/</code> directory with <code>SKILL.md</code>, references, and assets. Extract the whole directory, not just <code>SKILL.md</code>.</p>
+<p>Download <a href="https://raw.githubusercontent.com/lexvicacom/monoblok/main/site/downloads/patchbay-authoring.zip" target="_blank" rel="noopener noreferrer">patchbay-authoring.zip</a>. The archive contains a <code>patchbay-authoring/</code> directory with <code>SKILL.md</code>, references, and assets. Extract the whole directory, not just <code>SKILL.md</code>.</p>
 <p>Run these commands in the project where you want to author patchbays. Choose the installation for your agent:</p>
-<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fL https://lexvicacom.github.io/monoblok/downloads/patchbay-authoring.zip \
+<figure class="code"><figcaption><span>shell</span></figcaption><pre><code>curl -fL https://raw.githubusercontent.com/lexvicacom/monoblok/main/site/downloads/patchbay-authoring.zip \
   -o /tmp/patchbay-authoring.zip
 
 <span class="tok-com"># Codex: project installation</span>
@@ -55,6 +55,13 @@ Round to one decimal place and publish only changed values to &lt;subject&gt;.st
 Validate it and show a soundcheck with repeated, changed, and negative readings.</code></pre></figure>
 <p>For Claude Code, use the same brief after <code>/patchbay-authoring</code>. Specify Tinyblok/Patchbay Lite when targeting firmware, and request YAML or JSON when wanted; EDN is the default.</p>
 <p>Give the agent concrete input subjects, representative payloads, desired outputs, and thresholds or windows. Ask for an explanation or review in ordinary prose; ask for a file-only response when you want only the configuration text.</p>
+<p>If you need to discover the input shape, install the <a href="https://github.com/nats-io/natscli#installation" target="_blank" rel="noopener noreferrer">NATS CLI</a> on the agent's machine and ask it to sample live messages. Supply a subject filter, message count, and an existing CLI profile (NATS calls these <strong>contexts</strong>), so credentials stay in your CLI configuration:</p>
+<figure class="code"><figcaption><span>text</span></figcaption><pre><code>$patchbay-authoring
+Use NATS CLI profile plant-readonly to sample up to 100 messages from sensors.&gt;
+for at most 30 seconds. Summarize the subjects and payload shapes, then use those
+inputs to write sensors.edn, rounding temperature readings to one decimal place
+and publishing changed values to &lt;subject&gt;.stable. Validate and soundcheck it.</code></pre></figure>
+<p>The agent passes the profile with <code>nats --context plant-readonly sub ...</code> without changing your default context. Sampling observes new Core NATS traffic; it does not replay JetStream history or consume a durable consumer. A quiet feed may yield fewer messages. The skill requires an installed <code>nats</code> command for this optional workflow and does not install it automatically.</p>
 <p>Install <a href="https://github.com/lexvicacom/monoblok#run-it" target="_blank" rel="noopener noreferrer">Monoblok</a> on the same machine so the agent can run <code>monoblok --validate</code> and <code>monoblok --soundcheck</code>. Inside a Monoblok checkout it uses <code>./build/monoblok</code>; Tinyblok projects should use their firmware host validator. The skill itself installs no binary or dependencies. If tools are unavailable, the agent should say so and give you the check commands.</p>
 <p>Read generated rules before deploying them. Validation checks well-formedness; a soundcheck transcript covers only the messages supplied. Check real timing and request-reply behavior against a running target when those matter.</p>
 <h2 id="use-from-a-checkout">Use from a checkout<a class="anchor" href="#use-from-a-checkout" aria-label="Link to this section">#</a></h2>

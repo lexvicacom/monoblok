@@ -106,7 +106,7 @@ trace: conn 2 PUB sensors.temp 4
 
 ### Coding assistants
 
-The portable [`patchbay-authoring` skill](./AGENTS_PATCHBAY.md) teaches Codex and Claude Code the DSL and how to validate rules. [Download the standalone ZIP](https://lexvicacom.github.io/monoblok/downloads/patchbay-authoring.zip), then extract it into `.agents/skills/` for Codex or `.claude/skills/` for Claude Code. No repository checkout is needed. The [usage guide](./AGENTS_PATCHBAY.md) covers project and personal installation, updates, and examples.
+The portable [`patchbay-authoring` skill](./AGENTS_PATCHBAY.md) teaches Codex and Claude Code the DSL and how to validate rules. [Download the standalone ZIP](https://raw.githubusercontent.com/lexvicacom/monoblok/main/site/downloads/patchbay-authoring.zip), then extract it into `.agents/skills/` for Codex or `.claude/skills/` for Claude Code. No repository checkout is needed. The [usage guide](./AGENTS_PATCHBAY.md) covers project and personal installation, updates, and examples.
 
 Invoke `$patchbay-authoring` in Codex or `/patchbay-authoring` in Claude Code. Describe your input subjects and payloads, desired outputs, and thresholds or windows; ask the agent to run `monoblok --validate` and `monoblok --soundcheck` and show the transcript. Install Monoblok locally to run those checks. In this repository the skill is already available to both agents.
 

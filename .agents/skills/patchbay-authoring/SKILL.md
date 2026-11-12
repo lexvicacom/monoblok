@@ -1,6 +1,6 @@
 ---
 name: patchbay-authoring
-description: Write, edit, review, or port Monoblok and Tinyblok/Patchbay Lite rule files, including EDN, YAML, JSON, validation, soundchecks, and matching sample traffic. Use for Patchbay DSL work, rather than general daemon C development.
+description: Write, edit, review, or port Monoblok and Tinyblok/Patchbay Lite rule files, including EDN, YAML, JSON, validation, soundchecks, matching sample traffic, and sampling live NATS messages to inform rules. Use for Patchbay DSL work, rather than general daemon C development.
 ---
 
 # Patchbay authoring
@@ -31,6 +31,7 @@ mistakes. Read additional references only when relevant:
 - [Monoblok features](references/monoblok.md): LVC/`last`, request-reply, timers, export, import, and JetStream replay.
 - [Worked examples](references/examples.md): rule composition when an example would help.
 - [Pump drivers](references/pump-drivers.md): only when the user requests a host-side traffic generator; adapt the bundled template to the actual input subjects.
+- [NATS sampling](references/nats-sampling.md): when the user wants to inspect live input before authoring rules. Requires the installed `nats` CLI; accepts a named CLI context (profile) without passing credentials.
 
 Use the target checkout's documentation and supported forms when they differ
 from this portable package. Do not invent operators or silently substitute a
