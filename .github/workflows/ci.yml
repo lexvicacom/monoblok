@@ -106,16 +106,38 @@ jobs:
       - name: Install smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev netcat-openbsd
       - uses: actions/setup-go@v5
+        id: go
         with:
-          go-version: '1.24.x'
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: NATS tool cache date
+        id: nats-cache
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Cache NATS tool dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-nats-smoke-${{ steps.nats-cache.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-nats-smoke-
       - name: Install NATS smoke tools
         run: |
-          go install github.com/nats-io/nats-server/v2@v2.12.7
-          go install github.com/nats-io/natscli/nats@v0.2.3
+          # Always resolve latest; cache dependencies and build output, not binaries.
+          go install github.com/nats-io/nats-server/v2@latest
+          go install github.com/nats-io/natscli/nats@latest
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          "$HOME/go/bin/nats-server" --version
+          "$HOME/go/bin/nats" --version
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Server smoke
         run: cmake --build build --target smoke --parallel
+      - name: Bridge smoke
+        run: scripts/bridge-smoke.sh
+      - name: Import smoke
+        run: scripts/import-smoke.sh
       - name: JetStream smoke
         run: scripts/jetstream-smoke.sh
