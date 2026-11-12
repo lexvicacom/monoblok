@@ -23,6 +23,7 @@ import hashlib
 import html
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -487,6 +488,10 @@ def package_patchbay_skill():
     output = os.path.join(ROOT, "site", "downloads", "patchbay-authoring.zip")
     if not os.path.isfile(os.path.join(source, "SKILL.md")):
         die("missing Patchbay skill entrypoint")
+    # Keep the checkout skill and standalone ZIP on the same canonical schema.
+    shutil.copyfile(
+        os.path.join(ROOT, "docs", "patchbay-yaml-schema.md"),
+        os.path.join(source, "references", "patchbay-yaml-schema.md"))
     os.makedirs(os.path.dirname(output), exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for directory, dirs, files in os.walk(source):

@@ -5,11 +5,13 @@
 YAML patchbay files are a monoblok source-file convenience. For Tinyblok or
 Patchbay Lite, keep using EDN unless that repo explicitly has a YAML loader.
 
-When working inside the monoblok repo, read `docs/patchbay-yaml-schema.md`
-first; it is the canonical YAML shape reference. Use
-`docs/patchbay.md#yaml-sugar-files` for the narrative overview and
-`docs/patchbay-cheatsheet.md#edn--json--yaml` for the short EDN/JSON/YAML
-comparison. The compact schema is:
+Read [the YAML schema](patchbay-yaml-schema.md) first. It is bundled with the
+skill and synced from Monoblok's canonical `docs/patchbay-yaml-schema.md` by
+`scripts/site-docs/build.py`; edit that source when maintaining the schema.
+When working in a checkout, prefer its canonical schema if it differs from
+the bundled copy. The checkout's `docs/patchbay.md#yaml-sugar-files` and
+`docs/patchbay-cheatsheet.md#edn--json--yaml` offer optional background.
+The compact schema is:
 
 - YAML is lowered directly to the patchbay AST. It is not general YAML:
   supported syntax is spaces for indentation, block maps/lists, flow arrays,

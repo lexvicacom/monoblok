@@ -27,7 +27,7 @@ rules. It covers grammar, bindings, forms, state, threading, gating, and common
 mistakes. Read additional references only when relevant:
 
 - [Tinyblok](references/tinyblok.md): firmware, native pumps/functions, request handlers, and Lite limitations. Check this before using daemon features in firmware.
-- [YAML and JSON](references/formats.md): format spellings and ports. In a Monoblok checkout, also read `docs/patchbay-yaml-schema.md` before YAML work; it is the canonical schema.
+- [YAML and JSON](references/formats.md): format spellings and ports. Before YAML work, also read [the YAML schema](references/patchbay-yaml-schema.md).
 - [Monoblok features](references/monoblok.md): LVC/`last`, request-reply, timers, export, import, and JetStream replay.
 - [Worked examples](references/examples.md): rule composition when an example would help.
 - [Pump drivers](references/pump-drivers.md): only when the user requests a host-side traffic generator; adapt the bundled template to the actual input subjects.
