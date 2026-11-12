@@ -22,6 +22,7 @@ The saved hosts are:
 - `hetzner-cax11`: Linux/aarch64, 2 cores, 4 GB.
 - `hetzner-cpx42`: Linux/x86_64, 8 cores, 15 GB.
 - `mac-mini-m4`: macOS/arm64, 10 cores, 16 GB.
+- `mac-mbp-m2`: macOS/arm64, 8 cores, 16 GB.
 
 Each output records the host, monoblok version, NATS CLI version, optional
 `nats-server` version, libuv mode, workloads, and msgs/sec table. On Linux the

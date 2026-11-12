@@ -1,0 +1,23 @@
+=== Host ===
+
+macOS 26.5.2
+arm64 · 8 cores · 16 GB
+
+monoblok 0.0.0 (Darwin/arm64 AppleClang 17.0.0.17000013 Release)
+nats cli v0.5.1
+nats-server: v2.15.3
+monoblok libuv mode: platform default
+
+Running monoblok benchmarks...
+Running nats-server benchmarks...
+
+=== Results (msgs/sec) ===
+
+Workload                       monoblok    nats-server    delta
+--------                     ----------    -----------    -----
+1 pub x 1M x 64B              3,181,622      3,179,349      +0%
+2 pub x 1M x 64B              5,555,420      4,012,445     +38%
+8 pub x 250k x 128B           4,942,428      4,627,348      +7%
+1 pub -> 1 sub x 500k         2,530,276      1,980,796     +28%
+1 pub -> 10 subs x 100k       7,546,951      2,632,408    +187%
+1 pub -> 50 subs x 50k        7,943,752      2,642,469    +201%
