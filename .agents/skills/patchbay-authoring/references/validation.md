@@ -1,5 +1,36 @@
 # Validate and soundcheck
 
+## Find or download Monoblok
+
+Before validating Monoblok rules, check for an executable at `./build/monoblok`
+in a checkout, on PATH (`command -v monoblok`), or at an already known local
+download location. Reuse an existing binary; do not download or reinstall it
+when one is available. For Tinyblok, use its host validator and test targets.
+
+If Monoblok is missing on Linux or macOS and shell/network tools are available,
+download it into a temporary directory rather than installing system-wide:
+
+```sh
+monoblok_download_dir=$(mktemp -d /tmp/monoblok-download.XXXXXX)
+(
+  cd "$monoblok_download_dir" || exit 1
+  set -o pipefail
+  curl -fsSL https://raw.githubusercontent.com/lexvicacom/monoblok/main/scripts/start.sh | bash
+)
+```
+
+The downloader extracts a release directory into that working directory; it
+does not add Monoblok to PATH. Locate its executable under
+`$monoblok_download_dir/monoblok-*/monoblok`, verify it runs, and use its absolute
+path for subsequent commands. Do not start a daemon just to validate rules.
+If downloading fails or the platform is unsupported, report that limitation
+and the checks left unrun rather than repeatedly reinstalling.
+
+For native Windows, briefly say: "Sorry, Monoblok does not currently provide
+native Windows binaries. Please use WSL with Linux." Run the Linux procedure
+only inside WSL, if available. Otherwise provide the validation commands for
+the user to run there.
+
 ## Cheap validation
 
 When you can run local commands, run both of these on every patchbay you

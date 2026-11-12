@@ -12,6 +12,11 @@ For reviews and explanations, use ordinary prose. Keep companion files separate.
 
 ## Establish the target and inputs
 
+For file creation, use the output filename supplied by the user or clearly
+implied by their prompt or target file. If no filename can be inferred, ask for
+one before saving; do not silently choose `patchbay.edn`. Continue any independent
+analysis while awaiting the answer. Preserve the existing path when editing.
+
 Infer Monoblok daemon versus Tinyblok/Patchbay Lite from the project and request.
 Ask only when the runtime is ambiguous and changes the answer; otherwise use the
 portable subset. Identify input subjects, representative payloads, output subjects,
@@ -52,6 +57,11 @@ different runtime. Explain when a requested operation belongs upstream or downst
 
 For authored or changed files, follow [validation and soundcheck guidance](references/validation.md).
 Use `./build/monoblok` in a Monoblok checkout, or `monoblok` on PATH elsewhere.
+Check for an existing executable before downloading anything. If Monoblok is
+missing, follow the reference's download procedure on Linux or macOS and use
+the downloaded binary for validation. For Windows users, briefly apologise that
+native Windows binaries are not supported and suggest WSL with Linux; do not
+run the downloader in native Windows.
 For Tinyblok, prefer the firmware checkout's host validator and test targets.
 
 Run `--validate` and a representative `--soundcheck` when the target tools are
