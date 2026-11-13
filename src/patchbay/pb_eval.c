@@ -887,7 +887,11 @@ typedef struct resolver {
 
 static bool resolve_fail(resolver *r, const char *what, pb_slice name) {
     if (r->err != NULL && r->err_cap != 0) {
-        snprintf(r->err, r->err_cap, "%s: %.*s", what, (int)name.len, name.ptr);
+        if (name.ptr != NULL && name.len != 0) {
+            snprintf(r->err, r->err_cap, "%s: %.*s", what, (int)name.len, name.ptr);
+        } else {
+            snprintf(r->err, r->err_cap, "%s", what);
+        }
     }
     return false;
 }
