@@ -7,6 +7,7 @@
 // Fragments share file-local helpers; see README.md for the form registry.
 #include "pb_form_numbers.c"
 #include "pb_form_text.c"
+#include "pb_form_regex.c"
 #include "pb_form_state.c"
 #include "pb_form_bar.c"
 #if PB_ENABLE_JSON
@@ -42,6 +43,9 @@ pb_eval_result pb_eval_call_form(pb_eval_ctx *ctx, pb_form form, pb_values args)
     case PB_FORM_CONTAINS: return call_contains(args);
     case PB_FORM_STARTS_WITH: return call_affix(args, AFFIX_STARTS);
     case PB_FORM_ENDS_WITH: return call_affix(args, AFFIX_ENDS);
+    case PB_FORM_MATCHES: return call_matches(args);
+    case PB_FORM_RE_CAPTURE: return call_re_capture(args);
+    case PB_FORM_RE_REPLACE: return call_re_replace(ctx, args);
     case PB_FORM_SUBJECT_APPEND: return call_subject_append(ctx, args);
     case PB_FORM_SUBJECT_TOKEN: return call_subject_token(ctx, args);
     case PB_FORM_SUBJECT_WITH: return call_subject_with(ctx, args);

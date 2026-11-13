@@ -17,6 +17,7 @@ typedef enum pb_eval_error {
     PB_EVAL_ARITY,
     PB_EVAL_INVALID_SUBJECT,
     PB_EVAL_PUBLISH_FAILED,
+    PB_EVAL_REGEX_BUDGET, // a regex form hit its work budget; the rule fails closed
 } pb_eval_error;
 
 typedef struct pb_eval_ctx pb_eval_ctx;

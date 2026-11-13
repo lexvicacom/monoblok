@@ -68,6 +68,10 @@ The compact schema is:
   `reentrant`) still lower to keywords (`ms` becomes `:ms`). Keep standalone
   flags such as `[now, date]` bare; do not invent a value to put them in a map.
   Never write a leading colon (`:ms`) in YAML.
+- Regex patterns (experimental `matches?`, `re-capture`, `re-replace`) are
+  string literals written in single quotes: `'\d+'` (raw; `''` is a quote).
+  Double quotes follow YAML escapes: `"\\d+"` works, `"\d+"` is a load error.
+  EDN uses `#"\d+"` and JSON `"\\d+"`. Quote the head: `["matches?", '^err', $payload]`.
 - Every other string in a rule body must be quoted (`"clean.temp"`, `"hot"`).
   An unquoted word that is not a number, boolean, null, `$binding`, or option
   is a load error.
@@ -95,7 +99,8 @@ every:
 JSON patchbays follow the same ideas: arrays are call forms, bound values are
 strings with a leading `$` (`"$payload"`, `"$payload-float"`, `"$replaying?"`), and vector data
 is `{"vector": [...]}`. A plain `"payload"` string in JSON is just text, not an
-error, so always write `"$payload"`. Do not use `{"vec": [...]}`.
+error, so always write `"$payload"`. Do not use `{"vec": [...]}`. Regex patterns
+in JSON are JSON-escaped strings: `["re-capture", "t=(\\d+)"]`.
 
 Validate YAML ports with `monoblok --validate file.yml`. When behavior matters,
 compare the original and ported files with `--soundcheck` using the same input

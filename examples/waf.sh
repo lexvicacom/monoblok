@@ -10,11 +10,14 @@ subscribe 'waf.blocked'     blocked.txt
 subscribe 'waf.flood.>'     flood.txt
 settle 0.3
 
-# Payload scan: two ordinary events and two that carry bad fragments.
+# Payload scan: two ordinary events and four that carry bad fragments,
+# including a mixed-case tag and a table drop with extra whitespace.
 pub in.event.orders   '{"note":"leave at the door"}'
 pub in.event.orders   '{"note":"<script>alert(1)</script>"}'
 pub in.event.signup   '{"name":"Ada"}'
 pub in.event.signup   '{"name":"x; DROP TABLE users"}'
+pub in.event.orders   '{"note":"<SCRIPT src=x>"}'
+pub in.event.signup   '{"name":"x; drop   table users"}'
 
 # Outlier gate: steady readings around 400 with two wild ones.
 for v in 412 398 405 391 388 9000 402 395 64000 399; do
@@ -33,7 +36,7 @@ settle 0.6
 
 note \
     "Publishers sent events and readings under in.>." \
-    "Events with bad fragments were reported on waf.blocked and not forwarded, readings above the rolling p99 were held back, and the subject that published twelve messages in a burst got one block message."
+    "Events with bad fragments, in any case and with any spacing, were reported on waf.blocked and not forwarded, readings above the rolling p99 were held back, and the subject that published twelve messages in a burst got one block message."
 show "forwarded events"    clean-event.txt
 show "blocked subjects"    blocked.txt
 show "forwarded readings"  clean-reading.txt

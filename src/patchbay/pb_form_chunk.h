@@ -2,6 +2,7 @@
 #define PB_FORM_CHUNK_H
 
 #include "pb_eval_internal.h"
+#include "pb_regex.h"
 
 #if PB_ENABLE_JSON
 #include "yyjson.h"

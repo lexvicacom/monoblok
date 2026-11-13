@@ -4,6 +4,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// GCC and Clang expose address sanitizer detection through different macros.
+#if defined(__SANITIZE_ADDRESS__)
+#define MB_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define MB_TEST_ASAN 1
+#endif
+#endif
+#ifndef MB_TEST_ASAN
+#define MB_TEST_ASAN 0
+#endif
+
 #define CHECK(expr) do { if (!(expr)) test_fail(__FILE__, __LINE__, #expr); } while (0)
 
 #define TEST_MAIN(suite, ...)                                      \

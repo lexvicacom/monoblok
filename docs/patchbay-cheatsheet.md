@@ -39,6 +39,9 @@ and operators that are YAML indicators are quoted (`[">", a, b]`). YAML
 files are valid standard YAML. In top-level config string positions,
 YAML `env: "NAME"` lowers to EDN `(env "NAME")`.
 
+Regex patterns (experimental `matches?`, `re-capture`, `re-replace`) are
+written `#"\d+"` in EDN, `'\d+'` in YAML and `"\\d+"` in JSON.
+
 `pipeline:` passes a starting value through steps (`->`); `do:` accepts one
 expression or a block list evaluated in order. Use exactly one body key.
 `thread:` and `form:` remain accepted as compatibility spellings.
@@ -119,6 +122,9 @@ window.
 | `(str-concat A B C ...)` | concatenated string |
 | `(contains? COLL ITEM)` | bool. substring on strings, membership on vectors: `(contains? [1 2 3] payload-int)` |
 | `(starts-with? TEXT PREFIX)` / `(ends-with? TEXT SUFFIX)` | bool (strings only) |
+| `(matches? PATTERN TEXT)` | bool, pattern found anywhere in TEXT. Experimental regex. PATTERN must be a string literal (EDN `#"\d+"`, YAML `'\d+'`, JSON `"\\d+"`); `^`/`$` anchor. |
+| `(re-capture PATTERN TEXT)` | capture group 1 (or the whole match); nil on no match. Experimental. |
+| `(re-replace PATTERN REPL TEXT)` | every match replaced by the literal REPL (no `$1`). Experimental. |
 
 ## Comparisons / arithmetic
 

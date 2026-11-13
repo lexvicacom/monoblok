@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "pb_program.h"
 #include "test_check.h"
 
@@ -1144,7 +1146,108 @@ static void test_yaml_option_maps_runtime(void) {
     pb_program_free(&program);
 }
 
+// Runs the same three-rule regex patchbay through one source spelling and checks the published output.
+static void check_regex_program(const char *name, const char *src) {
+    pb_program program = {0};
+    CHECK(pb_program_load_source(&program, name, src, strlen(src)));
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit("out.>"), lit("1")));
+    CHECK(pb_program_eval_publish(&program, &router, lit("in.a"), lit("error: x"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(pb_program_eval_publish(&program, &router, lit("cap.a"), lit("id=3 t=215 z"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(pb_program_eval_publish(&program, &router, lit("cap.b"), lit("none"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(pb_program_eval_publish(&program, &router, lit("rep.a"), lit("a  b\tc"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(buf_eq(&conn.out, "MSG out.match 1 4\r\ntrue\r\nMSG out.cap 1 3\r\n215\r\nMSG out.rep 1 5\r\na_b_c\r\n"));
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
+// matches?, re-capture and re-replace compile their literal pattern at load in EDN, JSON and YAML.
+static void test_regex_forms_load_and_run(void) {
+    check_regex_program("rx.edn",
+                        "(on \"in.>\" (-> payload (matches? \"^err\") (publish! \"out.match\")))\n"
+                        "(on \"cap.>\" (-> payload (re-capture \"t=(\\\\d+)\") (publish! \"out.cap\")))\n"
+                        "(on \"rep.>\" (-> payload (re-replace \"\\\\s+\" \"_\") (publish! \"out.rep\")))\n");
+    check_regex_program("rx.json",
+                        "[[\"on\",\"in.>\",[\"->\",\"$payload\",[\"matches?\",\"^err\"],[\"publish!\",\"out.match\"]]],"
+                        "[\"on\",\"cap.>\",[\"->\",\"$payload\",[\"re-capture\",\"t=(\\\\d+)\"],[\"publish!\",\"out.cap\"]]],"
+                        "[\"on\",\"rep.>\",[\"->\",\"$payload\",[\"re-replace\",\"\\\\s+\",\"_\"],[\"publish!\",\"out.rep\"]]]]\n");
+    // The #"..." literal is the same pattern as the doubled-backslash string.
+    check_regex_program("rx-literal.edn",
+                        "(on \"in.>\" (-> payload (matches? #\"^err\") (publish! \"out.match\")))\n"
+                        "(on \"cap.>\" (-> payload (re-capture #\"t=(\\d+)\") (publish! \"out.cap\")))\n"
+                        "(on \"rep.>\" (-> payload (re-replace #\"\\s+\" \"_\") (publish! \"out.rep\")))\n");
+    // Double-quoted YAML follows YAML escapes, so \\d+ is the pattern \d+.
+    check_regex_program("rx-dq.yml",
+                        "on:\n"
+                        "  - sub: \"in.>\"\n    pipeline: [$payload, [\"matches?\", '^err'], [publish!, \"out.match\"]]\n"
+                        "  - sub: \"cap.>\"\n    pipeline: [$payload, [re-capture, \"t=(\\\\d+)\"], [publish!, \"out.cap\"]]\n"
+                        "  - sub: \"rep.>\"\n    pipeline: [$payload, [re-replace, \"\\\\s+\", '_'], [publish!, \"out.rep\"]]\n");
+    // Single-quoted YAML scalars are raw, so '\d+' is the pattern \d+.
+    check_regex_program("rx.yml",
+                        "on:\n"
+                        "  - sub: \"in.>\"\n    pipeline: [$payload, [\"matches?\", '^err'], [publish!, \"out.match\"]]\n"
+                        "  - sub: \"cap.>\"\n    pipeline: [$payload, [re-capture, 't=(\\d+)'], [publish!, \"out.cap\"]]\n"
+                        "  - sub: \"rep.>\"\n    pipeline: [$payload, [re-replace, '\\s+', '_'], [publish!, \"out.rep\"]]\n");
+    const char *direct =
+        "on:\n  - sub: \"in.>\"\n    when: [\"matches?\", '^err', $payload]\n    do: [publish!, \"out.match\", [re-replace, 'r+', 'R', $payload]]\n";
+    pb_program program = {0};
+    CHECK(pb_program_load_source(&program, "direct.yml", direct, strlen(direct)));
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit("out.>"), lit("1")));
+    CHECK(pb_program_eval_publish(&program, &router, lit("in.a"), lit("error"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(pb_program_eval_publish(&program, &router, lit("in.a"), lit("fine"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(buf_eq(&conn.out, "MSG out.match 1 4\r\neRoR\r\n"));
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
+// Out of budget fails closed: nothing is published and the publish reports failure.
+static void test_regex_budget_fails_closed(void) {
+    const char *src = "(on \"in.>\" (-> payload (re-replace \"a+b|a\" \"x\") (publish! \"out.masked\")))\n";
+    pb_program program = {0};
+    CHECK(pb_program_load_source(&program, "budget.edn", src, strlen(src)));
+    mb_router router;
+    mb_router_init(&router);
+    mb_router_conn conn = {0};
+    CHECK(mb_router_subscribe(&router, &conn, lit("out.>"), lit("1")));
+    enum { RUN = 64 * 1024 };
+    static char run[RUN];
+    memset(run, 'a', RUN);
+    mb_slice big = {.ptr = (const uint8_t *)run, .len = RUN};
+    CHECK(!pb_program_eval_publish(&program, &router, lit("in.a"), big, 0, 0, (pb_program_eval_options){0}));
+    CHECK(conn.out.len == 0);
+    CHECK(pb_program_eval_publish(&program, &router, lit("in.a"), lit("bab"), 0, 0, (pb_program_eval_options){0}));
+    CHECK(buf_eq(&conn.out, "MSG out.masked 1 2\r\nbx\r\n"));
+    mb_buf_free(&conn.out);
+    mb_router_free(&router);
+    pb_program_free(&program);
+}
+
+// A bad or non-literal pattern fails the whole load, not a later publish.
+static void test_regex_bad_patterns_fail_load(void) {
+    const char *bad[] = {
+        "(on \"a\" (publish! \"b\" (matches? \"ab(cd\" payload)))\n",
+        "(on \"a\" (publish! \"b\" (matches? payload payload)))\n",
+        "(on \"a\" (publish! \"b\" (re-capture (str-concat \"a\" \"b\") payload)))\n",
+        "(on \"a\" (publish! \"b\" (matches? \"\\d\" payload)))\n", // invalid EDN escape
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i += 1) {
+        pb_program program = {0};
+        CHECK(!pb_program_load_source(&program, "bad.edn", bad[i], strlen(bad[i])));
+        pb_program_free(&program);
+    }
+}
+
 TEST_MAIN(program,
+          test_regex_forms_load_and_run,
+          test_regex_bad_patterns_fail_load,
+          test_regex_budget_fails_closed,
           test_yaml_option_maps_runtime,
           test_yaml_pipeline_and_do_aliases,
           test_reentry_is_opt_in,

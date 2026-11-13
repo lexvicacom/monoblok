@@ -16,7 +16,8 @@ precede their arguments, without commas or infix notation; `(+ 1 2 3)` is `1 + 2
 `(> x 10)` is `x > 10`. Calls can be nested:
 `(publish! (subject-append "high") payload)` calls `publish!` with two
 args, the first of which is itself the result of calling
-`subject-append`. Strings are double-quoted, numbers bare, and
+`subject-append`. Strings are double-quoted (`#"..."` is a raw string for
+regex patterns), numbers bare, and
 everything else (`subject`, `payload`, `when`, `+`) is a symbol
 resolved by the evaluator.
 
@@ -119,7 +120,8 @@ an option map such as `{ms: 5000}` lowers to keyword/value pairs.
 Bare option words (`ms`, `dp`, `subject`, ...) remain supported, including
 standalone flags. Option maps must be nonempty and use unique known keys;
 values may be expressions, but cannot be maps. Other flow maps are unsupported.
-Every other string in a rule body must be quoted; an
+Single-quoted scalars are raw (`''` is one quote); double-quoted scalars
+follow standard YAML escapes. Every other string in a rule body must be quoted; an
 unquoted word that is not a number, boolean, null, binding or option is
 a load error, so a typo cannot silently become text. Operators made of
 punctuation (`>`, `*`, `->`) must be quoted too, as in
@@ -399,7 +401,47 @@ so it threads).
 | `(contains? coll item)`          | substring check on strings (`(contains? payload "ERROR")`), membership check on vectors (`(contains? [1 2 3] payload-int)`, `(contains? ["red" "green"] payload)`). Strict equality, so `"1"` does not match `1`. |
 | `(starts-with? text prefix)`     | boolean prefix check (strings only)                 |
 | `(ends-with? text suffix)`       | boolean suffix check (strings only)                 |
+| `(matches? pattern text)`        | boolean regex test, true when the pattern matches anywhere in the text (experimental, see [Regular expressions](#regular-expressions)) |
+| `(re-capture pattern text)`      | text of capture group 1, or the whole match when the pattern has no group; nil on no match (experimental) |
+| `(re-replace pattern replacement text)` | text with every match replaced by the literal replacement (experimental) |
 | `(subject-token N [S])`          | Nth dot-separated token (0-indexed) of `S` (default: current subject); nil if out of range |
+
+### Regular expressions
+
+> **Experimental.** `matches?`, `re-capture` and `re-replace` are new; the forms and pattern syntax may change between releases.
+
+Use a pattern when `contains?` is too literal ("case-insensitive", "digits after `t=`", "any run of whitespace"). The pattern comes first so the forms thread with `->`.
+
+- `(matches? PATTERN TEXT)`: `true` when the pattern matches anywhere in TEXT. Use `^` and `$` to pin the ends.
+- `(re-capture PATTERN TEXT)`: the text of group 1 (or the whole match if there is no group); nil when nothing matches.
+- `(re-replace PATTERN REPLACEMENT TEXT)`: TEXT with every match replaced by the literal REPLACEMENT (no `$1`).
+
+```edn
+(on "events.>"
+  (when (matches? #"(?i)<script|drop\s+table" payload)
+    (publish! "waf.blocked" subject)))
+
+(on "dev.*.status"
+  (-> payload
+      (re-capture #"t=(\d+)")
+      (publish! (subject-append "temp"))))
+```
+
+The pattern must be a string literal in the file; `--validate` reports a malformed one. Write it per format:
+
+| format | `\d+` is written | note |
+|--------|------------------|------|
+| EDN | `#"\d+"` | raw string; `\"` is a quote. An ordinary `"\\d+"` also works. |
+| YAML | `'\d+'` | single quotes are raw; write `''` for a quote. Double quotes follow YAML escapes (`"\\d+"` works, `"\d+"` is an error). |
+| JSON | `"\\d+"` | JSON has no raw strings. |
+
+**Syntax.** Literals, `.`, classes (`[a-z]`, `[^x]`, `\d \w \s` and their negations), `\b`, `^`, `$`, `* + ? {n,m}` (and lazy forms), `|`, groups `(...)` and `(?:...)`, and the leading flags `(?i)` and `(?s)`. Not supported: backreferences, lookaround, named groups, Unicode classes. Things that trip people up:
+
+- Matching is by byte, not Unicode, and `(?i)` is ASCII only.
+- `$` is the strict end of the payload, so `foo$` does not match `foo` followed by a newline; use `foo\s*$`.
+- A literal `{` must be escaped (`\{`).
+
+**Cost.** Matching time grows linearly with the payload and cannot blow up on hostile input. If a pattern does an unusual amount of work on a message, the rule fails for that message (nothing is published) instead of stalling the daemon.
 
 ## Subject filters
 

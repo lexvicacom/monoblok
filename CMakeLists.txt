@@ -97,6 +97,8 @@ set(PB_CORE
   src/patchbay/pb_yaml.c
   src/patchbay/pb_config.c
   src/patchbay/pb_program.c
+  src/patchbay/pb_regex.c
+  src/patchbay/pb_regex_dfa.c
   src/patchbay/pb_sexpr.c
   src/patchbay/pb_soundcheck.c
   src/patchbay/pb_validate.c
@@ -108,6 +110,7 @@ set(PB_FORM_FRAGMENTS
   src/patchbay/pb_form_clocks.c
   src/patchbay/pb_form_json.c
   src/patchbay/pb_form_numbers.c
+  src/patchbay/pb_form_regex.c
   src/patchbay/pb_form_state.c
   src/patchbay/pb_form_text.c
   src/patchbay/pb_form_windows.c
@@ -137,6 +140,10 @@ target_compile_options(patchbay_sexpr PRIVATE ${MB_WARNINGS})
 add_executable(sexpr-tests test/sexpr_unit.c)
 target_link_libraries(sexpr-tests PRIVATE patchbay_sexpr)
 target_compile_options(sexpr-tests PRIVATE ${MB_WARNINGS})
+
+add_executable(regex-tests test/regex_unit.c)
+target_link_libraries(regex-tests PRIVATE patchbay_sexpr)
+target_compile_options(regex-tests PRIVATE ${MB_WARNINGS})
 
 add_executable(eval-tests test/eval_unit.c)
 target_link_libraries(eval-tests PRIVATE patchbay_sexpr)
@@ -175,6 +182,7 @@ enable_testing()
 add_test(NAME unit COMMAND unit-tests)
 add_test(NAME sexpr COMMAND sexpr-tests)
 add_test(NAME eval COMMAND eval-tests)
+add_test(NAME regex COMMAND regex-tests)
 add_test(NAME correctness COMMAND correctness-tests)
 add_test(NAME json COMMAND json-tests)
 add_test(NAME program COMMAND program-tests)

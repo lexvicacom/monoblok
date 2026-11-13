@@ -48,8 +48,8 @@ When testing with `nats pub`, pass negative bodies after `--`, for example `nats
 | [`bridge.edn`](examples-nats.html#export-to-a-nats-server) | {tag:Intermediate} | export selected subjects to a real NATS server |
 | [`import.edn`](examples-nats.html#tap-an-existing-nats-server) | {tag:Intermediate} | tap remote subjects, keep raw input private, export the clean stream |
 | [`jetstream.yml`](examples-nats.html#jetstream-replay) | {tag:Advanced} | replay a populated JetStream stream, then continue live |
-| [`waf.edn`](examples-waf.html#a-waf-for-nats) | {tag:Intermediate} | a WAF for NATS: payload scan, p99 outlier gate, flood detection |
-| [`deidentify.edn`](examples-waf.html#de-identifying-records) | {tag:Intermediate} | strip identifiers from patient frames: allow-list fields, age bands, ward aggregates |
+| [`waf.edn`](examples-waf.html#a-waf-for-nats) | {tag:Intermediate} | a WAF for NATS: regex payload scan, p99 outlier gate, flood detection |
+| [`deidentify.edn`](examples-waf.html#de-identifying-records) | {tag:Intermediate} | strip identifiers from patient frames: allow-list fields, age bands, ward aggregates, masked notes |
 | [`cold-store.edn`](agents.html#a-worked-example) | {tag:Intermediate} | freezer monitoring written by a coding agent: demux, dedupe, hysteresis alert, door count |
 | [`moonwell_patchbay.edn`](examples-large.html#moonwell) | {tag:Advanced} | 24 rules over nested JSON telemetry, using most of the language |
 | [`cloudhook_patchbay.edn`](examples-large.html#cloudhook) | {tag:Advanced} | 23 rules: a second large generated patchbay |

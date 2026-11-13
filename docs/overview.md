@@ -66,8 +66,8 @@ The root [`patchbay.edn`](../patchbay.edn) is the short tour. Full syntax lives 
 | [`ticker.edn`](../examples/ticker.edn)             | market data: round, squelch, big-jump alerts, export            |
 | [`bars.edn`](../examples/bars.edn)                 | tick-count OHLC bars per symbol                                 |
 | [`latency-stats.edn`](../examples/latency-stats.edn) | live p50/p95/p99/stddev over a sliding window                 |
-| [`waf.edn`](../examples/waf.edn)                   | a WAF for NATS: payload scan, p99 outlier gate, flood detection |
-| [`deidentify.edn`](../examples/deidentify.edn)     | de-identify patient frames: allow-list fields, age bands, ward aggregates |
+| [`waf.edn`](../examples/waf.edn)                   | a WAF for NATS: regex payload scan, p99 outlier gate, flood detection |
+| [`deidentify.edn`](../examples/deidentify.edn)     | de-identify patient frames: allow-list fields, age bands, ward aggregates, masked notes |
 | [`cold-store.edn`](../examples/cold-store.edn)     | freezer monitoring written by a coding agent: demux, dedupe, hysteresis alert, door count |
 | [`clocked.edn`](../examples/clocked.edn)             | silence detection, debounce, sampling, clocked aggregates, an `every` heartbeat, and a funnel |
 | [`json-frames.edn`](../examples/json-frames.edn)   | `json-demux!` a JSON-emitting device into scalar sub-subjects   |

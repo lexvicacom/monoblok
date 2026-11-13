@@ -152,6 +152,54 @@ check_bad_config max-pending 'max-pending must be a positive integer' '(import :
 check_bad_config stream-no-consumer 'requires :consumer' '(import :streams [[:servers ["nats://x:4222"] :subject "a.>" :stream "S"]])'
 check_bad_config catch-up-on-core 'unknown import option: catch-up' '(import :servers ["nats://x:4222"] :subject "a.>" :catch-up true)'
 
+# Regex forms: the pattern is compiled at load, so --validate catches bad ones.
+good_regex="$tmp/good-regex.edn"
+cat > "$good_regex" <<'EOF'
+(on "in.>" (publish! "out.t" (re-capture "t=(\\d+)" payload)))
+EOF
+"$bin" --validate "$good_regex" >/dev/null
+printf 'in.a|id=1 t=42\n' | "$bin" --soundcheck "$good_regex" | grep '^out.t|42$' >/dev/null
+
+# The #"..." literal and single-quoted YAML scalars carry the pattern raw.
+literal_regex="$tmp/literal-regex.edn"
+cat > "$literal_regex" <<'EOF'
+(on "in.>" (publish! "out.t" (re-capture #"t=(\d+)" payload)))
+EOF
+"$bin" --validate "$literal_regex" >/dev/null
+printf 'in.a|id=1 t=42\n' | "$bin" --soundcheck "$literal_regex" | grep '^out.t|42$' >/dev/null
+yaml_regex="$tmp/regex-single.yml"
+cat > "$yaml_regex" <<'EOF'
+on:
+  - sub: "in.>"
+    do: [publish!, "out.t", [re-capture, 't=(\d+)', $payload]]
+EOF
+"$bin" --validate "$yaml_regex" >/dev/null
+printf 'in.a|id=1 t=42\n' | "$bin" --soundcheck "$yaml_regex" | grep '^out.t|42$' >/dev/null
+
+# A pattern too big for the fast table still validates, with a note.
+slow_regex="$tmp/slow-regex.edn"
+printf '%s\n' '(on "a" (publish! "b" (matches? "(?:a|b)*a(?:a|b){100}c" payload)))' > "$slow_regex"
+"$bin" --validate "$slow_regex" 2> "$tmp/slow-regex.err" >/dev/null
+grep '^note: rule 0: matches?: pattern runs without the fast table' "$tmp/slow-regex.err" >/dev/null
+if "$bin" --validate "$good_regex" 2>&1 >/dev/null | grep '^note:' >/dev/null; then
+    echo "fast-table pattern should not produce a note" >&2
+    exit 1
+fi
+
+check_bad_regex() {
+    name="$1"; want="$2"; body="$3"
+    printf '%s\n' "$body" > "$tmp/regex-$name.edn"
+    if "$bin" --validate "$tmp/regex-$name.edn" > "$tmp/regex-$name.out" 2> "$tmp/regex-$name.err"; then
+        echo "bad regex $name unexpectedly validated" >&2
+        exit 1
+    fi
+    grep "$want" "$tmp/regex-$name.err" >/dev/null
+}
+check_bad_regex bad-pattern 'matches?: bad pattern: .* at byte 2 in "ab(cd"' '(on "a" (publish! "b" (matches? "ab(cd" payload)))'
+check_bad_regex non-literal 'matches?: pattern must be a string literal' '(on "a" (publish! "b" (matches? payload payload)))'
+check_bad_regex bad-brace 'bad pattern: .*write .{ for a literal brace' '(on "a" (publish! "b" (matches? "{x" payload)))'
+check_bad_regex computed 're-replace: pattern must be a string literal' '(on "a" (publish! "b" (re-replace (str-concat "a" "b") "x" payload)))'
+
 printf 'sensors.temp|31\nother.temp|40\n\n' | "$bin" --soundcheck "$valid" > "$tmp/soundcheck.out" 2> "$tmp/soundcheck.err"
 grep '^sensors.temp|31$' "$tmp/soundcheck.out" >/dev/null
 grep '^sensors.temp.seen|31$' "$tmp/soundcheck.out" >/dev/null
@@ -312,6 +360,9 @@ expect_load_error() {
         exit 1
     fi
 }
+expect_load_error bad-dq-escape.yml 'use single quotes for raw text' 'on:
+  - sub: "in.>"
+    do: [publish!, "out.t", [re-capture, "t=(\d+)", $payload]]'
 expect_load_error bad-bare.yml 'use $payload' 'on:
   - sub: "a"
     form: [publish!, "x", payload]'
