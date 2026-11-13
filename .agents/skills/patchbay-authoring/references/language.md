@@ -173,7 +173,7 @@ Per group, build the funnel subject from a token and match it with a wildcard:
 
 ```edn
 (on "site.*.*" :reentrant true
-  (publish! (str-concat "group." (subject-token 1)) payload))
+  (publish! (subject-with "group" (subject-token 1)) payload))
 
 (on "group.*"
   (publish! (subject-append "average") :dp 1 (moving-avg 8 payload-float)))
@@ -194,23 +194,23 @@ connection published, so every decision is per subject, not per client.
 (on "in.event.*"
   (if (or (contains? payload "<script") (contains? payload "DROP TABLE"))
     (publish! "waf.blocked" subject)
-    (publish! (str-concat "clean.event." (subject-token 2)) payload)))
+    (publish! (subject-with "clean.event" (subject-token 2)) payload)))
 
 ; Outlier gate: forward only values at or below the rolling p99.
 (on "in.reading.*"
   (when (<= payload-float (percentile 100 0.99 payload-float))
-    (publish! (str-concat "clean.reading." (subject-token 2)) payload)))
+    (publish! (subject-with "clean.reading" (subject-token 2)) payload)))
 
 ; Flood verdict: one "block" on the way up, one "clear" on the way down.
 (on "in.*.*"
   (transition (> (rate :ms 5000 payload) 2)
-    (publish! (str-concat "waf.flood." subject) "block")
-    (publish! (str-concat "waf.flood." subject) "clear")))
+    (publish! (subject-with "waf.flood" subject) "block")
+    (publish! (subject-with "waf.flood" subject) "clear")))
 
 ; De-identify by allow-list: name the fields that may leave and drop the
 ; identifying subject token. Fields that are not named are never forwarded.
 (on "ward.*.*"
-  (-> payload (json-get "hr") (publish! (str-concat "clean." (subject-token 1) ".hr"))))
+  (-> payload (json-get "hr") (publish! (subject-with "clean" (subject-token 1) "hr"))))
 ```
 
 Things to tell the user when you write gates like these:

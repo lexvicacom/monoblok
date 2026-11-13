@@ -531,7 +531,7 @@ token and match it with a wildcard:
 
 ```edn
 (on "site.*.*" :reentrant true
-  (publish! (str-concat "group." (subject-token 1)) payload))
+  (publish! (subject-with "group" (subject-token 1)) payload))
 
 (on "group.*"
   (publish! (subject-append "average") :dp 1 (moving-avg 8 payload-float)))

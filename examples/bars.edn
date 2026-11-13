@@ -32,4 +32,4 @@
 ; from the prior bar's close on the same symbol.
 (on "MARKET.*.bar.close"
   (when (>= (abs (delta payload-float)) 1.0)
-    (publish! (str-concat "alerts.market." (subject-token 1)) payload)))
+    (publish! (subject-with "alerts.market" (subject-token 1)) payload)))

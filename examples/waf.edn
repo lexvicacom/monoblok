@@ -18,7 +18,7 @@
           (contains? payload "${jndi:")
           (contains? payload "DROP TABLE"))
     (publish! "waf.blocked" subject)
-    (publish! (str-concat "clean.event." (subject-token 2)) payload)))
+    (publish! (subject-with "clean.event" (subject-token 2)) payload)))
 
 ;; Outlier gate. Forward a reading only while it sits at or below the
 ;; p99 of the last 100 readings from that device. The window includes
@@ -27,7 +27,7 @@
 ;; message on a device whose readings only climb.
 (on "in.reading.*"
   (when (<= payload-float (percentile 100 0.99 payload-float))
-    (publish! (str-concat "clean.reading." (subject-token 2)) payload)))
+    (publish! (subject-with "clean.reading" (subject-token 2)) payload)))
 
 ;; Flood detection. State is per subject, so every publisher subject
 ;; gets its own five-second window for free. More than ten messages in
@@ -36,5 +36,5 @@
 ;; "clear". The numbers are demo-sized; raise them for real traffic.
 (on "in.*.*"
   (transition (> (rate :ms 5000 payload) 2)
-    (publish! (str-concat "waf.flood." subject) "block")
-    (publish! (str-concat "waf.flood." subject) "clear")))
+    (publish! (subject-with "waf.flood" subject) "block")
+    (publish! (subject-with "waf.flood" subject) "clear")))

@@ -61,14 +61,14 @@
 (on "T.*.p"
   (when (>= (abs (delta payload-float)) 1.0)
     (publish!
-      (str-concat "alerts.trade." (subject-token 1))
+      (subject-with "alerts.trade" (subject-token 1))
       payload)))
 
 ; Crypto prices move bigger; alert on >= 1% moves between trades.
 (on "XT.*.p"
   (when (>= (abs (/ (delta payload-float) payload-float)) 0.01)
     (publish!
-      (str-concat "alerts.crypto." (subject-token 1))
+      (subject-with "alerts.crypto" (subject-token 1))
       payload)))
 
 ; Forex mid-rate alert: a 5 pip move on a major is notable. Computed off
@@ -76,5 +76,5 @@
 (on "C.*.b"
   (when (>= (abs (delta payload-float)) 0.0005)
     (publish!
-      (str-concat "alerts.fx." (subject-token 1))
+      (subject-with "alerts.fx" (subject-token 1))
       payload)))

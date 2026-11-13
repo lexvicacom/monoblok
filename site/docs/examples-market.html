@@ -46,7 +46,7 @@
 (<span class="tok-op">on</span> <span class="tok-str">"MARKET.*"</span>
   (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">1.0</span>)
     (<span class="tok-op">publish!</span>
-      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.market."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts.market"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
       payload)))
 
 <span class="tok-com">; Forward all market alerts to the remote NATS server.</span>
@@ -99,7 +99,7 @@
 <span class="tok-com">; from the prior bar's close on the same symbol.</span>
 (<span class="tok-op">on</span> <span class="tok-str">"MARKET.*.bar.close"</span>
   (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">1.0</span>)
-    (<span class="tok-op">publish!</span> (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.market."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload)))</code></pre></figure>
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts.market"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload)))</code></pre></figure>
 <p>The bar rule is <code>:reentrant true</code> only because the second rule consumes the derived <code>MARKET.&lt;SYM&gt;.bar.close</code> stream. Alerting on closed bars instead of raw ticks keeps the alert free of intra-bar noise. A subscriber to <code>MARKET.AAPL.bar.&gt;</code> sees a burst of four messages per closed bar, in open / high / low / close order. In-progress bars are part of the <a href="state.html#snapshots">snapshot</a>, so a restart mid-bar resumes without losing the open, high and low collected so far.</p>
 <figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/bars.sh</code></pre></figure>
 <h2 id="a-market-data-firehose">A market data firehose<a class="anchor" href="#a-market-data-firehose" aria-label="Link to this section">#</a></h2>
@@ -171,14 +171,14 @@
 (<span class="tok-op">on</span> <span class="tok-str">"T.*.p"</span>
   (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">1.0</span>)
     (<span class="tok-op">publish!</span>
-      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.trade."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts.trade"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
       payload)))
 
 <span class="tok-com">; Crypto prices move bigger; alert on &gt;= 1% moves between trades.</span>
 (<span class="tok-op">on</span> <span class="tok-str">"XT.*.p"</span>
   (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">/</span> (<span class="tok-op">delta</span> payload-float) payload-float)) <span class="tok-num">0.01</span>)
     (<span class="tok-op">publish!</span>
-      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.crypto."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts.crypto"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
       payload)))
 
 <span class="tok-com">; Forex mid-rate alert: a 5 pip move on a major is notable. Computed off</span>
@@ -186,7 +186,7 @@
 (<span class="tok-op">on</span> <span class="tok-str">"C.*.b"</span>
   (<span class="tok-op">when</span> (<span class="tok-op">&gt;=</span> (<span class="tok-op">abs</span> (<span class="tok-op">delta</span> payload-float)) <span class="tok-num">0.0005</span>)
     (<span class="tok-op">publish!</span>
-      (<span class="tok-op">str-concat</span> <span class="tok-str">"alerts.fx."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
+      (<span class="tok-op">subject-with</span> <span class="tok-str">"alerts.fx"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>))
       payload)))</code></pre></figure>
 <p>Five frames through the trade and crypto rules:</p>
 <figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/json-massive/massive.edn" target="_blank" rel="noopener noreferrer">examples/json-massive/massive.edn</a></span></figcaption><pre><code><span class="sc-in">in   T.AAPL  {"ev":"T","sym":"AAPL","p":187.421,"s":100}</span>

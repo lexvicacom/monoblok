@@ -13,7 +13,7 @@
 (on "MARKET.*"
   (when (>= (abs (delta payload-float)) 1.0)
     (publish!
-      (str-concat "alerts.market." (subject-token 1))
+      (subject-with "alerts.market" (subject-token 1))
       payload)))
 
 ; Forward all market alerts to the remote NATS server.

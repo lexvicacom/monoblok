@@ -207,7 +207,7 @@ with a re-entrant rule and put the stateful rule on that subject:
 (on "all.sensors" (publish! "sensors.average" :dp 1 (moving-avg 4 payload-float)))
 ```
 
-Per group: publish to `(str-concat "site." (subject-token 1))` and match `site.*`.
+Per group: publish to `(subject-with "site" (subject-token 1))` and match `site.*`.
 
 ## Rate gates
 

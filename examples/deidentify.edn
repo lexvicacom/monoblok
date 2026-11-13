@@ -19,8 +19,8 @@
 ;; mrn are never read, so they are never forwarded.
 (on "ward.*.*" :reentrant true
   (do
-    (-> payload (json-get "hr")   (publish! (str-concat "clean." (subject-token 1) ".hr")))
-    (-> payload (json-get "spo2") (publish! (str-concat "clean." (subject-token 1) ".spo2")))))
+    (-> payload (json-get "hr")   (publish! (subject-with "clean" (subject-token 1) "hr")))
+    (-> payload (json-get "spo2") (publish! (subject-with "clean" (subject-token 1) "spo2")))))
 
 ;; Generalise. An exact age narrows a small ward down to one person, so
 ;; forward it snapped to the nearest ten.
@@ -28,7 +28,7 @@
   (-> payload
       (json-get "age")
       (quantize 10)
-      (publish! (str-concat "clean." (subject-token 1) ".age-band"))))
+      (publish! (subject-with "clean" (subject-token 1) "age-band"))))
 
 ;; Aggregate. The ward-level heart rate is the mean of the last 20
 ;; readings across every patient on that ward (the funnel pattern: the
@@ -44,4 +44,4 @@
           (contains? payload "DOB")
           (contains? payload "NHS"))
     (publish! "phi.held" subject)
-    (publish! (str-concat "clean.notes." (subject-token 1)) payload)))
+    (publish! (subject-with "clean.notes" (subject-token 1)) payload)))

@@ -112,7 +112,7 @@
   (<span class="tok-op">publish!</span> <span class="tok-str">"sensors.average"</span> <span class="tok-kw">:dp</span> <span class="tok-num">1</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">4</span> payload-float)))</code></pre></figure>
 <p>Every <code>sensors.*</code> message is republished as <code>all.sensors</code>, re-enters rule evaluation, and lands in one <code>moving-avg</code> ring. The funnel subject must not match the source filter, or the rule would feed itself. For one funnel per group, build the funnel subject from a token and match it with a wildcard:</p>
 <figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"site.*.*"</span> <span class="tok-kw">:reentrant</span> true
-  (<span class="tok-op">publish!</span> (<span class="tok-op">str-concat</span> <span class="tok-str">"group."</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload))
+  (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"group"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload))
 
 (<span class="tok-op">on</span> <span class="tok-str">"group.*"</span>
   (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"average"</span>) <span class="tok-kw">:dp</span> <span class="tok-num">1</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">8</span> payload-float)))</code></pre></figure>
