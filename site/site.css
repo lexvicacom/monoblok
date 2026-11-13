@@ -290,6 +290,11 @@ h3 { letter-spacing: -.3px; }
 .proof-strip p + p { margin-top: 14px; }
 
 .proof-strip .benchmark-note { font-size: var(--text-ui); }
+.proof-strip ul { margin: 14px 0 0; padding-left: 18px; max-width: 490px; color: var(--muted); line-height: 1.65; }
+.proof-strip li + li { margin-top: 8px; }
+.proof-strip li::marker { color: #8eaa61; }
+.proof-strip ul + p { margin-top: 14px; }
+.nav-mark { flex: none; margin-right: 6px; }
 
 footer { flex-wrap: wrap; }
 @media (min-width: 681px) {
