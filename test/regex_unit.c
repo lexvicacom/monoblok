@@ -514,7 +514,7 @@ static void test_pattern_copied(void) {
 }
 
 // Wall-clock bound for the budget tests; sanitizer builds run several times slower.
-#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+#if MB_TEST_ASAN
 #define PERF_LIMIT_SECONDS 20.0
 #else
 #define PERF_LIMIT_SECONDS 2.0

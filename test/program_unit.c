@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "pb_program.h"
 #include "test_check.h"
 
