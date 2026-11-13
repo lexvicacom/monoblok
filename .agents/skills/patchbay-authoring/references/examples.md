@@ -13,6 +13,13 @@
   (when (contains? payload "alert")
     (publish! "events.alerts" (str-concat subject ": " payload))))
 
+; Experimental regex forms: pull the number out of "t=42 ok" and forward it.
+; The pattern is a string literal; #"..." is EDN's raw string.
+(on "dev.*.status"
+  (-> payload
+      (re-capture #"t=(\d+)")
+      (publish! (subject-append "temp"))))
+
 ; Clean up an RPM stream: 50rpm buckets, drop duplicates.
 (on "car.*.rpm"
   (-> payload-float

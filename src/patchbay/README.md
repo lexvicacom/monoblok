@@ -7,6 +7,7 @@ Patchbay code is intentionally shallow and direct. The main pieces are:
 - `pb_yaml.c`: small YAML-sugar parser/lowerer for `.yml`/`.yaml` patchbays.
 - `pb_eval.c`: evaluator core, special forms, and the `FORMS[]` syntax registry.
 - `pb_forms.c`: eager form dispatch plus included implementation fragments.
+- `pb_regex.c`, `pb_regex_dfa.c`: linear-time regex engine used by the regex forms.
 - `pb_form_*.c`: form implementation fragments. They are included by `pb_forms.c`
   and marked `HEADER_FILE_ONLY` in CMake so editors can open them as C without
   compiling them as separate translation units.
@@ -30,6 +31,8 @@ enum id, one table row, and one dispatch case:
    - `.clocked`: the form always needs the clock timer.
    - `.clocked_ms`: it needs the timer only when called with a leading `:ms`
      window.
+   - `.pattern`: argument 0 is a regex literal that `pb_resolve_rule()`
+     compiles at load (see Regex Forms).
    Program loading derives `uses_clock_timer` from these flags; do not add name
    lists to `pb_program.c`.
 3. Put the implementation in the closest `pb_form_*.c` fragment and list the
@@ -59,6 +62,8 @@ share it), at program load, `--validate`, and `--soundcheck`. It:
   `->` steps (their bodies must live in the parse arena, not
   scratch, and a threaded value would become a trailing body form).
 
+- compiles the regex literal of every `.pattern` form (see Regex Forms).
+
 State slots are keyed by `(rule, site, op, subject)`. The entry keeps the
 subject that created it, so clock ticks bind `subject` to it. To roll several
 subjects into one slot, funnel them onto one subject with a `:reentrant true`
@@ -76,6 +81,33 @@ but every call then has site 0 and shares state like the old behavior.
 `(env "NAME")` is deliberately not an evaluator form. It is a load-time string
 source consumed by top-level config readers in `pb_program.c`; YAML `env: NAME`
 lowers to the same AST shape.
+
+## Regex Forms
+
+`matches?`, `re-capture` and `re-replace` (experimental, `pb_form_regex.c`, engine
+in `pb_regex*.c`) take their pattern as argument 0. Rows in `FORMS[]` carry
+`.pattern`, and `resolve_list()` requires item 1 of the call to be a
+`PB_STRING` literal (direct calls and `->` steps alike, since threading appends
+the value last). It compiles the string into the resolver's arena (the parse
+arena, alive as long as the program) and overwrites the node with a `PB_REGEX`
+value whose `regex` pointer is that compiled object. A non-literal pattern or a
+compile error fails resolve, so `--validate`, `--soundcheck` and program load
+all reject it; nothing is compiled at publish time. Parsers never produce
+`PB_REGEX`; an unresolved AST reaches the form with a string there and gets
+`PB_EVAL_TYPE` (no compile-at-eval fallback).
+
+The EDN reader (`pb_sexpr.c`) accepts `#"..."` as a raw string: backslash pairs
+stay verbatim and only `\"` collapses to a quote, so patterns need no doubling.
+The result is an ordinary `PB_STRING`. Any other `#` still starts a symbol.
+YAML single quotes are raw (`''` is a quote); double quotes unescape the
+standard set into the parse arena (`pb_yaml.c`, `unquote_scalar`).
+
+`PB_REGEX` evaluates to itself, is truthy, equals only the same compiled
+object, and is not coercible to a string, number or payload. The compiled regex
+owns mutable match scratch, which is safe on the single loop thread because the
+forms never recurse into evaluation while matching. `re-capture` returns a slice
+borrowed from TEXT; `re-replace` records match spans in an arena array and then
+makes one exactly sized output allocation in `ctx->arena`.
 
 ## Every Rules And Reply
 

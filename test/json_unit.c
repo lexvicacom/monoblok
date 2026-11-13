@@ -157,6 +157,7 @@ static void check_same_ast(pb_value a, pb_value b) {
     CHECK(a.kind == b.kind);
     switch (a.kind) {
     case PB_NIL: break;
+    case PB_REGEX: CHECK(a.regex == b.regex); break; // parsers never produce it
     case PB_BOOL: CHECK(a.boolean == b.boolean); break;
     case PB_NUMBER: CHECK(a.number == b.number); break;
     case PB_SYMBOL: case PB_KEYWORD: case PB_STRING:
@@ -327,6 +328,58 @@ static void test_yaml_invalid_option_maps(void) {
     expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do: {dp: 1}\n", "");
 }
 
+// Loads `on: sub a, do: [publish!, "x", VALUE]` and checks VALUE lowers to the string `want` of length n.
+static void expect_yaml_string(const char *value, const char *want, size_t n) {
+    char src[256];
+    snprintf(src, sizeof src, "on:\n  - sub: \"a\"\n    do: [publish!, \"x\", %s]\n", value);
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "t.yml", src, strlen(src));
+    if (r.err != PB_PARSE_OK) {
+        fprintf(stderr, "yaml string %s failed: %s\n", value, r.err_msg);
+    }
+    CHECK(r.err == PB_PARSE_OK);
+    if (r.err == PB_PARSE_OK) {
+        pb_value v = r.forms.items[0].seq.items[2].seq.items[2];
+        CHECK(v.kind == PB_STRING);
+        CHECK(v.text.len == n);
+        CHECK(memcmp(v.text.ptr, want, n) == 0);
+    }
+    pb_arena_free(&arena);
+}
+
+// Quoted YAML scalars: single quotes are raw (with '' for one quote), double quotes follow YAML escapes.
+static void test_yaml_quoted_scalars(void) {
+    expect_yaml_string("'\\d+'", "\\d+", 3);
+    expect_yaml_string("'it''s'", "it's", 4);
+    expect_yaml_string("''''", "'", 1);
+    expect_yaml_string("''", "", 0);
+    expect_yaml_string("'a, b]'", "a, b]", 5);
+    expect_yaml_string("\"\\\\d+\"", "\\d+", 3);
+    expect_yaml_string("\"a\\\"b\"", "a\"b", 3);
+    expect_yaml_string("\"say \\\"hi, there\\\"\"", "say \"hi, there\"", 15);
+    expect_yaml_string("\"\\/\"", "/", 1);
+    expect_yaml_string("\"a\\nb\\rc\\td\"", "a\nb\rc\td", 7);
+    expect_yaml_string("\"\\x41\\u00e9\\u20ac\"", "A\xc3\xa9\xe2\x82\xac", 6);
+    expect_yaml_string("\"\\u0041\"", "A", 1);
+    expect_yaml_string("\"a\\0b\"", "a\0b", 3);
+    expect_yaml_string("\"\"", "", 0);
+    expect_yaml_string("\"\\\\\"", "\\", 1);
+
+    expect_form_error("[publish!, \"x\", \"\\d+\"]", "use single quotes for raw text");
+    expect_form_error("[publish!, \"x\", \"\\q\"]", "unknown escape \\q");
+    expect_form_error("[publish!, \"x\", \"\\x4\"]", "\\x needs 2 hex digits");
+    expect_form_error("[publish!, \"x\", \"\\xZZ\"]", "\\x needs 2 hex digits");
+    expect_form_error("[publish!, \"x\", \"\\u12\"]", "\\u needs 4 hex digits");
+    expect_form_error("[publish!, \"x\", \"\\ud800\"]", "surrogate");
+    expect_form_error("[publish!, \"x\", \"abc]", "unterminated quoted scalar");
+    expect_form_error("[publish!, \"x\", 'abc]", "unterminated quoted scalar");
+    expect_form_error("[publish!, \"x\", \"abc\\\"]", "unterminated quoted scalar");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\\", "");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do: \"x\\", "");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\\q\"\n    do: [publish!, \"x\"]\n", "unknown escape");
+    expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    do: \"x\" y\n", "trailing text");
+}
+
 static void test_yaml_scalar_rules(void) {
     expect_form_error("[publish!, \"x\", payload]", "use $payload");
     expect_form_error("[publish!, \"x\", replaying?]", "use $replaying?");
@@ -479,5 +532,6 @@ TEST_MAIN(json,
           test_yaml_invalid_inputs,
           test_yaml_invalid_option_maps,
           test_yaml_scalar_rules,
+          test_yaml_quoted_scalars,
           test_yaml_rule_shape,
           test_json_binding_rules)

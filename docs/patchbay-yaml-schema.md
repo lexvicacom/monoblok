@@ -77,6 +77,10 @@ A quoted scalar (`"..."` or `'...'`) is always a string. That includes
 `":ms"` (the text `:ms`) and `"$subject"` (the text `$subject`), which is how
 you publish literal text that looks like a binding or option.
 
+Single quotes are raw text, with `''` for one literal single quote. Double
+quotes follow standard YAML escapes: `\\ \" \/ \n \r \t \0 \xHH \uHHHH`. Any
+other escape, such as `\d`, is a load error that says to use single quotes.
+
 Any other unquoted word in a rule body is a load error:
 
 - `payload`, `replaying?` and other binding names without the sigil: the error
@@ -512,6 +516,31 @@ on:
   - sub: "sensors.nums"
     do: [when, ["contains?", [vector, 1, 2, 3], $payload-int], [publish!, [subject-with, [vector, "n", $subject]], $payload]]
 ```
+
+## Regex Patterns
+
+> **Experimental.** `matches?`, `re-capture` and `re-replace` are new; the forms
+> and pattern syntax may change between releases.
+
+The pattern is the first argument and must be a string literal; the value being
+tested comes last, so the forms thread in a `pipeline`. Write patterns in single
+quotes (`'\d+'`); a double-quoted pattern needs doubled backslashes (`"\\d+"`),
+and `"\d+"` is a load error. Quote the form head `matches?` because of the `?`.
+
+```yaml
+on:
+  - sub: "in.>"
+    pipeline: [$payload, ["matches?", '^err'], [publish!, "out.match"]]
+  - sub: "cap.>"
+    pipeline: [$payload, [re-capture, 't=(\d+)'], [publish!, "out.cap"]]
+  - sub: "rep.>"
+    pipeline: [$payload, [re-replace, '\s+', '_'], [publish!, "out.rep"]]
+  - sub: "x.>"
+    when: ["matches?", '(?i)<script|drop\s+table', $payload]
+    do: [publish!, "out.x", $payload]
+```
+
+See [patchbay.md](patchbay.md#regular-expressions) for the pattern syntax.
 
 ## Expression Arrays
 

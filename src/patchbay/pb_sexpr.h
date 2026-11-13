@@ -25,9 +25,11 @@ typedef enum pb_value_kind {
     PB_STRING,
     PB_LIST,
     PB_VECTOR,
+    PB_REGEX, // compiled regex literal, produced only by pb_resolve_rule
 } pb_value_kind;
 
 typedef struct pb_value pb_value;
+struct pb_regex;
 
 // Arena-owned sequence backing list and vector values.
 typedef struct pb_values {
@@ -35,7 +37,8 @@ typedef struct pb_values {
     size_t len;
 } pb_values;
 
-// Patchbay AST node. Lists are call forms; vectors are data.
+// Patchbay AST node. Lists are call forms; vectors are data. PB_REGEX holds a
+// regex compiled by pb_resolve_rule into the parse arena; it never coerces to a string.
 // tag is 0 until pb_resolve_rule runs. After it: a list's tag is its per-rule
 // call-site id, a call head symbol's tag is form-table index + 1, and a bound
 // symbol's tag names the binding. It lives in what was padding after kind.
@@ -47,6 +50,7 @@ struct pb_value {
         double number;
         pb_slice text;
         pb_values seq;
+        struct pb_regex *regex;
     };
 };
 

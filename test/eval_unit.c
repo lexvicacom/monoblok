@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct published {
     pb_slice subjects[8];
@@ -1430,6 +1431,250 @@ static void test_empty_payload_is_not_a_number(void) {
     pb_arena_free(&arena);
 }
 
+// Regex forms. Results are copied out of the arena so checks outlive it.
+typedef struct rx_result {
+    pb_eval_error err;
+    pb_value_kind kind;
+    bool boolean;
+    char text[128];
+    size_t len;
+} rx_result;
+
+// Resolves `src` (regex literals compile here) and evaluates it against `payload` of `payload_len` bytes.
+static rx_result rx_eval(const char *src, const char *payload, size_t payload_len) {
+    pb_arena arena = {0};
+    pb_eval_state state = {0};
+    char err[160];
+    bool resolved = false;
+    pb_value expr = parse_resolved(&arena, src, err, sizeof err, &resolved);
+    CHECK(resolved);
+    pb_eval_ctx ctx = {
+        .arena = &arena,
+        .state = &state,
+        .subject = {.ptr = "t.x", .len = 3},
+        .payload = {.ptr = payload, .len = payload_len},
+    };
+    pb_eval_result r = pb_eval(&ctx, expr);
+    rx_result out = {.err = r.err};
+    if (r.err == PB_EVAL_OK) {
+        out.kind = r.value.kind;
+        out.boolean = r.value.kind == PB_BOOL && r.value.boolean;
+        if (r.value.kind == PB_STRING) {
+            CHECK(r.value.text.len < sizeof out.text);
+            out.len = r.value.text.len;
+            memcpy(out.text, r.value.text.ptr, r.value.text.len);
+        }
+    }
+    pb_eval_state_free(&state);
+    pb_arena_free(&arena);
+    return out;
+}
+
+static bool rx_is_string(const char *src, const char *payload, const char *want) {
+    rx_result r = rx_eval(src, payload, strlen(payload));
+    return r.err == PB_EVAL_OK && r.kind == PB_STRING && r.len == strlen(want) && memcmp(r.text, want, r.len) == 0;
+}
+
+static bool rx_is_nil(const char *src, const char *payload) {
+    rx_result r = rx_eval(src, payload, strlen(payload));
+    return r.err == PB_EVAL_OK && r.kind == PB_NIL;
+}
+
+static bool rx_is_bool(const char *src, const char *payload, bool want) {
+    rx_result r = rx_eval(src, payload, strlen(payload));
+    return r.err == PB_EVAL_OK && r.kind == PB_BOOL && r.boolean == want;
+}
+
+static void test_regex_matches(void) {
+    CHECK(rx_is_bool("(matches? \"[0-9]+\" payload)", "abc 42", true));
+    CHECK(rx_is_bool("(matches? \"[0-9]+\" payload)", "abc", false));
+    CHECK(rx_is_bool("(matches? \"^[0-9]+$\" payload)", "42x", false));
+    CHECK(rx_is_bool("(-> payload (matches? \"^err\"))", "error: x", true));
+    CHECK(rx_is_bool("(-> payload (matches? \"^err\"))", "ok", false));
+    // Text coercion matches contains?: bool is "true"/"false", numbers are a type error.
+    CHECK(rx_is_bool("(matches? \"^tru\" (= 1 1))", "x", true));
+    CHECK(rx_eval("(matches? \"1\" 1)", "x", 1).err == PB_EVAL_TYPE);
+    rx_result r = rx_eval("(matches? \"b\\\\x00c\" payload)", "ab\0cd", 5);
+    CHECK(r.err == PB_EVAL_OK && r.boolean);
+    r = rx_eval("(matches? \"\\\\xff\\\\xfe\" payload)", "a\xff\xfe", 3);
+    CHECK(r.err == PB_EVAL_OK && r.boolean);
+}
+
+static void test_regex_capture(void) {
+    CHECK(rx_is_string("(re-capture \"t=([0-9]+)\" payload)", "id=7 t=215 z", "215"));
+    CHECK(rx_is_string("(re-capture \"[0-9]+\" payload)", "id=7 t=215", "7"));
+    CHECK(rx_is_string("(-> payload (re-capture \"t=(\\\\d+)\"))", "t=9", "9"));
+    CHECK(rx_is_nil("(re-capture \"t=([0-9]+)\" payload)", "nope"));
+    CHECK(rx_is_nil("(-> payload (re-capture \"t=([0-9]+)\") (publish! \"x\"))", "nope"));
+    // Group 1 did not participate.
+    CHECK(rx_is_nil("(re-capture \"(a)|b\" payload)", "b"));
+    CHECK(rx_is_string("(re-capture \"(a)|b\" payload)", "a", "a"));
+    // Empty group 1 is an empty string, not nil.
+    CHECK(rx_is_string("(re-capture \"x(a*)\" payload)", "x", ""));
+    CHECK(rx_is_string("(re-capture \"(a)(b)\" payload)", "ab", "a"));
+    rx_result r = rx_eval("(re-capture \"b(.)d\" payload)", "ab\0d", 4);
+    CHECK(r.err == PB_EVAL_OK && r.kind == PB_STRING && r.len == 1 && r.text[0] == '\0');
+    CHECK(rx_eval("(re-capture \"1\" 1)", "x", 1).err == PB_EVAL_TYPE);
+}
+
+static void test_regex_replace(void) {
+    CHECK(rx_is_string("(re-replace \"[0-9]+\" \"#\" payload)", "no digits", "no digits"));
+    CHECK(rx_is_string("(re-replace \"[0-9]+\" \"#\" payload)", "a1b", "a#b"));
+    CHECK(rx_is_string("(re-replace \"[0-9]+\" \"#\" payload)", "a1b22c333", "a#b#c#"));
+    CHECK(rx_is_string("(re-replace \"a\" \"-\" payload)", "aaa", "---"));
+    CHECK(rx_is_string("(re-replace \"[0-9]+\" \"\" payload)", "a1b22c", "abc"));
+    CHECK(rx_is_string("(re-replace \"[0-9]+\" \"\" payload)", "123", ""));
+    CHECK(rx_is_string("(re-replace \"a\" \"longer\" payload)", "banana", "blongernlongernlonger"));
+    CHECK(rx_is_string("(re-replace \"abc\" \"x\" payload)", "abcabc", "xx"));
+    CHECK(rx_is_string("(re-replace \"(a)\" \"$1$\" payload)", "bab", "b$1$b"));
+    // Empty matches follow Go's ReplaceAll.
+    CHECK(rx_is_string("(re-replace \"x*\" \"-\" payload)", "abc", "-a-b-c-"));
+    CHECK(rx_is_string("(re-replace \"x*\" \"-\" payload)", "", "-"));
+    CHECK(rx_is_string("(re-replace \"b*\" \"-\" payload)", "abc", "-a-c-"));
+    CHECK(rx_is_string("(-> payload (re-replace \"[ ]+\" \"_\"))", "a  b c", "a_b_c"));
+    rx_result r = rx_eval("(re-replace \"b\" \"X\" payload)", "a\0b\xff", 4);
+    CHECK(r.err == PB_EVAL_OK && r.len == 4 && memcmp(r.text, "a\0X\xff", 4) == 0);
+    // Many matches grow the span array past its first allocation.
+    r = rx_eval("(re-replace \"a\" \"bb\" payload)", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 32);
+    CHECK(r.err == PB_EVAL_OK && r.len == 64 && r.text[0] == 'b' && r.text[63] == 'b');
+    CHECK(rx_eval("(re-replace \"a\" 1 payload)", "a", 1).err == PB_EVAL_TYPE);
+    CHECK(rx_eval("(re-replace \"a\" \"b\" 1)", "a", 1).err == PB_EVAL_TYPE);
+}
+
+// Wall-clock bound for the budget tests; sanitizer builds run several times slower.
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+#define PERF_LIMIT_SECONDS 20.0
+#else
+#define PERF_LIMIT_SECONDS 2.0
+#endif
+
+// Work budget: a quadratic replace-all and a huge-program scan fail the rule instead of stalling.
+static void test_regex_budget(void) {
+    enum { RUN = 64 * 1024, MB = 1024 * 1024 };
+    static char buf[MB];
+    memset(buf, 'a', RUN);
+    clock_t start = clock();
+    CHECK(rx_eval("(re-replace \"a+b|a\" \"x\" payload)", buf, RUN).err == PB_EVAL_REGEX_BUDGET);
+    memset(buf, '7', RUN);
+    CHECK(rx_eval("(re-replace \"\\\\d+%|\\\\d\" \"x\" payload)", buf, RUN).err == PB_EVAL_REGEX_BUDGET);
+    memset(buf, 'a', MB);
+    CHECK(rx_eval("(matches? \"(?:a|b)*a(?:a|b){100}c\" payload)", buf, MB).err == PB_EVAL_REGEX_BUDGET);
+    CHECK(rx_eval("(re-capture \"(?:a|b)*a(?:a|b){100}c\" payload)", buf, MB).err == PB_EVAL_REGEX_BUDGET);
+    CHECK((double)(clock() - start) / CLOCKS_PER_SEC < PERF_LIMIT_SECONDS);
+    CHECK(strcmp(pb_eval_error_name(PB_EVAL_REGEX_BUDGET), "regex work budget exceeded") == 0);
+    memset(buf, '7', 100);
+    rx_result r = rx_eval("(re-replace \"\\\\d\" \"x\" payload)", buf, 100);
+    CHECK(r.err == PB_EVAL_OK && r.len == 100);
+}
+
+static void test_regex_arity_and_types(void) {
+    CHECK(rx_eval("(matches? \"a\")", "a", 1).err == PB_EVAL_ARITY);
+    CHECK(rx_eval("(matches? \"a\" payload payload)", "a", 1).err == PB_EVAL_ARITY);
+    CHECK(rx_eval("(re-capture \"a\")", "a", 1).err == PB_EVAL_ARITY);
+    CHECK(rx_eval("(re-replace \"a\" payload)", "a", 1).err == PB_EVAL_ARITY);
+    CHECK(rx_eval("(re-replace \"a\" \"b\" payload payload)", "a", 1).err == PB_EVAL_ARITY);
+
+    // An unresolved AST has a string where PB_REGEX should be: type error, no crash.
+    const char *unresolved[] = {"(matches? \"a\" payload)", "(re-capture \"a\" payload)", "(re-replace \"a\" \"b\" payload)"};
+    for (size_t i = 0; i < 3; i += 1) {
+        pb_arena arena = {0};
+        published pub = {0};
+        CHECK(eval_src_with_payload(&arena, unresolved[i], "a", &pub).err == PB_EVAL_TYPE);
+        pb_arena_free(&arena);
+    }
+}
+
+static void test_regex_resolve_errors(void) {
+    const char *bad[] = {
+        "(matches? payload payload)",                  // symbol pattern
+        "(matches? (str-concat \"a\" \"b\") payload)", // computed pattern
+        "(re-replace payload \"x\" payload)",
+        "(-> payload (matches? payload))", // threaded form, non-literal
+        "(-> payload matches?)",           // bare step has no pattern
+        "(matches?)",
+        "(matches? 5 payload)",
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i += 1) {
+        pb_arena arena = {0};
+        char err[160];
+        bool resolved = true;
+        parse_resolved(&arena, bad[i], err, sizeof err, &resolved);
+        CHECK(!resolved);
+        CHECK(strstr(err, "pattern must be a string literal") != NULL);
+        pb_arena_free(&arena);
+    }
+
+    pb_arena arena = {0};
+    char err[160];
+    bool resolved = true;
+    parse_resolved(&arena, "(re-capture \"ab(cd\" payload)", err, sizeof err, &resolved);
+    CHECK(!resolved);
+    CHECK(strstr(err, "re-capture: bad pattern") != NULL);
+    CHECK(strstr(err, "at byte") != NULL);
+    CHECK(strstr(err, "\"ab(cd\"") != NULL);
+    pb_arena_free(&arena);
+
+    arena = (pb_arena){0};
+    parse_resolved(&arena, "(matches? \"(a)\\\\1\" payload)", err, sizeof err, &resolved);
+    CHECK(!resolved);
+    pb_arena_free(&arena);
+
+    // Resolving the same tree twice leaves the compiled node alone.
+    arena = (pb_arena){0};
+    const char *src = "(matches? \"a+\" payload)";
+    pb_parse_result parsed = pb_parse_all(&arena, src, strlen(src));
+    CHECK(parsed.err == PB_PARSE_OK);
+    CHECK(pb_resolve_rule(&arena, &parsed.forms.items[0], false, false, err, sizeof err));
+    CHECK(parsed.forms.items[0].seq.items[1].kind == PB_REGEX);
+    struct pb_regex *first = parsed.forms.items[0].seq.items[1].regex;
+    CHECK(pb_resolve_rule(&arena, &parsed.forms.items[0], false, false, err, sizeof err));
+    CHECK(parsed.forms.items[0].seq.items[1].regex == first);
+    pb_arena_free(&arena);
+}
+
+static void test_regex_value_is_not_a_string(void) {
+    // A PB_REGEX value never coerces to text or a payload, is truthy, and equals only itself.
+    pb_arena arena = {0};
+    char err[160];
+    bool resolved = false;
+    pb_value expr = parse_resolved(&arena, "(matches? \"a\" payload)", err, sizeof err, &resolved);
+    CHECK(resolved);
+    pb_value re = expr.seq.items[1];
+    CHECK(re.kind == PB_REGEX);
+    pb_slice s = {0};
+    CHECK(!pb_eval_as_string(re, &s));
+    double n = 0;
+    CHECK(!pb_eval_as_number(re, &n));
+    pb_eval_ctx ctx = {.arena = &arena};
+    CHECK(!pb_eval_coerce_payload(&ctx, re, &s));
+    CHECK(pb_eval_truthy(re));
+    CHECK(pb_eval_value_eq(re, re));
+    CHECK(!pb_eval_value_eq(re, (pb_value){.kind = PB_STRING, .text = {.ptr = "a", .len = 1}}));
+    pb_eval_result r = pb_eval(&ctx, re);
+    CHECK(r.err == PB_EVAL_OK && r.value.kind == PB_REGEX && r.value.regex == re.regex);
+
+    // Other forms handed a regex node by hand fail with a type error.
+    pb_value call_items[3] = {
+        {.kind = PB_SYMBOL, .text = {.ptr = "str-concat", .len = 10}},
+        re,
+        {.kind = PB_STRING, .text = {.ptr = "x", .len = 1}},
+    };
+    r = pb_eval(&ctx, (pb_value){.kind = PB_LIST, .seq = {.items = call_items, .len = 3}});
+    CHECK(r.err == PB_EVAL_TYPE);
+    pb_value pub_items[3] = {
+        {.kind = PB_SYMBOL, .text = {.ptr = "publish!", .len = 8}},
+        {.kind = PB_STRING, .text = {.ptr = "out", .len = 3}},
+        re,
+    };
+    published pub = {0};
+    ctx.publish = publish_cb;
+    ctx.publish_ctx = &pub;
+    r = pb_eval(&ctx, (pb_value){.kind = PB_LIST, .seq = {.items = pub_items, .len = 3}});
+    CHECK(r.err == PB_EVAL_TYPE);
+    CHECK(pub.count == 0);
+    pb_arena_free(&arena);
+}
+
 TEST_MAIN(eval,
           test_payload_bool,
           test_empty_payload_is_not_a_number,
@@ -1459,4 +1704,11 @@ TEST_MAIN(eval,
           test_clock_tick_binds_slot_subject,
           test_last,
           test_reply_to_and_reply,
-          test_slot_under_every_has_empty_subject)
+          test_slot_under_every_has_empty_subject,
+          test_regex_matches,
+          test_regex_capture,
+          test_regex_replace,
+          test_regex_arity_and_types,
+          test_regex_budget,
+          test_regex_resolve_errors,
+          test_regex_value_is_not_a_string)

@@ -57,7 +57,10 @@ typedef struct y_line {
     size_t offset;
 } y_line;
 
+// Parser state for one YAML source; unescaped quoted text is copied into arena.
 typedef struct y_parse {
+    pb_arena *arena;
+    char msg[192]; // detail for the first error, empty when the error is generic
     const char *src;
     size_t len;
     y_line *lines;
@@ -94,6 +97,17 @@ static void set_err(y_parse *p, size_t offset) {
     if (p->err == PB_PARSE_OK) {
         p->err = PB_PARSE_INVALID_YAML;
         p->err_offset = offset;
+    }
+}
+
+static void set_err_msg(y_parse *p, size_t offset, const char *fmt, ...) {
+    if (p->err == PB_PARSE_OK) {
+        p->err = PB_PARSE_INVALID_YAML;
+        p->err_offset = offset;
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(p->msg, sizeof p->msg, fmt, ap);
+        va_end(ap);
     }
 }
 
@@ -276,6 +290,135 @@ static bool find_key_colon(pb_slice s, size_t *out) {
 
 static y_node *parse_block(y_parse *p, size_t indent);
 
+// Returns the index just past the closing quote of the scalar opening at s.ptr[start],
+// or SIZE_MAX when it is unterminated. "\x" skips the escaped byte; '' is a literal quote.
+static size_t quoted_end(pb_slice s, size_t start) {
+    const char quote = s.ptr[start];
+    for (size_t i = start + 1; i < s.len; i += 1) {
+        if (quote == '"' && s.ptr[i] == '\\') {
+            i += 1;
+        } else if (s.ptr[i] == quote) {
+            if (quote == '\'' && i + 1 < s.len && s.ptr[i + 1] == '\'') {
+                i += 1;
+            } else {
+                return i + 1;
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+// Appends code point cp (not a surrogate, <= 0xFFFF) as UTF-8; returns bytes written.
+static size_t utf8_put(char *out, unsigned cp) {
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+}
+
+// Turns the text between the quotes into the scalar. Double quotes accept \\ \" \/
+// \n \r \t \0 \xHH \uHHHH and reject other escapes; single quotes only unescape ''.
+// Without escapes the result views the source, else an arena copy no longer than the input.
+static bool unquote_scalar(y_parse *p, char quote, pb_slice inner, size_t offset, pb_slice *out) {
+    size_t first = 0;
+    while (first < inner.len && !(quote == '"' ? inner.ptr[first] == '\\' : inner.ptr[first] == '\'')) {
+        first += 1;
+    }
+    if (first == inner.len) {
+        *out = inner;
+        return true;
+    }
+    char *buf = pb_arena_alloc(p->arena, inner.len + 1, 1);
+    if (buf == NULL) {
+        p->err = PB_PARSE_OOM;
+        p->err_offset = offset;
+        return false;
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < inner.len; i += 1) {
+        const char c = inner.ptr[i];
+        if (quote == '\'') {
+            buf[n++] = c;
+            if (c == '\'') {
+                i += 1; // '' pair, guaranteed by quoted_end
+            }
+            continue;
+        }
+        if (c != '\\') {
+            buf[n++] = c;
+            continue;
+        }
+        const size_t esc_offset = offset + 1 + i;
+        if (i + 1 >= inner.len) {
+            set_err_msg(p, esc_offset, "backslash at the end of a double-quoted scalar");
+            return false;
+        }
+        i += 1;
+        const char e = inner.ptr[i];
+        switch (e) {
+        case '\\': buf[n++] = '\\'; break;
+        case '"': buf[n++] = '"'; break;
+        case '/': buf[n++] = '/'; break;
+        case 'n': buf[n++] = '\n'; break;
+        case 'r': buf[n++] = '\r'; break;
+        case 't': buf[n++] = '\t'; break;
+        case '0': buf[n++] = '\0'; break;
+        case 'x':
+        case 'u': {
+            const size_t digits = e == 'x' ? 2 : 4;
+            unsigned cp = 0;
+            if (i + digits >= inner.len) {
+                set_err_msg(p, esc_offset, "\\%c needs %zu hex digits in a double-quoted scalar", e, digits);
+                return false;
+            }
+            for (size_t d = 1; d <= digits; d += 1) {
+                const int h = hex_digit(inner.ptr[i + d]);
+                if (h < 0) {
+                    set_err_msg(p, esc_offset, "\\%c needs %zu hex digits in a double-quoted scalar", e, digits);
+                    return false;
+                }
+                cp = cp * 16 + (unsigned)h;
+            }
+            if (cp >= 0xD800 && cp <= 0xDFFF) {
+                set_err_msg(p, esc_offset, "\\u escape is a surrogate half; write the character itself");
+                return false;
+            }
+            n += utf8_put(buf + n, cp);
+            i += digits;
+            break;
+        }
+        default:
+            set_err_msg(p, esc_offset, "unknown escape \\%c in a double-quoted scalar; use single quotes for raw text such as regex patterns ('\\d+'), or double the backslash (\"\\\\d+\")", e);
+            return false;
+        }
+    }
+    buf[n] = '\0';
+    *out = (pb_slice){.ptr = buf, .len = n};
+    return true;
+}
+
 static y_node *scalar_from_slice(y_parse *p, pb_slice raw, size_t offset) {
     raw = trim_slice(raw);
     y_node *n = node_new(p, Y_SCALAR, offset);
@@ -283,9 +426,16 @@ static y_node *scalar_from_slice(y_parse *p, pb_slice raw, size_t offset) {
         return NULL;
     }
     n->scalar_kind = Y_TEXT;
-    if (raw.len >= 2 && ((raw.ptr[0] == '"' && raw.ptr[raw.len - 1] == '"') ||
-                         (raw.ptr[0] == '\'' && raw.ptr[raw.len - 1] == '\''))) {
-        n->text = (pb_slice){.ptr = raw.ptr + 1, .len = raw.len - 2};
+    if (raw.len != 0 && (raw.ptr[0] == '"' || raw.ptr[0] == '\'')) {
+        if (quoted_end(raw, 0) != raw.len) {
+            set_err_msg(p, offset, "unterminated or trailing text after a quoted scalar");
+            node_free(n);
+            return NULL;
+        }
+        if (!unquote_scalar(p, raw.ptr[0], (pb_slice){.ptr = raw.ptr + 1, .len = raw.len - 2}, offset, &n->text)) {
+            node_free(n);
+            return NULL;
+        }
         n->quoted = true;
         return n;
     }
@@ -365,21 +515,13 @@ static y_node *parse_flow_array(y_parse *p, pb_slice s, size_t *pos, size_t base
 static y_node *parse_flow_scalar(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
     const size_t start = *pos;
     if (*pos < s.len && (s.ptr[*pos] == '"' || s.ptr[*pos] == '\'')) {
-        const char quote = s.ptr[*pos];
-        *pos += 1;
-        while (*pos < s.len) {
-            if (s.ptr[*pos] == quote) {
-                *pos += 1;
-                return scalar_from_slice(p, (pb_slice){.ptr = s.ptr + start, .len = *pos - start}, base_offset + start);
-            }
-            if (s.ptr[*pos] == '\\' && quote == '"' && *pos + 1 < s.len) {
-                *pos += 2;
-            } else {
-                *pos += 1;
-            }
+        const size_t end = quoted_end(s, start);
+        if (end == SIZE_MAX) {
+            set_err_msg(p, base_offset + start, "unterminated quoted scalar");
+            return NULL;
         }
-        set_err(p, base_offset + start);
-        return NULL;
+        *pos = end;
+        return scalar_from_slice(p, (pb_slice){.ptr = s.ptr + start, .len = end - start}, base_offset + start);
     }
     while (*pos < s.len && s.ptr[*pos] != ',' && s.ptr[*pos] != ']' && s.ptr[*pos] != '}') {
         *pos += 1;
@@ -1158,7 +1300,7 @@ static bool lower_root(y_lower *L, y_node *root, pb_values *out) {
 }
 
 pb_parse_result pb_parse_yaml_patchbay(pb_arena *arena, const char *src, size_t len) {
-    y_parse p = {.src = src, .len = len, .err = PB_PARSE_OK};
+    y_parse p = {.arena = arena, .src = src, .len = len, .err = PB_PARSE_OK};
     if (!collect_lines(&p)) {
         free(p.lines);
         return (pb_parse_result){.err = p.err, .err_offset = p.err_offset};
@@ -1181,7 +1323,7 @@ pb_parse_result pb_parse_yaml_patchbay(pb_arena *arena, const char *src, size_t 
     free(p.lines);
     if (p.err != PB_PARSE_OK) {
         pb_parse_result r = {.err = p.err, .err_offset = p.err_offset};
-        memcpy(r.err_msg, lower.msg, sizeof r.err_msg);
+        memcpy(r.err_msg, lower.err != PB_PARSE_OK ? lower.msg : p.msg, sizeof r.err_msg);
         return r;
     }
     return (pb_parse_result){.err = PB_PARSE_OK, .forms = forms};

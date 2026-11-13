@@ -116,6 +116,8 @@ bool value_eq(pb_value a, pb_value b) {
     case PB_KEYWORD:
     case PB_STRING:
         return pb_slice_eq(a.text, b.text);
+    case PB_REGEX:
+        return a.regex == b.regex;
     case PB_LIST:
     case PB_VECTOR:
         return false;
@@ -168,6 +170,9 @@ static const pb_form_entry FORMS[] = {
     {.name = "contains?", .form = PB_FORM_CONTAINS},
     {.name = "starts-with?", .form = PB_FORM_STARTS_WITH},
     {.name = "ends-with?", .form = PB_FORM_ENDS_WITH},
+    {.name = "matches?", .form = PB_FORM_MATCHES, .pattern = true},
+    {.name = "re-capture", .form = PB_FORM_RE_CAPTURE, .pattern = true},
+    {.name = "re-replace", .form = PB_FORM_RE_REPLACE, .pattern = true},
     {.name = "subject-append", .form = PB_FORM_SUBJECT_APPEND},
     {.name = "subject-token", .form = PB_FORM_SUBJECT_TOKEN},
     {.name = "subject-with", .form = PB_FORM_SUBJECT_WITH},
@@ -534,6 +539,7 @@ pb_eval_result pb_eval(pb_eval_ctx *ctx, pb_value expr) {
     case PB_NUMBER:
     case PB_STRING:
     case PB_KEYWORD:
+    case PB_REGEX:
         return ok(expr);
     case PB_SYMBOL: {
         const uint32_t sym = expr.tag != 0 ? expr.tag : bound_symbol_tag(expr.text);
@@ -840,6 +846,7 @@ const char *pb_eval_error_name(pb_eval_error err) {
     case PB_EVAL_ARITY: return "arity mismatch";
     case PB_EVAL_INVALID_SUBJECT: return "invalid subject";
     case PB_EVAL_PUBLISH_FAILED: return "publish failed";
+    case PB_EVAL_REGEX_BUDGET: return "regex work budget exceeded";
     }
     return "unknown eval error";
 }
@@ -914,6 +921,34 @@ static bool resolve_thread_step(resolver *r, pb_value *step) {
     return resolve_value(r, step);
 }
 
+// Compiles the regex literal at list item 1 of matches?, re-capture and
+// re-replace once, at load (item 1 is the pattern for direct and -> calls alike).
+static bool resolve_pattern(resolver *r, pb_slice form_name, pb_value *call) {
+    pb_value *node = call->seq.len > 1 ? &call->seq.items[1] : NULL;
+    if (node != NULL && node->kind == PB_REGEX) {
+        return true;
+    }
+    if (node == NULL || node->kind != PB_STRING) {
+        if (r->err != NULL && r->err_cap != 0) {
+            snprintf(r->err, r->err_cap, "%.*s: pattern must be a string literal", (int)form_name.len, form_name.ptr);
+        }
+        return false;
+    }
+    pb_regex *re = NULL;
+    size_t err_offset = 0;
+    char msg[96] = "";
+    if (pb_regex_compile(r->arena, node->text, &re, &err_offset, msg, sizeof msg) != PB_REGEX_OK) {
+        if (r->err != NULL && r->err_cap != 0) {
+            // Pattern text last, so err_cap truncation cuts only it.
+            snprintf(r->err, r->err_cap, "%.*s: bad pattern: %s at byte %zu in \"%.*s\"", (int)form_name.len, form_name.ptr,
+                     msg, err_offset, (int)node->text.len, node->text.ptr);
+        }
+        return false;
+    }
+    *node = (pb_value){.kind = PB_REGEX, .regex = re};
+    return true;
+}
+
 static bool resolve_list(resolver *r, pb_value *v) {
     if (v->seq.len == 0 || v->seq.items[0].kind != PB_SYMBOL) {
         return resolve_fail(r, "call form must be headed by a symbol", (pb_slice){0});
@@ -932,6 +967,9 @@ static bool resolve_list(resolver *r, pb_value *v) {
         head->tag = (uint32_t)idx + 1;
     }
     const bool is_thread = idx != FORM_COUNT && FORMS[idx].form == PB_FORM_THREAD;
+    if (idx != FORM_COUNT && FORMS[idx].pattern && !resolve_pattern(r, head->text, v)) {
+        return false;
+    }
     for (size_t i = 1; i < v->seq.len; i += 1) {
         const bool ok_item = is_thread && i > 1 ? resolve_thread_step(r, &v->seq.items[i])
                                                 : resolve_value(r, &v->seq.items[i]);
@@ -966,6 +1004,7 @@ static bool resolve_value(resolver *r, pb_value *v) {
     case PB_NUMBER:
     case PB_KEYWORD:
     case PB_STRING:
+    case PB_REGEX:
         return true;
     }
     return true;

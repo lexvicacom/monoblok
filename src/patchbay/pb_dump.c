@@ -1,4 +1,5 @@
 #include "pb_json.h"
+#include "pb_regex.h"
 
 #include "fs.h"
 
@@ -32,6 +33,7 @@ static void dump_value(const pb_value *v, int depth) {
     case PB_SYMBOL: dump_text("symbol", v->text); break;
     case PB_KEYWORD: dump_text("keyword", v->text); break;
     case PB_STRING: dump_text("string", v->text); break;
+    case PB_REGEX: dump_text("regex", pb_regex_source(v->regex)); break;
     case PB_LIST: dump_seq("list", v->seq, depth); break;
     case PB_VECTOR: dump_seq("vector", v->seq, depth); break;
     }

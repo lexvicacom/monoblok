@@ -15,7 +15,7 @@ New to the language? Read the [patchbay guide](patchbay.html) first. Want whole 
 | Control flow | [`if`, `when`, `and`, `or`, `do`](#special-forms), [`->`](#threading-with), [`not`](#comparisons-and-logic) |
 | Comparison and arithmetic | [`=`, `<`, `<=`, `>`, `>=`](#comparisons-and-logic), [`+`, `-`, `*`, `/`, `min`, `max`, `abs`, `sign`, `clamp`](#arithmetic) |
 | Numeric shaping | [`round`, `quantize`](#idempotent-filters) |
-| Strings and subjects | [`subject-append`, `subject-with`, `subject-token`, `str-concat`, `contains?`, `starts-with?`, `ends-with?`, `now`](#strings-and-subjects) |
+| Strings and subjects | [`subject-append`, `subject-with`, `subject-token`, `str-concat`, `contains?`, `starts-with?`, `ends-with?`, `now`](#strings-and-subjects), experimental regex: [`matches?`, `re-capture`, `re-replace`](#regular-expressions) |
 | Publishing | [`publish!`](#side-effects), [`reply!`](#request-reply), [`print!`](#debug-printing) |
 | Value gates | [`squelch`, `deadband`, `changed?`, `delta`](#idempotent-filters) |
 | Rate gates | [`hold-off`, `throttle`](#time-based-gates) |

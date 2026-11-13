@@ -21,7 +21,8 @@ forms. This subset works for both runtimes unless a local build disables a form.
 
 Alert the user before using or recommending full monoblok-only features for a
 Tinyblok file. This includes top-level `(every ...)`, `(lvc ...)` and `(export ...)`,
-`hysteresis`, `ewma`, `last`, the funnel pattern, monoblok's `reply!` (see
+`hysteresis`, `ewma`, `last`, the experimental regex forms (`matches?`,
+`re-capture`, `re-replace`), the funnel pattern, monoblok's `reply!` (see
 [Monoblok request-reply](monoblok.md#request-reply-monoblok); Tinyblok's `reply!` is different),
 `(import ...)` and JetStream ingress, `replaying?`, daemon flags such as
 `--snapshot`, runtime patch/config

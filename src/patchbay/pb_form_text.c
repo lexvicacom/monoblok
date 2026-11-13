@@ -252,6 +252,11 @@ static void print_value(FILE *out, pb_value v) {
         fputc(':', out);
         print_slice(out, v.text);
         break;
+    case PB_REGEX:
+        fputs("#regex\"", out);
+        print_slice(out, pb_regex_source(v.regex));
+        fputc('"', out);
+        break;
     case PB_VECTOR:
     case PB_LIST: {
         const char open = v.kind == PB_VECTOR ? '[' : '(';

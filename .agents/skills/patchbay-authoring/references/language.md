@@ -95,6 +95,14 @@ Strings / subjects:
   Each call formats the result into the eval arena. Wall-clock comes from `Context.wall_ms` (stamped per-PUB by the server, distinct from the monotonic `now_ms` used by `hold-off` and time windows). Pair with `subject-with` or `subject-append` for bucketing: `(publish! (subject-with "logs" (now :date) "errors") payload)` lands on `logs.2026-05-04.errors`. `:minute` is high cardinality (525,600 unique subject tokens per year per topic); prefer `:hour` or `:date` unless you really mean it.
 - `(contains? coll item)` substring on strings (`(contains? payload "ERROR")`), membership on vectors (`(contains? [1 2 3] payload-int)`). Strict equality, so `"1"` does not match `1`.
 - `(starts-with? text prefix)`, `(ends-with? text suffix)` strings only
+- Regular expressions (**experimental**: forms and pattern syntax may change between releases; monoblok daemon only, not in the portable subset). The pattern comes first so the forms thread with `->`:
+  - `(matches? PATTERN TEXT)` bool, true when the pattern matches anywhere in TEXT. Use `^` / `$` for the ends.
+  - `(re-capture PATTERN TEXT)` text of group 1 (or the whole match if there is no group); nil when nothing matches.
+  - `(re-replace PATTERN REPLACEMENT TEXT)` TEXT with every match replaced by the literal REPLACEMENT (no `$1`).
+  - PATTERN must be a string literal in the file; `--validate` reports a malformed one. Write `\d+` as `#"\d+"` in EDN (raw string; an ordinary `"\\d+"` also works), `'\d+'` in YAML (single quotes are raw, `''` is a quote; double quotes follow YAML escapes, so `"\d+"` is an error), and `"\\d+"` in JSON.
+  - Syntax: literals, `.`, classes (`[a-z]`, `[^x]`, `\d \w \s` and negations), `\b`, `^`, `$`, `* + ? {n,m}` with lazy forms, `|`, `(...)`, `(?:...)`, leading `(?i)` / `(?s)`. Not supported: backreferences, lookaround, named groups, Unicode classes. Matching is by byte and `(?i)` is ASCII only; `$` is the strict end of the payload (`foo\s*$` tolerates a trailing newline); a literal `{` must be escaped (`\{`).
+  - Cost: linear in payload size, no blow-up on hostile input; a pattern that does an unusual amount of work on a message fails the rule for that message instead of stalling the daemon.
+  - Example: `(-> payload (re-capture #"t=(\d+)") (publish! "out.cap"))`
 - `(subject-token N [S])` Nth dot token, 0-indexed, of `S` (default: `subject`)
 
 Side effects:
@@ -190,9 +198,11 @@ monoblok, only the clean prefix reaches the cluster) or with `(import ...)`
 connection published, so every decision is per subject, not per client.
 
 ```edn
-; Payload scan. Report the subject, not the offending payload.
+; Payload scan. Report the subject, not the offending payload. One
+; case-insensitive pattern (experimental regex form; #"..." is EDN's raw
+; string and the pattern must be a literal).
 (on "in.event.*"
-  (if (or (contains? payload "<script") (contains? payload "DROP TABLE"))
+  (if (matches? #"(?i)<script|drop\s+table" payload)
     (publish! "waf.blocked" subject)
     (publish! (subject-with "clean.event" (subject-token 2)) payload)))
 
@@ -224,14 +234,16 @@ Things to tell the user when you write gates like these:
   on the first message after the rate has dropped, not when the window empties.
   The verdict does not stop the traffic; use `throttle` in the forwarding
   thread to cap it.
-- `contains?` is a case-sensitive substring test with no decoding.
+- `contains?` is a case-sensitive substring test with no decoding. For case-insensitive or shaped tests, the experimental `matches?` takes `(?i)` and classes; it also does no decoding.
 - Prefer an allow-list of fields over hunting for bad values: it needs no
-  pattern matching and fails closed when a new field appears.
+  pattern matching and fails closed when a new field appears. Where free text
+  must be masked, `re-replace` only catches the shapes its pattern describes.
 
 ## Forms that do not exist
 
-Patchbay has no regular expressions, no string replace, substring, split,
-upper/lower or length, no hashing, tokenising or masking, no JSON
+Patchbay has no substring, split, upper/lower or length, no hashing or
+tokenising, no backreferences or lookaround in patterns, no `$1` in
+`re-replace` replacements, no JSON
 construction or field deletion, no arrays or JSON paths deeper than four
 tokens, no variables, `let`, user-defined functions, macros or quote, and no
 state shared across subjects. Do not invent a form to fill one of these gaps:

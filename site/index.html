@@ -28,7 +28,7 @@
 <div class="signal-slide" id="signal-slide-6" role="group" aria-roledescription="slide" aria-label="6 of 8: A WAF for NATS" hidden>
 <div class="signal-caption">Messages on their way to the cluster</div>
 <svg viewBox="0 0 440 150" aria-hidden="true"><text class="signal-msg signal-msg-raw"><tspan x="4" y="36">in.event.orders  {"note":"leave at the door"}</tspan><tspan x="4" y="66">in.event.orders  {"note":"&lt;script&gt;alert(1)"}</tspan><tspan x="4" y="96">in.event.signup  {"name":"Ada"}</tspan><tspan x="4" y="126">in.event.signup  {"name":"x; DROP TABLE users"}</tspan></text></svg>
-<div class="patch-node"><span>→</span> (contains? payload "&lt;script") <span>→</span></div>
+<div class="patch-node"><span>→</span> (matches? #"(?i)&lt;script" payload) <span>→</span></div>
 <svg viewBox="0 0 440 120" aria-hidden="true"><circle cx="9" cy="41" r="5"/><circle cx="9" cy="81" r="5"/><text class="signal-msg"><tspan x="24" y="46">clean.event.orders  {"note":"leave at the door"}</tspan><tspan x="24" y="86">clean.event.signup  {"name":"Ada"}</tspan></text></svg>
 <div class="signal-caption">Bad payloads are not forwarded <a href="docs/examples-waf.html#a-waf-for-nats" aria-label="Full example: A WAF for NATS">Full example</a></div></div>
 <div class="signal-slide" id="signal-slide-7" role="group" aria-roledescription="slide" aria-label="7 of 8: Hold the outliers" hidden>

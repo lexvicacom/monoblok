@@ -99,6 +99,56 @@ static void test_comments_and_escapes(void) {
     pb_arena_free(&arena);
 }
 
+static void test_regex_literal(void) {
+    pb_arena arena = {0};
+    // Backslashes stay verbatim: #"\d+" is the same text as "\\d+".
+    pb_parse_result r = parse(&arena, "(a #\"\\d+\" \"\\\\d+\")");
+    CHECK(r.err == PB_PARSE_OK);
+    pb_values top = r.forms.items[0].seq;
+    CHECK(top.len == 3);
+    CHECK(top.items[1].kind == PB_STRING);
+    check_text(top.items[1].text, "\\d+");
+    check_text(top.items[2].text, "\\d+");
+
+    // \" yields a quote; \\ stays two backslashes and does not escape the next quote.
+    r = parse(&arena, "(a #\"x\\\"y\" #\"p\\\\\" #\"\")");
+    CHECK(r.err == PB_PARSE_OK);
+    top = r.forms.items[0].seq;
+    CHECK(top.len == 4);
+    check_text(top.items[1].text, "x\"y");
+    check_text(top.items[2].text, "p\\\\");
+    CHECK(top.items[3].kind == PB_STRING && top.items[3].text.len == 0);
+
+    r = parse(&arena, "[#\"a\\nb\"](c #\"l1\nl2\")");
+    CHECK(r.err == PB_PARSE_OK);
+    CHECK(r.forms.len == 2);
+    check_text(r.forms.items[0].seq.items[0].text, "a\\nb");
+    check_text(r.forms.items[1].seq.items[1].text, "l1\nl2");
+
+    // Unterminated forms report the opening offset.
+    r = parse(&arena, "(a #\"abc");
+    CHECK(r.err == PB_PARSE_UNTERMINATED_STRING);
+    CHECK(r.err_offset == 3);
+    r = parse(&arena, "(a #\"abc\\");
+    CHECK(r.err == PB_PARSE_UNTERMINATED_STRING);
+    CHECK(r.err_offset == 3);
+    r = parse(&arena, "(a #\"abc\\\")");
+    CHECK(r.err == PB_PARSE_UNTERMINATED_STRING);
+    r = parse(&arena, "#\"");
+    CHECK(r.err == PB_PARSE_UNTERMINATED_STRING);
+    CHECK(r.err_offset == 0);
+
+    // # not followed by a quote is still an ordinary symbol character.
+    r = parse(&arena, "#foo a#b #");
+    CHECK(r.err == PB_PARSE_OK);
+    CHECK(r.forms.len == 3);
+    CHECK(r.forms.items[0].kind == PB_SYMBOL);
+    check_text(r.forms.items[0].text, "#foo");
+    check_text(r.forms.items[1].text, "a#b");
+    check_text(r.forms.items[2].text, "#");
+    pb_arena_free(&arena);
+}
+
 static void test_vectors(void) {
     pb_arena arena = {0};
     pb_parse_result r = parse(&arena, "(contains? [1 2 3] x)");
@@ -153,6 +203,7 @@ TEST_MAIN(sexpr,
           test_keywords,
           test_nested_list,
           test_comments_and_escapes,
+          test_regex_literal,
           test_vectors,
           test_errors,
           test_offset_at_eof,

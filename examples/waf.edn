@@ -13,10 +13,12 @@
 ;; Payload scan. An event carrying a known-bad fragment is not
 ;; forwarded; its subject (never its payload) is reported on
 ;; `waf.blocked`. Everything else moves from in.event.* to clean.event.*.
+;; The test is one case-insensitive regular expression (the regex forms
+;; are experimental): a script tag, a `${jndi:` lookup, or DROP TABLE
+;; with any run of whitespace between the words. #"..." is EDN's raw
+;; string, so backslashes are written as the regex wants them.
 (on "in.event.*"
-  (if (or (contains? payload "<script")
-          (contains? payload "${jndi:")
-          (contains? payload "DROP TABLE"))
+  (if (matches? #"(?i)<script|\$\{jndi:|drop\s+table" payload)
     (publish! "waf.blocked" subject)
     (publish! (subject-with "clean.event" (subject-token 2)) payload)))
 

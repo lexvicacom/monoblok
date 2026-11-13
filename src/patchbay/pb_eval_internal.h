@@ -28,6 +28,9 @@ typedef enum pb_form {
     PB_FORM_CONTAINS,
     PB_FORM_STARTS_WITH,
     PB_FORM_ENDS_WITH,
+    PB_FORM_MATCHES,
+    PB_FORM_RE_CAPTURE,
+    PB_FORM_RE_REPLACE,
     PB_FORM_SUBJECT_APPEND,
     PB_FORM_SUBJECT_TOKEN,
     PB_FORM_SUBJECT_WITH,
@@ -80,6 +83,7 @@ typedef struct pb_form_entry {
     bool stateful;   // allocates a state slot keyed by call site
     bool clocked;    // always needs the clock timer
     bool clocked_ms; // needs the clock timer only when called with a leading :ms window
+    bool pattern;    // first argument is a regex literal compiled by pb_resolve_rule
 } pb_form_entry;
 
 const pb_form_entry *pb_form_lookup(pb_slice name);

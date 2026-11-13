@@ -137,9 +137,11 @@ static pb_parse_error parse_seq(parser *p, char close, char wrong_close, pb_valu
     }
 }
 
-static pb_parse_error parse_string(parser *p, pb_value *out) {
+// Reads "..." or, with raw set, a #"..." regex literal (backslash pairs kept
+// verbatim except \" which yields "). Both give PB_STRING.
+static pb_parse_error parse_string(parser *p, bool raw, pb_value *out) {
     const size_t open = p->pos;
-    p->pos += 1;
+    p->pos += raw ? 2 : 1;
     char *tmp = NULL;
     size_t len = 0;
     size_t cap = 0;
@@ -163,15 +165,28 @@ static pb_parse_error parse_string(parser *p, pb_value *out) {
                 p->pos = open;
                 return PB_PARSE_UNTERMINATED_STRING;
             }
-            switch (p->src[p->pos]) {
-            case 'n': c = '\n'; break;
-            case 'r': c = '\r'; break;
-            case 't': c = '\t'; break;
-            case '\\': c = '\\'; break;
-            case '"': c = '"'; break;
-            default:
-                free(tmp);
-                return PB_PARSE_INVALID_ESCAPE;
+            if (raw) {
+                // raw: keep the backslash, except \" drops it.
+                if (p->src[p->pos] != '"') {
+                    if (!mb_array_reserve((void **)&tmp, &cap, len + 1, sizeof tmp[0], 16)) {
+                        free(tmp);
+                        return PB_PARSE_OOM;
+                    }
+                    tmp[len] = '\\';
+                    len += 1;
+                }
+                c = p->src[p->pos];
+            } else {
+                switch (p->src[p->pos]) {
+                case 'n': c = '\n'; break;
+                case 'r': c = '\r'; break;
+                case 't': c = '\t'; break;
+                case '\\': c = '\\'; break;
+                case '"': c = '"'; break;
+                default:
+                    free(tmp);
+                    return PB_PARSE_INVALID_ESCAPE;
+                }
             }
         }
         if (!mb_array_reserve((void **)&tmp, &cap, len + 1, sizeof tmp[0], 16)) {
@@ -253,7 +268,13 @@ static pb_parse_error parse_one(parser *p, pb_value *out) {
     case ']':
         return PB_PARSE_UNEXPECTED_RBRACKET;
     case '"':
-        return parse_string(p, out);
+        return parse_string(p, false, out);
+    case '#':
+        // #"..." is a regex literal; other # starts a symbol.
+        if (p->pos + 1 < p->len && p->src[p->pos + 1] == '"') {
+            return parse_string(p, true, out);
+        }
+        return parse_atom(p, out);
     default:
         return parse_atom(p, out);
     }

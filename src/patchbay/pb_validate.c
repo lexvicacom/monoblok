@@ -5,6 +5,7 @@
 #include "pb_eval.h"
 #include "pb_program.h"
 #include "pb_json.h"
+#include "pb_regex.h"
 #include "router.h"
 
 #include <stdio.h>
@@ -50,6 +51,25 @@ static bool validate_sample(size_t rule_id, pb_value body, bool every) {
         return false;
     }
     return true;
+}
+
+// Notes each regex literal without a DFA: it runs on the slower Pike VM and can
+// trip the work budget. Not an error.
+static void note_slow_patterns(size_t rule_id, const pb_value *v) {
+    if (v->kind != PB_LIST && v->kind != PB_VECTOR) {
+        return;
+    }
+    for (size_t i = 0; i < v->seq.len; i += 1) {
+        const pb_value *item = &v->seq.items[i];
+        if (item->kind == PB_REGEX && !pb_regex_has_dfa(item->regex)) {
+            const pb_slice form = v->kind == PB_LIST && i > 0 ? v->seq.items[0].text : (pb_slice){0};
+            const pb_slice src = pb_regex_source(item->regex);
+            fprintf(stderr, "note: rule %zu: %.*s: pattern runs without the fast table (%zu instructions): \"%.*s\"\n", rule_id,
+                    (int)form.len, form.ptr, pb_regex_program_len(item->regex), (int)src.len, src.ptr);
+        } else {
+            note_slow_patterns(rule_id, item);
+        }
+    }
 }
 
 static bool validate_on_form(validate_config *config, pb_value form, size_t *rule_count) {
@@ -110,6 +130,7 @@ static bool validate_on_form(validate_config *config, pb_value form, size_t *rul
         return false;
     }
 
+    note_slow_patterns(*rule_count - 1, &items.items[body_idx]);
     return validate_sample(*rule_count - 1, items.items[body_idx], false);
 }
 

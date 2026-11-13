@@ -163,6 +163,12 @@ cmake --build build --target pb-dump
   LVC (nil when absent, so use it in a `->` thread), and `(reply! VALUE)`
   publishes to the request's `reply-to`.
 - Do not add quote, macro, or list-as-data compatibility paths.
+- `matches?`, `re-capture` and `re-replace` are experimental regex forms. The
+  pattern must be a string literal compiled in the resolve pass (never at
+  publish time), and the engine is the in-tree non-backtracking `pb_regex`.
+  Write patterns as `#"\d+"` in EDN (raw string reader), `'\d+'` in YAML
+  (single quotes are raw; double quotes follow YAML escapes, so `"\d+"` is an
+  error), and `"\\d+"` in JSON.
 - Keep effectful forms explicit, conventionally with `!` (`publish!`,
   `json-demux!`).
 - Before adding a new DSL form, read `src/patchbay/README.md` and keep the

