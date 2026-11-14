@@ -13,7 +13,7 @@ case "$CMAKE_VERSION" in
 esac
 
 case "$PLATFORM" in
-    linux-x86_64|linux-aarch64|macos-aarch64) ;;
+    linux-x86_64|linux-aarch64|linux-armv6-gnueabihf|macos-aarch64) ;;
     *) echo "unknown PLATFORM: $PLATFORM" >&2; exit 2 ;;
 esac
 

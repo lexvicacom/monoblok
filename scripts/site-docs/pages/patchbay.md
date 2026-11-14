@@ -6,6 +6,7 @@ description: The patchbay rule language: rule shape, threading, state, re-entry,
 
 This page explains how the language fits together. For what each operator does, see the [forms reference](forms.html); for complete files, see the [examples](examples.html).
 
+> **Not sure where to get started? Want results fast?** Fear not: the [`patchbay-authoring` skill](agents.html) turns Codex and Claude into fully qualified Patchbay experts. 🤖
 ## A first rule
 
 Rules are top-level `(on SUBJECT-FILTER BODY)` forms. The body is evaluated whenever an incoming subject matches the filter. Wildcards are NATS-style: `*` matches one token, `>` matches the tail.

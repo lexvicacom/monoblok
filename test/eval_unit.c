@@ -1560,7 +1560,9 @@ static void test_regex_budget(void) {
     memset(buf, 'a', MB);
     CHECK(rx_eval("(matches? \"(?:a|b)*a(?:a|b){100}c\" payload)", buf, MB).err == PB_EVAL_REGEX_BUDGET);
     CHECK(rx_eval("(re-capture \"(?:a|b)*a(?:a|b){100}c\" payload)", buf, MB).err == PB_EVAL_REGEX_BUDGET);
-    CHECK((double)(clock() - start) / CLOCKS_PER_SEC < PERF_LIMIT_SECONDS);
+    if (getenv("MB_TEST_EMULATED") == NULL) {
+        CHECK((double)(clock() - start) / CLOCKS_PER_SEC < PERF_LIMIT_SECONDS);
+    }
     CHECK(strcmp(pb_eval_error_name(PB_EVAL_REGEX_BUDGET), "regex work budget exceeded") == 0);
     memset(buf, '7', 100);
     rx_result r = rx_eval("(re-replace \"\\\\d\" \"x\" payload)", buf, 100);

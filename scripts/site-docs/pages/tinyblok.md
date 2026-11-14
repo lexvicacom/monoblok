@@ -32,13 +32,13 @@ tinyblok suits places where the reading starts on a wire, not on a network, and 
 
 It is a poor fit when rules must change without reflashing, when the device needs to subscribe to arbitrary subjects, or when the work is really JSON document processing. Those belong on monoblok.
 
-### On a 64-bit Raspberry Pi, use monoblok
+### On a Raspberry Pi, use monoblok
 
-tinyblok's limits exist because a microcontroller has no operating system, no filesystem and a few hundred kilobytes of RAM. A 64-bit Raspberry Pi has none of those problems. The full monoblok server runs on it as it is: the Linux ARM64 [release binary and container image](running.html#install) work unchanged on a 64-bit OS, with no special build. For now this covers 64-bit Raspberry Pi devices only; 32-bit boards and 32-bit OS installs are not supported.
+tinyblok's limits exist because a microcontroller has no operating system, no filesystem and a few hundred kilobytes of RAM. A Raspberry Pi running Linux has none of those problems. The full monoblok server runs on it: use the Linux ARM64 [release binary or container image](running.html#install) on a 64-bit OS, or the ARMv6 hard-float release binary on a 32-bit OS. The 32-bit binary supports Pi 1 and Pi Zero W with Raspberry Pi OS Bookworm or newer. The download helper selects the binary for your OS.
 
 That gives you everything tinyblok leaves out: rules in an external patchbay file that you edit and reload with a restart, the complete [forms reference](forms.html), JSON processing, the [last-value cache and snapshots](state.html), local subscribers, and [export](bridge.html#export) to a NATS cluster. A sensor script on the Pi publishes raw readings to monoblok on localhost, and monoblok does the conditioning.
 
-Choose tinyblok when the device is a microcontroller: cheaper, lower power, instant boot, and nothing to administer. Choose monoblok when the device is a 64-bit Raspberry Pi running Linux.
+Choose tinyblok when the device is a microcontroller: cheaper, lower power, instant boot, and nothing to administer. Choose monoblok when the device is a Raspberry Pi running Linux.
 
 ## How it differs from monoblok
 

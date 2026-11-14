@@ -30,6 +30,7 @@
 <h1>Patchbay guide</h1>
 <p class="lede">patchbay is a small S-expression DSL describing how every incoming publish gets filtered, conditioned, and re-routed. It is shared by the monoblok server and tinyblok on microcontrollers.</p>
 <p>This page explains how the language fits together. For what each operator does, see the <a href="forms.html">forms reference</a>; for complete files, see the <a href="examples.html">examples</a>.</p>
+<blockquote><p><strong>Not sure where to get started? Want results fast?</strong> Fear not: the <a href="agents.html"><code>patchbay-authoring</code> skill</a> turns Codex and Claude into fully qualified Patchbay experts. 🤖</p></blockquote>
 <h2 id="a-first-rule">A first rule<a class="anchor" href="#a-first-rule" aria-label="Link to this section">#</a></h2>
 <p>Rules are top-level <code>(on SUBJECT-FILTER BODY)</code> forms. The body is evaluated whenever an incoming subject matches the filter. Wildcards are NATS-style: <code>*</code> matches one token, <code>&gt;</code> matches the tail.</p>
 <figure class="code"><figcaption><span>EDN</span></figcaption><pre><code>(<span class="tok-op">on</span> <span class="tok-str">"sensors.*"</span>

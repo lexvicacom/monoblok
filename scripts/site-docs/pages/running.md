@@ -2,7 +2,7 @@ description: Install monoblok from a binary, container or source, then run, depl
 
 # Install and run
 
-{lede} monoblok ships as a single binary for Linux (x64 or ARM64) or macOS on Apple Silicon, and as a multi-arch container image. There is no cluster to form, and the only disk it uses is an optional [snapshot](state.html#snapshots) file for warm start.
+{lede} monoblok ships as a single binary for Linux (x64, ARM64 or 32-bit ARM) or macOS on Apple Silicon, and as a multi-arch container image. There is no cluster to form, and the only disk it uses is an optional [snapshot](state.html#snapshots) file for warm start.
 
 ## Install
 
@@ -17,6 +17,8 @@ The [release helper](https://github.com/lexvicacom/monoblok/blob/main/scripts/st
 ```sh
 ./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
 ```
+
+On Raspberry Pi, the helper selects `linux-aarch64` for a 64-bit OS and `linux-armv6-gnueabihf` for a 32-bit OS, including Pi 1 and Pi Zero W. It also detects 32-bit userspace running on a 64-bit kernel. The 32-bit binary targets ARMv6 hard-float Linux with glibc 2.36 or newer, such as Raspberry Pi OS Bookworm or newer.
 
 To install it on Linux, run the bundled installer and start the [systemd](#systemd) service:
 

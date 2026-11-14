@@ -54,7 +54,11 @@ struct pb_value {
     };
 };
 
-_Static_assert(sizeof(pb_value) == 24, "pb_value tag must fit in kind's padding");
+_Static_assert(offsetof(pb_value, tag) == sizeof(pb_value_kind), "pb_value tag must follow kind");
+_Static_assert(offsetof(pb_value, tag) + sizeof(uint32_t) <= offsetof(pb_value, number),
+               "pb_value tag must precede value storage");
+_Static_assert(sizeof(pb_value) == (sizeof(void *) == 8 ? 24 : 16),
+               "unexpected pb_value layout");
 
 typedef enum pb_parse_error {
     PB_PARSE_OK,

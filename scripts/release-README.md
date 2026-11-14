@@ -13,6 +13,10 @@ brew install openssl@3
 
 On Linux, install your distribution's OpenSSL 3 runtime package.
 
+The `linux-armv6-gnueabihf` archive is for 32-bit ARM hard-float Linux,
+including Raspberry Pi 1 and Pi Zero W. It requires glibc 2.36 or newer,
+such as Raspberry Pi OS Bookworm or newer. Use `linux-aarch64` on a 64-bit OS.
+
 ## Quick start
 
 Run the bundled tour patchbay:

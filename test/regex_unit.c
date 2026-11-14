@@ -336,7 +336,7 @@ static void test_from_offsets(void) {
     CHECK(t_search(re, sl("abc"), 0, many, 6));
     CHECK(many[3].matched && many[3].start == 2 && many[3].end == 3);
     for (size_t i = 4; i < 6; i += 1) {
-        CHECK(many[i].start == 0x5555555555555555u && many[i].end == 0x5555555555555555u);
+        CHECK(many[i].start == (size_t)0x55555555u * (SIZE_MAX / UINT32_MAX) && many[i].end == (size_t)0x55555555u * (SIZE_MAX / UINT32_MAX));
     }
     pb_regex_span two[2];
     CHECK(t_search(re, sl("abc"), 0, two, 2));
@@ -958,7 +958,9 @@ static void test_budget(void) {
         size_t budget = PB_REGEX_DEFAULT_BUDGET;
         clock_t start = clock();
         CHECK(replace_all_scan(re, (pb_slice){run, RUN}, &budget, &hits) == PB_REGEX_GAVE_UP);
-        CHECK(seconds_since(start) < PERF_LIMIT_SECONDS);
+        if (getenv("MB_TEST_EMULATED") == NULL) {
+            CHECK(seconds_since(start) < PERF_LIMIT_SECONDS);
+        }
         CHECK(budget == 0 && hits > 0);
         pb_regex_span sp[1];
         CHECK(pb_regex_search(re, (pb_slice){run, 100}, 0, sp, 1, NULL) == PB_REGEX_MATCH && sp[0].end == 1);
@@ -975,7 +977,9 @@ static void test_budget(void) {
     pb_regex_span sp[2];
     budget = PB_REGEX_DEFAULT_BUDGET;
     CHECK(pb_regex_search(large, (pb_slice){big, MB}, 0, sp, 2, &budget) == PB_REGEX_GAVE_UP);
-    CHECK(seconds_since(start) < PERF_LIMIT_SECONDS);
+    if (getenv("MB_TEST_EMULATED") == NULL) {
+            CHECK(seconds_since(start) < PERF_LIMIT_SECONDS);
+        }
 
     static const struct { const char *pat; const char *unit; const char *tail; } real[] = {
         {"\\b\\d{3}-\\d{2}-\\d{4}\\b", "GET /index.html?id=17&q=hello+world HTTP/1.1 agent=curl 12-34 ok\n", " ssn 123-45-6789"},
