@@ -37,7 +37,7 @@ jobs:
                 build-essential cmake pkg-config libssl-dev ca-certificates file
               cmake -S . -B build-armv6 -DCMAKE_BUILD_TYPE=Release
               cmake --build build-armv6 --parallel 2
-              ctest --test-dir build-armv6 --output-on-failure
+              MB_TEST_EMULATED=1 ctest --test-dir build-armv6 --output-on-failure
               file build-armv6/monoblok
               readelf -h build-armv6/monoblok
               ldd build-armv6/monoblok
