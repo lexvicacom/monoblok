@@ -203,6 +203,10 @@ else()
   set(MB_UV_TARGET PkgConfig::LIBUV)
 endif()
 
+foreach(MB_TEMP_TEST_TARGET unit-tests snapshot-tests program-tests)
+  target_link_libraries(${MB_TEMP_TEST_TARGET} PRIVATE ${MB_UV_TARGET})
+endforeach()
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/nats.c/CMakeLists.txt")
   set(NATS_BUILD_WITH_TLS ${MB_NATS_TLS} CACHE BOOL "" FORCE)
   set(NATS_BUILD_OPENSSL_STATIC_LIBS OFF CACHE BOOL "" FORCE)

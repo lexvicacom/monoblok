@@ -1,10 +1,10 @@
 #include "snapshot.h"
 #include "test_check.h"
+#include "test_temp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 static mb_slice lit(const char *s) {
     return (mb_slice){.ptr = (const uint8_t *)s, .len = strlen(s)};
@@ -34,9 +34,9 @@ static void test_snapshot_roundtrip_lvc_and_state(void) {
     const char *src =
         "(lvc [\">\"])\n"
         "(on \"foo\" (when (changed? payload) (publish! \"out\" payload)))\n";
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/monoblok-snapshot-%ld.bin", (long)getpid());
-    remove(path);
+    mb_test_temp temp;
+    mb_test_temp_init(&temp);
+    const char *path = temp.path;
 
     pb_program program = {0};
     CHECK(pb_program_load_source(&program, "<test>", src, strlen(src)));
@@ -74,14 +74,14 @@ static void test_snapshot_roundtrip_lvc_and_state(void) {
     mb_buf_free(&out_conn.out);
     mb_router_free(&restored_router);
     pb_program_free(&restored_program);
-    remove(path);
+    mb_test_temp_free(&temp);
 }
 
 static void test_snapshot_preserves_count_window_capacity(void) {
     const char *src = "(on \"foo\" (publish! \"avg\" (moving-avg 3 payload-float)))\n";
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/monoblok-snapshot-window-%ld.bin", (long)getpid());
-    remove(path);
+    mb_test_temp temp;
+    mb_test_temp_init(&temp);
+    const char *path = temp.path;
 
     pb_program program = {0};
     CHECK(pb_program_load_source(&program, "<test>", src, strlen(src)));
@@ -110,7 +110,7 @@ static void test_snapshot_preserves_count_window_capacity(void) {
     mb_buf_free(&avg_conn.out);
     mb_router_free(&restored_router);
     pb_program_free(&restored_program);
-    remove(path);
+    mb_test_temp_free(&temp);
 }
 
 static void put_u32(mb_buf *b, uint32_t v) {
@@ -134,8 +134,9 @@ static void write_bytes_file(const char *path, const mb_buf *b) {
 // A v4 file (no call-site id) must still load its LVC entries but skip rule state.
 static void test_snapshot_v4_rule_state_skipped(void) {
     const char *src = "(lvc [\">\"])\n(on \"foo\" (squelch payload))\n";
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/monoblok-snapshot-v4-%ld.bin", (long)getpid());
+    mb_test_temp temp;
+    mb_test_temp_init(&temp);
+    const char *path = temp.path;
 
     mb_buf file = {0};
     CHECK(mb_buf_append(&file, "MBLK", 4));
@@ -168,16 +169,16 @@ static void test_snapshot_v4_rule_state_skipped(void) {
     CHECK(program.rules[0].state.len == 0);
     mb_router_free(&router);
     pb_program_free(&program);
-    remove(path);
+    mb_test_temp_free(&temp);
 }
 
 // State for a call site that an edited rule no longer has must not be restored.
 static void test_snapshot_skips_state_for_changed_rule(void) {
     const char *src_a = "(on \"foo\" (squelch payload))\n";
     const char *src_b = "(on \"foo\" (changed? payload))\n";
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/monoblok-snapshot-edit-%ld.bin", (long)getpid());
-    remove(path);
+    mb_test_temp temp;
+    mb_test_temp_init(&temp);
+    const char *path = temp.path;
 
     pb_program program = {0};
     CHECK(pb_program_load_source(&program, "<test>", src_a, strlen(src_a)));
@@ -215,7 +216,7 @@ static void test_snapshot_skips_state_for_changed_rule(void) {
     CHECK(edited.rules[0].state.len == 0);
     mb_router_free(&edited_router);
     pb_program_free(&edited);
-    remove(path);
+    mb_test_temp_free(&temp);
 }
 // every slots are recreated at load and never persisted; state of stateful forms
 // inside an every body (recorded under the empty filter) and of on rules restores
@@ -224,9 +225,9 @@ static void test_snapshot_every_rules(void) {
     const char *src =
         "(every :ms 100 (publish! \"sum\" (moving-sum 100 1)))\n"
         "(on \"foo\" (when (changed? payload) (publish! \"out\" payload)))\n";
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/monoblok-snapshot-every-%ld.bin", (long)getpid());
-    remove(path);
+    mb_test_temp temp;
+    mb_test_temp_init(&temp);
+    const char *path = temp.path;
 
     pb_program program = {0};
     CHECK(pb_program_load_source(&program, "<test>", src, strlen(src)));
@@ -280,7 +281,7 @@ static void test_snapshot_every_rules(void) {
     CHECK(edited_counts.rule_state_skipped == 2);
     mb_router_free(&edited_router);
     pb_program_free(&edited);
-    remove(path);
+    mb_test_temp_free(&temp);
 }
 
 TEST_MAIN(snapshot,

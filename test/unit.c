@@ -3,11 +3,11 @@
 #include "proto.h"
 #include "router.h"
 #include "test_check.h"
+#include "test_temp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 static mb_slice lit(const char *s) {
     return (mb_slice){.ptr = (const uint8_t *)s, .len = strlen(s)};
@@ -207,9 +207,9 @@ static void test_fs_read_write_helpers(void) {
     mb_buf buf = {0};
     CHECK(!mb_read_file(NULL, &buf));
 
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/monoblok-fs-%ld.txt", (long)getpid());
-    remove(path);
+    mb_test_temp temp;
+    mb_test_temp_init(&temp);
+    const char *path = temp.path;
     CHECK(!mb_read_file(path, &buf));
 
     CHECK(!mb_write_file_atomic(NULL, lit("x")));
@@ -219,7 +219,7 @@ static void test_fs_read_write_helpers(void) {
     check_buf_eq(&buf, "hello");
 
     mb_buf_free(&buf);
-    remove(path);
+    mb_test_temp_free(&temp);
 }
 
 static void test_array_reserve_helpers(void) {

@@ -2,11 +2,11 @@
 
 #include "pb_program.h"
 #include "test_check.h"
+#include "test_temp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 static mb_slice lit(const char *s) {
     return (mb_slice){.ptr = (const uint8_t *)s, .len = strlen(s)};
@@ -49,11 +49,12 @@ static bool buf_eq(const mb_buf *buf, const char *want) {
 }
 
 static void load_program(pb_program *program, const char *src) {
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/monoblok-program-%ld.edn", (long)getpid());
+    mb_test_temp temp;
+    mb_test_temp_init(&temp);
+    const char *path = temp.path;
     CHECK(write_file(path, src));
     CHECK(pb_program_load_file(program, path));
-    remove(path);
+    mb_test_temp_free(&temp);
 }
 
 static void test_reentry_is_opt_in(void) {
@@ -302,7 +303,7 @@ static void test_config_env_values_load(void) {
     CHECK(setenv("MB_TEST_PB_EXPORT", "telemetry.>", 1) == 0);
     CHECK(setenv("MB_TEST_PB_TOKEN", "env-token", 1) == 0);
     CHECK(setenv("MB_TEST_PB_SUBJECT", "raw.>", 1) == 0);
-    CHECK(setenv("MB_TEST_PB_CREDS", "/tmp/env.creds", 1) == 0);
+    CHECK(setenv("MB_TEST_PB_CREDS", "env.creds", 1) == 0);
 
     pb_program program = {0};
     const char *src =
@@ -334,7 +335,7 @@ static void test_config_env_values_load(void) {
     CHECK(slice_is(core->remote.servers[0], "nats://env:4222"));
     CHECK(slice_is(core->subjects[0], "raw.>"));
     CHECK(core->remote.creds.len != 0);
-    CHECK(slice_is(core->remote.creds, "/tmp/env.creds"));
+    CHECK(slice_is(core->remote.creds, "env.creds"));
     pb_program_free(&program);
 
     unsetenv("MB_TEST_PB_LVC");

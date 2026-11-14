@@ -398,6 +398,7 @@ h3 { letter-spacing: -.3px; }
   .proof-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 .proof-strip h2 { margin-bottom: 12px; }
+.proof-strip p, .proof-strip ul { font-size: .9375rem; }
 .proof-strip p + p { margin-top: 14px; }
 
 .proof-strip .benchmark-note { font-size: var(--text-ui); }
@@ -441,3 +442,11 @@ footer .affiliation-note small { font-size: 12px; }
 .uses .use-links { display: flex; flex-direction: column; align-items: flex-start; margin-top: auto; }
 .uses .mode-card a { margin-top: 6px; font-size: var(--text-ui); }
 .uses .section-heading div p { max-width: 62ch; margin: 16px 0 0; }
+
+.image-overlay { width: min(1200px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper, #f5f4ed); color: var(--ink); }
+.image-overlay::backdrop { background: rgb(0 0 0 / 75%); }
+.image-overlay button { display: block; margin: 0 0 12px auto; padding: 8px 14px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.image-overlay figure { margin: 0; }
+.image-overlay img { display: block; width: 100%; max-height: calc(100dvh - 160px); object-fit: contain; }
+.image-overlay figcaption { margin-top: 12px; color: var(--muted); }
+html:has(.image-overlay[open]) { overflow: hidden; }
