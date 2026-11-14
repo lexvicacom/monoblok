@@ -205,6 +205,10 @@ endif()
 
 foreach(MB_TEMP_TEST_TARGET unit-tests snapshot-tests program-tests)
   target_link_libraries(${MB_TEMP_TEST_TARGET} PRIVATE ${MB_UV_TARGET})
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # libuv's public headers need POSIX types exposed in strict C23 mode.
+    target_compile_definitions(${MB_TEMP_TEST_TARGET} PRIVATE _POSIX_C_SOURCE=200809L)
+  endif()
 endforeach()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/nats.c/CMakeLists.txt")
