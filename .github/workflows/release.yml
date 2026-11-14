@@ -26,16 +26,25 @@ jobs:
         include:
           - platform: linux-x86_64
             runs-on: ubuntu-22.04
+            container: true
           - platform: linux-aarch64
             runs-on: ubuntu-22.04-arm
+            container: true
+          - platform: linux-armv6-gnueabihf
+            runs-on: ubuntu-22.04
+            container: false
           - platform: macos-aarch64
             runs-on: macos-latest
+            container: false
     runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 90
     permissions:
       contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Resolve version
         id: ver
@@ -55,10 +64,38 @@ jobs:
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Build + package
+        if: matrix.platform != 'linux-armv6-gnueabihf'
         run: bash scripts/package.sh "${{ steps.ver.outputs.version }}" "${{ matrix.platform }}"
 
+      - name: Enable ARMv6 emulation
+        if: matrix.platform == 'linux-armv6-gnueabihf'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+      - name: Build, test + package ARMv6
+        if: matrix.platform == 'linux-armv6-gnueabihf'
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          docker run --rm --platform linux/arm/v6 \
+            -e RELEASE_VERSION -v "$PWD:/work" -w /work \
+            balenalib/raspberry-pi-debian:bookworm-build \
+            bash -euc '
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                build-essential cmake pkg-config libssl-dev ca-certificates file
+              bash scripts/package.sh "$RELEASE_VERSION" linux-armv6-gnueabihf
+              cmake --build build-package --parallel 2
+              MB_TEST_EMULATED=1 ctest --test-dir build-package --output-on-failure
+              file build-package/monoblok
+              readelf -h build-package/monoblok
+              ldd build-package/monoblok
+              build-package/monoblok --version
+            '
+
       - name: Resolve container metadata
-        if: startsWith(matrix.platform, 'linux-')
+        if: matrix.container
         id: image
         run: |
           set -eu
@@ -80,7 +117,7 @@ jobs:
           echo "image=$image" >> "$GITHUB_OUTPUT"
 
       - name: Check runtime dependencies
-        if: startsWith(matrix.platform, 'linux-')
+        if: matrix.container
         run: ldd build-package/monoblok
 
       - name: Check macOS runtime dependencies
@@ -90,18 +127,18 @@ jobs:
           build-package/monoblok --version
 
       - name: Set up Docker Buildx
-        if: startsWith(matrix.platform, 'linux-')
+        if: matrix.container
         uses: docker/setup-buildx-action@v3
 
       - name: Smoke container image
-        if: startsWith(matrix.platform, 'linux-')
+        if: matrix.container
         run: |
           set -eu
           docker build --build-arg MONOBLOK_BIN=build-package/monoblok -t monoblok:release-smoke .
           docker run --rm monoblok:release-smoke --version
 
       - name: Log in to GHCR
-        if: startsWith(matrix.platform, 'linux-')
+        if: matrix.container
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -109,7 +146,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build + push container image
-        if: startsWith(matrix.platform, 'linux-')
+        if: matrix.container
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}

@@ -48,6 +48,11 @@ The [release helper](./scripts/start.sh) downloads the latest monoblok (macOS/Li
 ./monoblok-*/monoblok --port 14222 --patchbay ./monoblok-*/patchbay.edn
 ```
 
+On Raspberry Pi, the helper selects `linux-aarch64` for a 64-bit OS and
+`linux-armv6-gnueabihf` for a 32-bit OS, including Pi 1 and Pi Zero W.
+The 32-bit binary targets ARMv6 hard-float Linux with glibc 2.36 or newer,
+such as Raspberry Pi OS Bookworm or newer.
+
 Release binaries require the OpenSSL 3 runtime libraries. On macOS, install them
 with `brew install openssl@3` before running monoblok. On Linux, install your
 distribution's OpenSSL 3 runtime package. Container images include these libraries.
