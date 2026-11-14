@@ -336,7 +336,7 @@ static void test_from_offsets(void) {
     CHECK(t_search(re, sl("abc"), 0, many, 6));
     CHECK(many[3].matched && many[3].start == 2 && many[3].end == 3);
     for (size_t i = 4; i < 6; i += 1) {
-        CHECK(many[i].start == 0x5555555555555555u && many[i].end == 0x5555555555555555u);
+        CHECK(many[i].start == (size_t)0x55555555u * (SIZE_MAX / UINT32_MAX) && many[i].end == (size_t)0x55555555u * (SIZE_MAX / UINT32_MAX));
     }
     pb_regex_span two[2];
     CHECK(t_search(re, sl("abc"), 0, two, 2));
