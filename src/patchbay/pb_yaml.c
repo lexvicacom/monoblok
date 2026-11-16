@@ -10,6 +10,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+// The pump, fn and on-req top-level keys exist for tinyblok firmware, which reads
+// sensors and answers fixed request subjects. They mean nothing to the monoblok
+// server, so they are off by default and stay "unknown top-level key" errors there.
+#ifndef PB_YAML_DEVICE_DECLS
+#ifdef TINYBLOK
+#define PB_YAML_DEVICE_DECLS 1
+#else
+#define PB_YAML_DEVICE_DECLS 0
+#endif
+#endif
+
 typedef enum y_node_kind {
     Y_SCALAR,
     Y_LIST,
@@ -1258,6 +1269,88 @@ static bool lower_rules(y_lower *L, y_node *n, bool every, pb_build_vec *forms) 
     return true;
 }
 
+#if PB_YAML_DEVICE_DECLS
+// Device declarations used by tinyblok firmware: `pump`, `fn` and `on-req`. They
+// lower to the same top-level forms an EDN patchbay spells as (pump "SUB" :from SYM
+// :type T :hz N), (fn NAME :from SYM [:input T] :type T) and (on-req "SUB" BODY).
+// Compiled only when PB_YAML_DEVICE_DECLS is set; monoblok itself rejects these keys.
+static bool decl_is(const char *decl, const char *name) {
+    return strcmp(decl, name) == 0;
+}
+
+static bool lower_decl_symbol(y_lower *L, const char *decl, pb_slice key, y_node *n, pb_value *out) {
+    if (n->kind != Y_SCALAR || n->scalar_kind != Y_TEXT || n->text.len == 0) {
+        return lower_fail(L, n->offset, "%s: %.*s must be a name", decl, (int)key.len, key.ptr);
+    }
+    return arena_text(L, PB_SYMBOL, n->text, out);
+}
+
+static bool lower_decl(y_lower *L, const char *decl, y_node *n, pb_value *out) {
+    if (n->kind != Y_MAP || n->flow) {
+        return lower_fail(L, n->offset, "each %s item must be a block map", decl);
+    }
+    const char *id_key = decl_is(decl, "fn") ? "name" : "sub";
+    y_pair *id = map_find(n, id_key);
+    if (id == NULL || id->value->kind != Y_SCALAR || id->value->scalar_kind != Y_TEXT || id->value->text.len == 0) {
+        return lower_fail(L, id != NULL ? id->value->offset : n->offset, "%s item needs `%s: %s`", decl, id_key,
+                          decl_is(decl, "fn") ? "NAME" : "\"SUBJECT\"");
+    }
+
+    pb_build_vec form = {0};
+    pb_value head = {0};
+    pb_value id_value = {0};
+    if (!arena_text_lit(L, PB_SYMBOL, decl, &head) || !vec_push(L, &form, head) ||
+        !arena_text(L, decl_is(decl, "fn") ? PB_SYMBOL : PB_STRING, id->value->text, &id_value) ||
+        !vec_push(L, &form, id_value)) {
+        return vec_done(&form, false);
+    }
+
+    if (decl_is(decl, "on-req")) {
+        pb_value body = {0};
+        if (!lower_body_map(L, n, "sub", &body) || !vec_push(L, &form, body)) {
+            return vec_done(&form, false);
+        }
+    } else {
+        for (size_t i = 0; i < n->pair_len; i += 1) {
+            const pb_slice key = n->pairs[i].key;
+            y_node *v = n->pairs[i].value;
+            if (slice_eq_lit(key, id_key)) {
+                continue;
+            }
+            pb_value key_value = {0};
+            pb_value value = {0};
+            bool ok;
+            if (slice_eq_lit(key, "from") || slice_eq_lit(key, "type") || slice_eq_lit(key, "input")) {
+                ok = lower_decl_symbol(L, decl, key, v, &value);
+            } else if (v->kind != Y_SCALAR) {
+                ok = lower_fail(L, v->offset, "%s: %.*s must be a scalar", decl, (int)key.len, key.ptr);
+            } else {
+                ok = lower_config_scalar(L, v, &value);
+            }
+            if (!ok || !arena_text(L, PB_KEYWORD, key, &key_value) || !vec_push(L, &form, key_value) ||
+                !vec_push(L, &form, value)) {
+                return vec_done(&form, false);
+            }
+        }
+    }
+    const bool ok = freeze_pb_vec(L, &form, PB_LIST, out);
+    return vec_done(&form, ok);
+}
+
+static bool lower_decls(y_lower *L, const char *decl, y_node *n, pb_build_vec *forms) {
+    if (n->kind != Y_LIST) {
+        return lower_fail(L, n->offset, "%s must be a list of maps", decl);
+    }
+    for (size_t i = 0; i < n->len; i += 1) {
+        pb_value form = {0};
+        if (!lower_decl(L, decl, n->items[i], &form) || !vec_push(L, forms, form)) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif // PB_YAML_DEVICE_DECLS
+
 static bool lower_root(y_lower *L, y_node *root, pb_values *out) {
     if (root == NULL || root->kind != Y_MAP) {
         return lower_fail(L, root != NULL ? root->offset : 0, "the root must be a map with lvc, on, every, export or import");
@@ -1282,6 +1375,13 @@ static bool lower_root(y_lower *L, y_node *root, pb_values *out) {
             if (!lower_config_form(L, name, p->value, &form) || !vec_push(L, &forms, form)) {
                 return vec_done(&forms, false);
             }
+#if PB_YAML_DEVICE_DECLS
+        } else if (slice_eq_lit(p->key, "pump") || slice_eq_lit(p->key, "fn") || slice_eq_lit(p->key, "on-req")) {
+            const char *decl = slice_eq_lit(p->key, "pump") ? "pump" : slice_eq_lit(p->key, "fn") ? "fn" : "on-req";
+            if (!lower_decls(L, decl, p->value, &forms)) {
+                return vec_done(&forms, false);
+            }
+#endif
         } else {
             vec_done(&forms, false);
             return lower_fail(L, p->value->offset, "unknown top-level key \"%.*s\" (expected lvc, on, every, export or import)", (int)p->key.len, p->key.ptr);

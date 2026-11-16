@@ -601,6 +601,37 @@ a standard parser:
 ruby -ryaml -e 'YAML.load_file(ARGV[0])' examples/import.yml
 ```
 
+## Device declarations (tinyblok only)
+
+monoblok rejects the top-level keys `pump`, `fn` and `on-req` as unknown. They
+are compiled into the YAML parser only for
+[tinyblok](https://github.com/lexvicacom/tinyblok) firmware builds
+(`PB_YAML_DEVICE_DECLS`, on by default when `TINYBLOK` is defined), where they
+lower to tinyblok's `(pump ...)`, `(fn ...)` and `(on-req ...)` forms:
+
+```yaml
+pump:
+  - sub: board.temp
+    from: board_temp_c
+    type: f32
+    hz: 1
+
+fn:
+  - name: board-echo
+    from: board_echo
+    input: bytes
+    type: bytes
+
+on-req:
+  - sub: board.req.echo
+    do:
+      - [reply!, [board-echo, $payload]]
+```
+
+Each key takes a list of block maps. `from`, `type` and `input` are names, other
+options are scalars, and an `on-req` item takes the same body keys as an `on`
+rule.
+
 ## JSON Differences
 
 JSON patchbays follow the same rules where they apply. Bound values are

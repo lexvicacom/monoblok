@@ -291,6 +291,10 @@ static void expect_form_error(const char *form, const char *needle) {
 }
 
 static void test_yaml_invalid_inputs(void) {
+    // tinyblok device declarations are compiled out of monoblok and stay invalid here.
+    expect_load_error("bad.yml", "pump:\n  - sub: a\n    from: f\n    type: f32\n    hz: 1\n", "unknown top-level key \"pump\"");
+    expect_load_error("bad.yml", "fn:\n  - name: f\n    from: g\n    type: f32\n", "unknown top-level key \"fn\"");
+    expect_load_error("bad.yml", "on-req:\n  - sub: a\n    do:\n      - [reply!, 1]\n", "unknown top-level key \"on-req\"");
     // Old map-form thread: from/steps.
     expect_load_error("bad.yml", "on:\n  - sub: \"a\"\n    thread:\n      from: $payload-float\n      steps:\n        - [round, 1]\n",
                       "from/steps map form was removed");

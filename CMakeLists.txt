@@ -157,6 +157,13 @@ add_executable(json-tests test/json_unit.c)
 target_link_libraries(json-tests PRIVATE patchbay_sexpr)
 target_compile_options(json-tests PRIVATE ${MB_WARNINGS})
 
+# tinyblok's YAML device declarations (pump, fn, on-req) are compiled out of
+# monoblok. This test builds its own pb_yaml.c with them switched on.
+add_executable(yaml-device-tests test/yaml_device_unit.c src/patchbay/pb_yaml.c)
+target_compile_definitions(yaml-device-tests PRIVATE PB_YAML_DEVICE_DECLS=1)
+target_link_libraries(yaml-device-tests PRIVATE patchbay_sexpr)
+target_compile_options(yaml-device-tests PRIVATE ${MB_WARNINGS})
+
 add_executable(program-tests test/program_unit.c)
 target_link_libraries(program-tests PRIVATE patchbay_sexpr)
 target_compile_options(program-tests PRIVATE ${MB_WARNINGS})
@@ -185,6 +192,7 @@ add_test(NAME eval COMMAND eval-tests)
 add_test(NAME regex COMMAND regex-tests)
 add_test(NAME correctness COMMAND correctness-tests)
 add_test(NAME json COMMAND json-tests)
+add_test(NAME yaml-device COMMAND yaml-device-tests)
 add_test(NAME program COMMAND program-tests)
 add_test(NAME snapshot COMMAND snapshot-tests)
 add_test(NAME bridge COMMAND bridge-tests)
