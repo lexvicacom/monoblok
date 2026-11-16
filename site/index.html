@@ -70,7 +70,7 @@
 <text class="mode-engine-label" x="125" y="95">monoblok</text>
 <text class="mode-diagram-label" x="35" y="162">Publishers</text><text class="mode-diagram-label" x="280" y="162">Subscribers</text>
 </svg>
-<h3>Before your cluster</h3><p>Use monoblok as a front door. Condition incoming readings before they reach your cluster. Forward selected subjects to NATS.</p>
+<h3>Before your cluster</h3><p>Publish raw messages to an isolated monoblok instance. Its rules produce clean messages, and export relays only those output subjects to NATS for subscribers.</p>
 </article>
 <article class="mode-card mode-alongside">
 <svg class="mode-diagram" viewBox="0 0 320 180" role="img" aria-labelledby="alongside-diagram-title">
@@ -86,10 +86,10 @@
 <text class="mode-diagram-label" x="272" y="22">Subscribers</text>
 <path class="mode-wire" d="M100 93V148H109M211 148H220V93"/>
 <path class="mode-arrow" d="m95 105 5 9 5-9m110 4 5-9 5 9"/>
-<text class="mode-diagram-label" x="65" y="153">Subscribe</text><text class="mode-diagram-label" x="249" y="153">Publish</text>
+<text class="mode-diagram-label" x="65" y="153">Import</text><text class="mode-diagram-label" x="249" y="153">Export</text>
 <rect class="mode-engine" x="109" y="123" width="102" height="50" rx="7"/><text class="mode-engine-label" x="160" y="153">monoblok</text>
 </svg>
-<h3>Alongside your cluster</h3><p>Subscribe to existing subjects in NATS, process the messages with monoblok and have it publish the results back to your cluster.</p>
+<h3>Alongside your cluster</h3><p>Use import to read existing NATS subjects into monoblok, then export to send processed results back on separate subjects. Publishers and subscribers stay connected to your cluster.</p>
 </article>
 <article class="mode-card mode-standalone">
 <svg class="mode-diagram" viewBox="0 0 320 180" role="img" aria-labelledby="standalone-diagram-title">

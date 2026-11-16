@@ -113,9 +113,9 @@ examples/deidentify.sh
 
 ## Making it a gate
 
-The rules above only decide. What makes the patchbay a gate is that the raw subjects have no other way out. Two arrangements give you that:
+The rules above only decide. What makes the patchbay a gate is that downstream consumers can reach only the approved output. Where publishers and subscribers connect determines how to arrange that:
 
-- **Front door.** Publishers connect to monoblok, and a top-level `export` names the only subjects forwarded to the cluster:
+- **Front door.** Publishers send raw messages to an isolated monoblok instance, where the rules produce clean output. A top-level `export` relays only the selected output subjects to NATS, where downstream consumers subscribe. Keep raw subjects out of the export filters and give publishers no direct path to the cluster:
 
 ```edn
 (export
@@ -123,6 +123,10 @@ The rules above only decide. What makes the patchbay a gate is that the raw subj
   :export  ["clean.>" "waf.>" "phi.>"])
 ```
 
-- **Tap.** With [`import`](bridge.html), monoblok subscribes to the raw subjects on the remote server. Imported messages are private patchbay input: local subscribers see only what the rules publish.
+- **Alongside the cluster, with local consumers.** With [`import`](bridge.html#import), monoblok subscribes to raw subjects on NATS. Downstream consumers connect to monoblok, where imported messages are private patchbay input: local subscribers see only what the rules publish. No export is needed for these local consumers.
+
+- **Alongside the cluster, with results sent back.** Use both `import` and `export`: import reads the raw subjects into the rules, and export forwards the approved output back to NATS on separate subjects such as `clean.>`. Publishers and downstream consumers stay connected to NATS. Import alone does not send the results back. The [import example](examples-nats.html#tap-an-existing-nats-server) shows the combined configuration.
+
+In either alongside arrangement, the raw messages are already on NATS. Import does not hide them from other clients on that cluster. To make this a gate, restrict downstream consumers to the approved output subjects with NATS permissions and prevent them from accessing the raw subjects. When importing and exporting on the same cluster, keep input and output subjects separate and set `:origin-header true` on both forms to avoid consuming your own exports.
 
 Both are described in [Export, import and JetStream](bridge.html), with runnable versions in [NATS integration](examples-nats.html).
