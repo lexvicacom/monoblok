@@ -61,16 +61,20 @@ static bool parse_usize_slice(mb_slice s, size_t *out) {
 }
 
 
+// Headers end at the first empty line, spelled "\n" or "\r\n". Take the
+// earliest one in a single scan so the framing never depends on how many
+// bytes have arrived (a later CRLFCRLF must not win over an earlier LFLF).
 static bool find_header_end(const uint8_t *buf, size_t len, size_t *out) {
-    for (size_t i = 0; i + 3 < len; i += 1) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n') {
-            *out = i + 4;
+    for (size_t i = 0; i + 1 < len; i += 1) {
+        if (buf[i] != '\n') {
+            continue;
+        }
+        if (buf[i + 1] == '\n') {
+            *out = i + 2;
             return true;
         }
-    }
-    for (size_t i = 0; i + 1 < len; i += 1) {
-        if (buf[i] == '\n' && buf[i + 1] == '\n') {
-            *out = i + 2;
+        if (i + 2 < len && buf[i + 1] == '\r' && buf[i + 2] == '\n') {
+            *out = i + 3;
             return true;
         }
     }
