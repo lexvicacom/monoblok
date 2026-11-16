@@ -1,0 +1,1 @@
+(on "a" (contains? ["x" ["y" [1 2.5 -3]]] payload) (min) (max 1) (abs) (sign "a") (-> payload (round 1) (publish! "o")))

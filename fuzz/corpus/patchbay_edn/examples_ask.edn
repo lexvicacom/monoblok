@@ -1,0 +1,28 @@
+;; Join two subjects with (last SUBJECT), and answer requests with reply!.
+;;
+;; (last SUBJECT) returns the latest payload on a literal subject, read from
+;; the last-value cache, so the subject must match an (lvc ...) filter. It is
+;; nil until that subject has published.
+(lvc ["temp.>"])
+
+;; A join. When temp.inside arrives, subtract the last temp.outside from it.
+;; A threaded step that gets nil stops the thread, so nothing is published
+;; until both subjects have a value. (Arithmetic on a bare nil is a type
+;; error; the thread is the nil-safe shape.) Thread-last puts the cached
+;; value last: (- payload-float outside) is inside minus outside.
+(on "temp.inside"
+  (-> (last "temp.outside")
+      (- payload-float)
+      (publish! "temp.difference" :dp 1)))
+
+;; Request-reply. `nats req ask.outside ""` is answered with the cached
+;; outside temperature. reply! publishes to the request's reply subject
+;; (reply-to); it does nothing when the message had no reply subject or the
+;; value is nil, so asking before the first reading gets no answer.
+(on "ask.outside"
+  (reply! (last "temp.outside")))
+
+;; The derived temp.difference is cached too (a rule's own publish updates
+;; the LVC), so it can be asked for the same way.
+(on "ask.difference"
+  (reply! (last "temp.difference")))

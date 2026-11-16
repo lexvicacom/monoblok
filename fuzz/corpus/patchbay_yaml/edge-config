@@ -1,0 +1,13 @@
+lvc: "a.>"
+export:
+  servers: ["nats://127.0.0.1:1"]
+  export: ["a.>"]
+  tls: true
+  max-reconnect: -1
+import:
+  servers: [$env, "nats://h:1"]
+  subject: ["x.>"]
+  stream: S
+  consumer: C
+bridge:
+  servers: [x]

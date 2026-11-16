@@ -1,0 +1,7 @@
+on:
+  - sub: a
+    do: [dropout, {ms: 500, lost: [publish!, "lost", "{a: b,c}"], found: [publish!, "found", {dp: 1}, $payload-float]}]
+  - sub: b
+    do: [dropout, ms, 500, lost, [publish!, "l", x]]
+  - sub: c
+    do: [on-silence, {ms: 5}, [publish!, "s"]]

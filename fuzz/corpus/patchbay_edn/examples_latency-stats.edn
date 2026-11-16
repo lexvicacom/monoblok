@@ -1,0 +1,40 @@
+;; Live latency distribution from a stream of per-request samples.
+;; Each rule reads the same 50-sample window and emits a different
+;; statistic on a sub-subject, so dashboards can subscribe to whichever
+;; shape they care about without each consumer re-implementing the math.
+;;
+;; Tick windows (50 samples) here for a deterministic demo; swap any
+;; `50` for `:ms 30000` to get a 30-second sliding window instead.
+
+(on "rpc.latency"
+  (-> payload-float
+      (median 50)
+      (publish! "rpc.latency.p50")))
+
+(on "rpc.latency"
+  (-> payload-float
+      (percentile 50 0.95)
+      (publish! "rpc.latency.p95")))
+
+(on "rpc.latency"
+  (-> payload-float
+      (percentile 50 0.99)
+      (publish! "rpc.latency.p99")))
+
+;; Spread of the same window. Pairs nicely with p99: stddev climbing
+;; while p99 stays flat means the body is widening even if the tail is
+;; the same shape.
+(on "rpc.latency"
+  (-> payload-float
+      (stddev 50)
+      (publish! "rpc.latency.stddev")))
+
+;; Cheap trend line beside the windowed stats. (ewma ALPHA X) keeps one
+;; number of state instead of a 50-slot ring: each sample moves the
+;; average 10% of the way toward it. Unlike the windowed stats it never
+;; forgets abruptly, the burst just decays out over the next few dozen
+;; samples. Raise ALPHA to follow the signal faster.
+(on "rpc.latency"
+  (-> payload-float
+      (ewma 0.1)
+      (publish! "rpc.latency.ewma" :dp 2)))

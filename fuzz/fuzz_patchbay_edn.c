@@ -1,11 +1,9 @@
-// Placeholder harness for patchbay_edn; replaced by the real harness.
-#include <stddef.h>
-#include <stdint.h>
+// libFuzzer harness for the patchbay edn rule-file loader: parse, resolve,
+// validate, and evaluate. See fuzz_patchbay_common.h.
+#include "fuzz_patchbay_common.h"
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    (void)data;
-    (void)size;
-    return 0;
+    return fuzz_pb_run("fuzz.edn", data, size);
 }

@@ -1,0 +1,8 @@
+on:
+  - sub: a
+    when: [">", $payload-float, 3]
+    thread:
+      - $payload
+      - [round, 1]
+      - ["->", 1]
+      - [">", 1, 2]

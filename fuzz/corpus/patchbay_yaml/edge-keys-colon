@@ -1,0 +1,7 @@
+on:
+  - sub: "a: b"
+    do: [publish!, "x: y", :ms, ms, "$subject", $bogus, $, $payload-flaot]
+  - ? sub
+    : a
+  -
+  - - nested

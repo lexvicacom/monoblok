@@ -1,0 +1,65 @@
+;; Clock-native patchbay forms in one file.
+;;
+;; Try publishing numeric values to `clocked.sensor.temp` quickly, then stop.
+;; The rules below produce:
+;;   - `clocked.sensor.temp.stale` true after 5s of silence, false on recovery
+;;   - `clocked.sensor.temp.debounced` after 250ms of quiet
+;;   - `clocked.sensor.temp.sampled` every 1s with the latest value
+;;   - `clocked.sensor.temp.avg5s` every 5s while the window has samples
+;;   - `clocked.sensor.temp.rate5s` every 5s while the window has samples
+;;   - `clocked.heartbeat` every 2s, whether or not anything is publishing
+;;   - `clocked.all.count` a running total across every `clocked.sensor.*`
+;;   - `clocked.all.avg5s` every 5s, the average across every sensor
+
+(lvc ["clocked.>"])
+
+(on "clocked.sensor.*"
+  (dropout :ms 5000
+    :lost  (publish! (subject-append "stale") "true")
+    :found (publish! (subject-append "stale") "false")))
+
+(on "clocked.sensor.*"
+  (debounce! :ms 250
+    (subject-append "debounced")
+    payload))
+
+(on "clocked.sensor.*"
+  (sample! :ms 1000
+    (subject-append "sampled")
+    payload))
+
+(on "clocked.sensor.*"
+  (aggregate! :ms 5000
+    (subject-append "avg5s")
+    :avg
+    payload-float))
+
+(on "clocked.sensor.*"
+  (aggregate! :ms 5000
+    (subject-append "rate5s")
+    :rate
+    payload-float))
+
+;; Heartbeat: a top-level `every` rule runs on a timer, not on a publish.
+;; The first tick only schedules; it fires every 2s after that. Inside the
+;; body `subject` and `payload` are empty strings, so publish to an
+;; explicit subject.
+(every :ms 2000
+  (publish! "clocked.heartbeat" "alive"))
+
+;; Funnel: state is per subject, so `count!` and `aggregate!` directly on
+;; `clocked.sensor.*` would keep one slot per sensor. To roll every sensor
+;; up together, a re-entrant rule republishes each reading on one subject,
+;; and the stateful rules below sit on that subject. The funnel subject
+;; must not match the filter it came from.
+(on "clocked.sensor.*" :reentrant true
+  (publish! "clocked.all" payload))
+
+(on "clocked.all"
+  (count!))
+
+(on "clocked.all"
+  (aggregate! :ms 5000
+    "clocked.all.avg5s"
+    :avg
+    payload-float))

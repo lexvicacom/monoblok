@@ -1,0 +1,1 @@
+(on "a" (hysteresis 1 2 payload) (ewma 0.5 payload) (delta payload) (transition payload) (rising-edge payload) (falling-edge payload) (squelch payload) (deadband 0.5 payload) (changed? payload) (hold-off 5 payload) (quantize 0 payload) (/ 1 0) (round 1e300 -400))

@@ -1,0 +1,3 @@
+on: &x
+  - sub: &s "a"
+    do: *s

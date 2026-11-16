@@ -1,0 +1,6 @@
+base: &b
+  sub: "a"
+on:
+  - *b
+  - <<: *b
+    do: !!str [x]

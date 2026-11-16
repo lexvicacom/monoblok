@@ -1,0 +1,8 @@
+every:
+  - ms: 100
+    reentrant: true
+    do: [publish!, "tick", [now]]
+  - ms: 0
+    do: [x]
+  - ms: -1
+  - do: [y]

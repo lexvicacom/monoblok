@@ -1,0 +1,35 @@
+; OHLC bars over a market feed.
+;
+; Producers publish raw prices on MARKET.<SYM> (e.g. MARKET.AAPL "182.34").
+; A bar closes either every 60 ticks per symbol or every wall-clock minute,
+; depending on the window descriptor. On close, `bar` emits four sub-subjects:
+;   MARKET.AAPL.bar.open   first price in the bar
+;   MARKET.AAPL.bar.high   max price seen
+;   MARKET.AAPL.bar.low    min price seen
+;   MARKET.AAPL.bar.close  last price seen in the bar
+;
+; State is per call site, subject, and window kind, so each ticker builds its
+; own bars and tick + time forms keep distinct slots. The in-progress
+; bar is part of the snapshot, so a restart mid-bar resumes without
+; losing the open / high / low collected so far. Time bars also close
+; from the server's clock walker if a window elapses without a new tick.
+
+; Tick bars: every 60 trades, regardless of how long that takes.
+; :reentrant is only needed because the rule below consumes the derived
+; MARKET.<SYM>.bar.close stream in the same patchbay. The bar subjects
+; do not match MARKET.*, so this does not feed the bar builder back into
+; itself.
+(on "MARKET.*" :reentrant true
+  (bar! 60 payload-float))
+
+; Wall-clock bars, aligned to whole minutes. Useful when you want a
+; clean per-minute chart row regardless of trade rate.
+;(on "MARKET.*"
+;  (bar! :ms 60000 payload-float))
+
+; Downstream alerting can sit on the closed-bar stream and stay clean of
+; intra-bar noise. Example: alert if the bar's close jumps by >= 1.0
+; from the prior bar's close on the same symbol.
+(on "MARKET.*.bar.close"
+  (when (>= (abs (delta payload-float)) 1.0)
+    (publish! (subject-with "alerts.market" (subject-token 1)) payload)))

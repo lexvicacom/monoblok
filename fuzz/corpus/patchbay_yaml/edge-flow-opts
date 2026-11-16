@@ -1,0 +1,9 @@
+on:
+  - sub: "a.*"
+    pipeline:
+      - $payload-float
+      - [moving-avg, {ms: 5000}, $payload-float]
+      - [publish!, "x", {dp: 1}]
+      - [publish!, "y", {dp: 1, ms: 2}]
+      - [publish!, "z", {}]
+      - [publish!, "z", {dp: {ms: 1}}]

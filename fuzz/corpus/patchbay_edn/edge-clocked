@@ -1,0 +1,1 @@
+(on "c" (on-silence 100 (publish! "s" "x")) (dropout :ms 50 :lost (publish! "l" "x") :found (publish! "f" "y")) (debounce! :ms 10 payload) (sample! :ms 10 payload))

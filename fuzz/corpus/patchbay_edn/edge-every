@@ -1,0 +1,4 @@
+(every :ms 100 :reentrant true (publish! "tick" (now)) (print! "x"))
+(every :ms 0 (publish! "t" "x"))
+(every :ms -5 (publish! "t" "x"))
+(every (publish! "t" "x"))

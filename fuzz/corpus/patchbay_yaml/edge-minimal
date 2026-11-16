@@ -1,0 +1,4 @@
+on:
+  - sub: "a"
+    pipeline:
+      - [publish!, "b", $payload]

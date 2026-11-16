@@ -1,0 +1,8 @@
+on:
+  - sub: a
+    pipeline:
+      - $payload-float
+      - [bar!, {ms: 60000}]
+      - [count!, 5]
+      - [percentile, 95, {ms: 1000}, $payload-float]
+      - [json-get, $payload, a, 0]

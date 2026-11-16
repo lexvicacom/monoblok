@@ -1,0 +1,4 @@
+on:
+  - sub: 'it''s'
+    do: [publish!, "\u00e9\x41\n", 'raw\d+', "\ud800", "\q", "\x4"]
+  - sub: "unterminated

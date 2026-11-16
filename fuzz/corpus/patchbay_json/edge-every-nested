@@ -1,0 +1,1 @@
+[["every",{"kw":"ms"},50,["on-silence",10,["publish!","s","$subject"]],["print!","x"]],["on","a",["bar!",{"kw":"ms"},1000,"$payload-float"]]]

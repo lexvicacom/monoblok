@@ -1,0 +1,3 @@
+on:
+  - sub: "a"
+    do: [publish!, "b", $payload]

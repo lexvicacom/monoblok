@@ -1,0 +1,1 @@
+(on "a.>" (when (matches? #"^[a-z]+\d{2,3}(x|y)*$" payload) (publish! "m" (re-replace #"(\w+)@(\w+)" payload "$2"))) (publish! "c" (re-capture #"([0-9]+)\.([0-9]*)" payload)))

@@ -1,0 +1,19 @@
+import:
+  servers:
+    - "nats://127.0.0.1:14889"
+  subject:
+    - "raw.>"
+
+export:
+  servers:
+    - "nats://127.0.0.1:14889"
+  export:
+    - "clean.>"
+
+on:
+  - sub: "raw.temp"
+    pipeline:
+      - $payload-float
+      - [round, 1]
+      - [squelch]
+      - [publish!, "clean.temp"]

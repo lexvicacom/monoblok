@@ -1,0 +1,1 @@
+(on "s.*" (percentile 95 :ms 1000 (moving-avg :ms 500 payload-float)) (bar! :ms 60000 payload-float) (rate :ms 100 payload) (stddev 5 payload-float) (throttle 100 payload) (aggregate! :ms 10 "sum" "o" payload))

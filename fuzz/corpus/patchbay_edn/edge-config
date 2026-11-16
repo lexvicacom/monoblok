@@ -1,0 +1,5 @@
+(lvc "a.>" "b.*")
+(export :servers ["nats://127.0.0.1:1"] :export ["a.>"] :tls true :max-reconnect -1 :connect-timeout-ms 10)
+(import :servers ["nats://127.0.0.1:2"] :subjects ["x.>"] :max-pending 5)
+(import :stream "S" :consumer "C" :catch-up true :servers ["nats://h:1"])
+(bridge :servers ["nats://127.0.0.1:1"] :export ["a.>"])

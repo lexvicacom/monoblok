@@ -1,0 +1,3 @@
+; c
+(on "a" ; x
+  #_(ignored) (publish! "b" payload)) ;; end

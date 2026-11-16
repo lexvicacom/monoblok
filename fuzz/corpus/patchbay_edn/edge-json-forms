@@ -1,0 +1,1 @@
+(on "j.>" (json-get payload "a" 0 "b") (json-demux! payload ["a" ["b" "c"]]) (publish-to "x" (str-concat "a" "b" payload)))

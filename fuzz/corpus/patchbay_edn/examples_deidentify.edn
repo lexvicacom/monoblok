@@ -1,0 +1,62 @@
+;; De-identify patient telemetry before it leaves the ward network.
+;;
+;; A bedside gateway publishes one JSON frame per reading on
+;; ward.<ward>.<patient>:
+;;   {"name":"Ada Example","mrn":"000-11-2222","age":47,"hr":72,"spo2":97}
+;; and nurses' free-text notes on notes.<ward>.
+;;
+;; Structured frames are de-identified by leaving things out: the rules
+;; name the fields that may leave, coarsen the ones that identify, and
+;; drop the patient token from the subject. Anything not named stays
+;; behind, including fields added to the frame later. Free-text notes
+;; cannot be allow-listed, so they are masked with regular expressions
+;; instead (experimental, see the last two rules). Patchbay has no
+;; hashing form, so no value is turned into a pseudonym.
+;;
+;; Only `clean.>` and `phi.>` are meant to leave this box. Pair the file
+;; with (export :export ["clean.>" "phi.>"]) or an (import ...) tap.
+
+;; Allow-list. Pull the clinical fields out by name and publish them
+;; under the ward only: ward.icu.p4471 becomes clean.icu.hr. name and
+;; mrn are never read, so they are never forwarded.
+(on "ward.*.*" :reentrant true
+  (do
+    (-> payload (json-get "hr")   (publish! (subject-with "clean" (subject-token 1) "hr")))
+    (-> payload (json-get "spo2") (publish! (subject-with "clean" (subject-token 1) "spo2")))))
+
+;; Generalise. An exact age narrows a small ward down to one person, so
+;; forward it snapped to the nearest ten.
+(on "ward.*.*"
+  (-> payload
+      (json-get "age")
+      (quantize 10)
+      (publish! (subject-with "clean" (subject-token 1) "age-band"))))
+
+;; Aggregate. The ward-level heart rate is the mean of the last 20
+;; readings across every patient on that ward (the funnel pattern: the
+;; first rule is re-entrant, so its output feeds this one).
+(on "clean.*.hr"
+  (publish! (subject-append "avg") :dp 0 (moving-avg 20 payload-float)))
+
+;; Mask. Free text cannot be allow-listed field by field, so replace
+;; the identifier shapes we know about: a record number like
+;; 000-11-2222 becomes [MRN], and a date like 3/4/1980 becomes [DATE].
+;; The regex forms are experimental. Masking only catches the shapes
+;; written here: a name, an address or a record number in another format
+;; passes straight through. The rule is re-entrant so the masked text,
+;; published on `masked.notes.<ward>` (which is not exported), feeds the
+;; next rule.
+(on "notes.*" :reentrant true
+  (-> payload
+      (re-replace #"\b\d{3}-\d{2}-\d{4}\b" "[MRN]")
+      (re-replace #"\b\d{1,2}/\d{1,2}/\d{2,4}\b" "[DATE]")
+      (publish! (subject-with "masked.notes" (subject-token 1)))))
+
+;; Tripwire. A note that still names an identifier label followed by
+;; something the masks did not cover ("MRN 4471", "DOB: unknown") is
+;; held whole, and only its subject is reported. Otherwise the masked
+;; note is forwarded.
+(on "masked.notes.*"
+  (if (matches? #"(?i)\b(?:mrn|dob|nhs)[ :=#]*[a-z0-9]" payload)
+    (publish! "phi.held" (subject-with "notes" (subject-token 2)))
+    (publish! (subject-with "clean.notes" (subject-token 2)) payload)))

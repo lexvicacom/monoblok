@@ -1,0 +1,1 @@
+[["lvc","a.>","$weird"],["export",{"kw":"servers"},["nats://x:1"],{"kw":"tls"},true],["import",{"kw":"subjects"},["a.>"]]]

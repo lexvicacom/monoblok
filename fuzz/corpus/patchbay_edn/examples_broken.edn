@@ -1,0 +1,4 @@
+; broken on purpose
+(on "MARKET.*.bar.close"
+  (when (>= (abs (delta payload-float)) 1.0)
+    (publish! (subject-with "alerts.market" (subject-token 1)) payload))

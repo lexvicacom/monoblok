@@ -1,0 +1,8 @@
+on:
+  - sub: |
+      a.b
+    do: >
+      [publish!, b]
+  - sub: "a"
+    do: [publish!, "multi
+      line", x]
