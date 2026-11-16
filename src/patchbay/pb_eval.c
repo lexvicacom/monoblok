@@ -388,7 +388,9 @@ static bool heap_dup_slice(pb_slice s, char **out, size_t *out_len) {
     if (ptr == NULL) {
         return false;
     }
-    memcpy(ptr, s.ptr, s.len);
+    if (s.len != 0) {
+        memcpy(ptr, s.ptr, s.len);
+    }
     *out = ptr;
     *out_len = s.len;
     return true;
@@ -453,7 +455,9 @@ bool state_set_bytes(pb_eval_state_entry *e, pb_slice bytes) {
         e->bytes = next;
         e->bytes_cap = bytes.len;
     }
-    memcpy(e->bytes, bytes.ptr, bytes.len);
+    if (bytes.len != 0) {
+        memcpy(e->bytes, bytes.ptr, bytes.len);
+    }
     e->bytes_len = bytes.len;
     e->kind = PB_EVAL_STATE_BYTES;
     return true;
