@@ -112,13 +112,13 @@
 </ul>
 <p class="benchmark-note">Throughput alone cannot capture NATS&rsquo; decade-plus of production maturity. Test your own workload to confirm capacity and latency.</p></div>
 <div><h2>Flexible</h2>
-<p>A rich library of built-in forms covers many use cases without custom code.</p>
+<p>Write rules in EDN, YAML or JSON using a rich library of built-in forms.</p>
 <ul>
 <li>Stateful forms for <a href="docs/forms.html#windowed-aggregates">moving averages</a>, deduplication, thresholds, rates and bars.</li>
-<li><a href="docs/forms.html#json-payloads">JSON forms</a> read fields or split one message into many with <code>json-demux!</code>.</li>
-<li><a href="docs/forms.html#regular-expressions">Regular expressions</a> match, capture and rewrite payloads and subjects.</li>
-<li>Timers, last values and request-reply, written as EDN, YAML or JSON.</li>
-<li><a href="docs/patchbay.html#validate-and-debug-rules">Built-in rule checks</a>: <code>monoblok --validate</code> catches mistakes before you deploy, and <code>--soundcheck</code> dry-runs sample messages through your rules.</li>
+<li><a href="docs/forms.html#json-payloads">JSON forms</a> extract fields and split messages; <a href="docs/forms.html#regular-expressions">regex forms</a> match and rewrite text.</li>
+<li><a href="docs/clients.html#http-sse-adapter">Built-in HTTP/SSE</a>: publish over HTTP, stream updates to browsers and fetch cached values.</li>
+<li>A <a href="docs/state.html">last-value cache</a> brings new subscribers up to date; optional <a href="docs/state.html#snapshots">snapshots</a> restore cached values and rule state after restarts.</li>
+<li>A <a href="docs/agents.html">Patchbay skill for Codex and Claude</a> helps write rules; <a href="docs/patchbay.html#validate-and-debug-rules"><code>--validate</code> and <code>--soundcheck</code></a> provide checks and sample-message dry runs.</li>
 </ul></div>
 <div><h2>NATS native</h2>
 <p>monoblok complements NATS rather than replacing it.</p>

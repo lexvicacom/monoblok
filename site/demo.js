@@ -1,5 +1,34 @@
 (function(){
   const $=(id)=>document.getElementById(id);
+  document.querySelectorAll('.demo-copy-command').forEach(button=>{
+    let resetTimer;
+    button.addEventListener('click',async()=>{
+      const command=button.querySelector('code').textContent;
+      const feedback=button.querySelector('span');
+      clearTimeout(resetTimer);
+      try{
+        if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(command);
+        else{
+          const area=document.createElement('textarea');
+          area.value=command;
+          area.style.position='fixed';
+          area.style.opacity='0';
+          document.body.append(area);
+          try{
+            area.select();
+            if(!document.execCommand('copy'))throw new Error('Copy failed');
+          }finally{
+            area.remove();
+            button.focus();
+          }
+        }
+        feedback.textContent='Copied';
+      }catch{
+        feedback.textContent='Select the command to copy';
+      }
+      resetTimer=setTimeout(()=>{feedback.textContent='Copy'},2000);
+    });
+  });
   const statusEl=$('demo-status');
   const logEl=$('sse-log');
   if(!statusEl||!logEl)return;

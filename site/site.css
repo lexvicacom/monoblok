@@ -327,6 +327,9 @@ p code, li code { font-size: .9em; }
 .demo-cache .demo-latest { margin: 0; border: 0; padding-top: 0; }
 .demo-panel .demo-note-wrap p { font-size: var(--text-ui); margin: 0 0 12px; }
 .demo-panel .demo-note-wrap p:last-child { margin: 0; }
+.demo-copy-command { max-width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--ink); text-align: left; overflow-wrap: anywhere; }
+.demo-copy-command:hover { background: #e5e9d8; }
+.demo-copy-command span { margin-left: 8px; color: var(--muted); font-size: var(--text-ui); }
 .demo-workbench-title { margin-bottom: 20px; }
 
 /* Keep page titles and section headings proportionate to the content. */
