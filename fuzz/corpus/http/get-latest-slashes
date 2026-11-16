@@ -1,0 +1,4 @@
+@GET /latest/foo/bar/baz HTTP/1.1
+Host: a
+Authorization: Bearer sekret
+

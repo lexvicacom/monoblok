@@ -267,6 +267,7 @@ add_executable(monoblok
   src/snapshot.c
   src/server/conn.c
   src/server/http.c
+  src/server/http_parse.c
   src/main.c
   src/server/server.c
 )

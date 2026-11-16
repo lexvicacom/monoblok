@@ -1,0 +1,6 @@
+ÀPOST /pub/events/ok HTTP/1.1
+Host: a
+Content-Type: application/json
+Content-Length: 7
+
+{"a":1}

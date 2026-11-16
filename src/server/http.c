@@ -11,6 +11,7 @@
 // Sent on every HTTP response, for example "Server: monoblok/v0.3.15".
 #define MB_HTTP_SERVER_HEADER "Server: monoblok/v" MB_VERSION "\r\n"
 
+#include "http_parse.h"
 #include "slice.h"
 
 #include <inttypes.h>
@@ -21,26 +22,7 @@
 
 enum {
     MB_HTTP_READ_CHUNK = 16 * 1024,
-    MB_HTTP_MAX_HEADER = 8 * 1024,
-    MB_HTTP_MAX_TARGET = 1024,
 };
-
-typedef enum mb_http_method {
-    MB_HTTP_GET,
-    MB_HTTP_POST,
-} mb_http_method;
-
-typedef struct mb_http_request {
-    mb_http_method method;
-    mb_slice target;
-    mb_slice authorization;
-    mb_slice content_type;
-    size_t content_length;
-    bool has_authorization;
-    bool has_content_length;
-    bool has_content_type;
-    bool has_transfer_encoding;
-} mb_http_request;
 
 // HTTP connection state; SSE streams also own one normal router connection.
 struct mb_http_conn {
@@ -82,63 +64,6 @@ static bool append_usize(mb_buf *out, size_t n) {
     const int written = snprintf(tmp, sizeof tmp, "%zu", n);
     return written >= 0 && (size_t)written < sizeof tmp &&
            mb_buf_append(out, tmp, (size_t)written);
-}
-
-static mb_slice trim_ows(mb_slice s) {
-    while (s.len > 0 && (s.ptr[0] == ' ' || s.ptr[0] == '\t')) {
-        s.ptr += 1;
-        s.len -= 1;
-    }
-    while (s.len > 0 && (s.ptr[s.len - 1] == ' ' || s.ptr[s.len - 1] == '\t' || s.ptr[s.len - 1] == '\r')) {
-        s.len -= 1;
-    }
-    return s;
-}
-
-static bool slice_eq_lit(mb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    return s.len == n && memcmp(s.ptr, lit, n) == 0;
-}
-
-static bool slice_starts_lit(mb_slice s, const char *lit) {
-    const size_t n = strlen(lit);
-    return s.len >= n && memcmp(s.ptr, lit, n) == 0;
-}
-
-static bool media_type_is(mb_slice value, const char *media_type) {
-    value = trim_ows(value);
-    const size_t n = strlen(media_type);
-    if (!mb_slice_has_prefix_ci_lit(value, media_type)) {
-        return false;
-    }
-    if (value.len == n) {
-        return true;
-    }
-    return value.ptr[n] == ';' || value.ptr[n] == ' ' || value.ptr[n] == '\t';
-}
-
-static bool content_type_allowed(mb_slice value) {
-    return media_type_is(value, "text/plain") || media_type_is(value, "application/json");
-}
-
-static bool parse_usize_slice(mb_slice s, size_t *out) {
-    s = trim_ows(s);
-    if (s.len == 0) {
-        return false;
-    }
-    size_t v = 0;
-    for (size_t i = 0; i < s.len; i += 1) {
-        if (s.ptr[i] < '0' || s.ptr[i] > '9') {
-            return false;
-        }
-        const size_t digit = (size_t)(s.ptr[i] - '0');
-        if (v > (SIZE_MAX - digit) / 10) {
-            return false;
-        }
-        v = v * 10 + digit;
-    }
-    *out = v;
-    return true;
 }
 
 static void alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
@@ -304,187 +229,6 @@ static void respond_bytes_and_close(mb_http_conn *conn, int code, const char *re
     kick_write(conn);
 }
 
-static bool find_header_end(const uint8_t *buf, size_t len, size_t *out) {
-    for (size_t i = 0; i + 3 < len; i += 1) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n') {
-            *out = i + 4;
-            return true;
-        }
-    }
-    for (size_t i = 0; i + 1 < len; i += 1) {
-        if (buf[i] == '\n' && buf[i + 1] == '\n') {
-            *out = i + 2;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool next_line(mb_slice *rest, mb_slice *line) {
-    if (rest->len == 0) {
-        return false;
-    }
-    size_t i = 0;
-    while (i < rest->len && rest->ptr[i] != '\n') {
-        i += 1;
-    }
-    if (i == rest->len) {
-        *line = *rest;
-        rest->ptr += rest->len;
-        rest->len = 0;
-    } else {
-        *line = (mb_slice){.ptr = rest->ptr, .len = i};
-        rest->ptr += i + 1;
-        rest->len -= i + 1;
-    }
-    if (line->len > 0 && line->ptr[line->len - 1] == '\r') {
-        line->len -= 1;
-    }
-    return true;
-}
-
-static bool next_token(mb_slice *rest, mb_slice *tok) {
-    *rest = trim_ows(*rest);
-    if (rest->len == 0) {
-        return false;
-    }
-    size_t i = 0;
-    while (i < rest->len && rest->ptr[i] != ' ' && rest->ptr[i] != '\t') {
-        i += 1;
-    }
-    *tok = (mb_slice){.ptr = rest->ptr, .len = i};
-    rest->ptr += i;
-    rest->len -= i;
-    return true;
-}
-
-static bool parse_headers(mb_slice header, mb_http_request *req) {
-    *req = (mb_http_request){0};
-    mb_slice line = {0};
-    if (!next_line(&header, &line)) {
-        return false;
-    }
-    mb_slice rest = line;
-    mb_slice method = {0};
-    mb_slice target = {0};
-    mb_slice version = {0};
-    mb_slice extra = {0};
-    if (!next_token(&rest, &method) || !next_token(&rest, &target) || !next_token(&rest, &version) || next_token(&rest, &extra)) {
-        return false;
-    }
-    if (slice_eq_lit(method, "GET")) {
-        req->method = MB_HTTP_GET;
-    } else if (slice_eq_lit(method, "POST")) {
-        req->method = MB_HTTP_POST;
-    } else {
-        return false;
-    }
-    if ((!slice_eq_lit(version, "HTTP/1.1") && !slice_eq_lit(version, "HTTP/1.0")) ||
-        target.len == 0 || target.len > MB_HTTP_MAX_TARGET || target.ptr[0] != '/') {
-        return false;
-    }
-    for (size_t i = 0; i < target.len; i += 1) {
-        if (target.ptr[i] == '?' || target.ptr[i] == '#') {
-            return false;
-        }
-    }
-    req->target = target;
-
-    while (next_line(&header, &line)) {
-        if (line.len == 0) {
-            continue;
-        }
-        const void *colonp = memchr(line.ptr, ':', line.len);
-        if (colonp == NULL) {
-            return false;
-        }
-        const uint8_t *colon = colonp;
-        mb_slice name = {.ptr = line.ptr, .len = (size_t)(colon - line.ptr)};
-        mb_slice value = {.ptr = colon + 1, .len = line.len - name.len - 1};
-        name = trim_ows(name);
-        value = trim_ows(value);
-        if (name.len == 0) {
-            return false;
-        }
-        if (mb_slice_eq_ci_lit(name, "authorization")) {
-            req->authorization = value;
-            req->has_authorization = true;
-        } else if (mb_slice_eq_ci_lit(name, "content-type")) {
-            req->content_type = value;
-            req->has_content_type = true;
-        } else if (mb_slice_eq_ci_lit(name, "content-length")) {
-            if (req->has_content_length || !parse_usize_slice(value, &req->content_length)) {
-                return false;
-            }
-            req->has_content_length = true;
-        } else if (mb_slice_eq_ci_lit(name, "transfer-encoding")) {
-            req->has_transfer_encoding = true;
-        }
-    }
-    return true;
-}
-
-static int hex_value(uint8_t c) {
-    if (c >= '0' && c <= '9') return (int)(c - '0');
-    if (c >= 'a' && c <= 'f') return (int)(c - 'a') + 10;
-    if (c >= 'A' && c <= 'F') return (int)(c - 'A') + 10;
-    return -1;
-}
-
-static bool append_decoded_path_byte(mb_buf *out, uint8_t c) {
-    if (c == '\0' || c == '/' || c == '.' || c <= ' ' || c == 0x7f) {
-        return false;
-    }
-    if (out->len >= MB_MAX_CONTROL_LINE) {
-        return false;
-    }
-    return mb_buf_append_byte(out, c);
-}
-
-static bool decode_subject_path(mb_slice target, const char *prefix, bool allow_wildcards, mb_buf *out) {
-    const size_t prefix_len = strlen(prefix);
-    if (target.len <= prefix_len || memcmp(target.ptr, prefix, prefix_len) != 0) {
-        return false;
-    }
-    mb_buf_clear(out);
-    mb_slice path = {.ptr = target.ptr + prefix_len, .len = target.len - prefix_len};
-    bool token_has_bytes = false;
-    for (size_t i = 0; i < path.len; i += 1) {
-        uint8_t c = path.ptr[i];
-        if (c == '/') {
-            if (!token_has_bytes || out->len >= MB_MAX_CONTROL_LINE) {
-                return false;
-            }
-            if (!mb_buf_append_byte(out, '.')) {
-                return false;
-            }
-            token_has_bytes = false;
-            continue;
-        }
-        if (c == '%') {
-            if (i + 2 >= path.len) {
-                return false;
-            }
-            const int hi = hex_value(path.ptr[i + 1]);
-            const int lo = hex_value(path.ptr[i + 2]);
-            if (hi < 0 || lo < 0) {
-                return false;
-            }
-            c = (uint8_t)((hi << 4) | lo);
-            i += 2;
-        }
-        if (!append_decoded_path_byte(out, c)) {
-            return false;
-        }
-        token_has_bytes = true;
-    }
-    if (!token_has_bytes) {
-        return false;
-    }
-    const mb_slice subject = {.ptr = out->ptr, .len = out->len};
-    return mb_proto_subject_valid(subject, allow_wildcards);
-}
-
 static bool slice_has_nul(mb_slice s) {
     return s.len != 0 && memchr(s.ptr, '\0', s.len) != NULL;
 }
@@ -614,7 +358,7 @@ static bool auth_bearer(mb_http_conn *conn, mb_slice value) {
     }
     value.ptr += strlen("Bearer");
     value.len -= strlen("Bearer");
-    value = trim_ows(value);
+    value = mb_http_trim_ows(value);
     return value.len != 0 && mb_auth_token_matches(&conn->server->auth, value);
 }
 
@@ -624,7 +368,7 @@ static bool auth_basic(mb_http_conn *conn, mb_slice value) {
     }
     value.ptr += strlen("Basic");
     value.len -= strlen("Basic");
-    value = trim_ows(value);
+    value = mb_http_trim_ows(value);
     mb_buf decoded = {0};
     bool ok = false;
     if (value.len != 0 && base64_decode(value, &decoded)) {
@@ -667,7 +411,7 @@ static const char *auth_header(const mb_server *server) {
 }
 
 static void handle_latest(mb_http_conn *conn, const mb_http_request *req) {
-    if (!decode_subject_path(req->target, "/latest/", false, &conn->subject)) {
+    if (!mb_http_decode_subject_path(req->target, "/latest/", false, &conn->subject)) {
         respond_and_close(conn, 400, "Bad Request", NULL, "invalid latest path\n");
         return;
     }
@@ -697,15 +441,15 @@ static void handle_get(mb_http_conn *conn, const mb_http_request *req) {
         respond_and_close(conn, 401, "Unauthorized", auth_header(conn->server), "unauthorized\n");
         return;
     }
-    if (slice_starts_lit(req->target, "/latest/")) {
+    if (mb_slice_has_prefix(req->target, "/latest/", strlen("/latest/"))) {
         handle_latest(conn, req);
         return;
     }
-    if (!slice_starts_lit(req->target, "/sub/")) {
+    if (!mb_slice_has_prefix(req->target, "/sub/", strlen("/sub/"))) {
         respond_and_close(conn, 400, "Bad Request", NULL, "invalid GET path\n");
         return;
     }
-    if (!decode_subject_path(req->target, "/sub/", true, &conn->subject)) {
+    if (!mb_http_decode_subject_path(req->target, "/sub/", true, &conn->subject)) {
         respond_and_close(conn, 400, "Bad Request", NULL, "invalid subscription path\n");
         return;
     }
@@ -744,11 +488,11 @@ static void handle_post(mb_http_conn *conn, const mb_http_request *req, mb_slice
         respond_and_close(conn, 401, "Unauthorized", auth_header(conn->server), "unauthorized\n");
         return;
     }
-    if (!req->has_content_type || !content_type_allowed(req->content_type)) {
+    if (!req->has_content_type || !mb_http_content_type_allowed(req->content_type)) {
         respond_and_close(conn, 415, "Unsupported Media Type", NULL, "use text/plain or application/json\n");
         return;
     }
-    if (!decode_subject_path(req->target, "/pub/", false, &conn->subject)) {
+    if (!mb_http_decode_subject_path(req->target, "/pub/", false, &conn->subject)) {
         respond_and_close(conn, 400, "Bad Request", NULL, "invalid publish path\n");
         return;
     }
@@ -782,44 +526,22 @@ static void handle_post(mb_http_conn *conn, const mb_http_request *req, mb_slice
 }
 
 static void process_request(mb_http_conn *conn) {
-    size_t header_end = 0;
-    if (!find_header_end(conn->rx.ptr, conn->rx.len, &header_end)) {
-        if (conn->rx.len > MB_HTTP_MAX_HEADER) {
-            respond_and_close(conn, 431, "Request Header Fields Too Large", NULL, "headers too large\n");
-        }
-        return;
-    }
-    if (header_end > MB_HTTP_MAX_HEADER) {
-        respond_and_close(conn, 431, "Request Header Fields Too Large", NULL, "headers too large\n");
-        return;
-    }
     mb_http_request req = {0};
-    if (!parse_headers((mb_slice){.ptr = conn->rx.ptr, .len = header_end}, &req)) {
-        respond_and_close(conn, 400, "Bad Request", NULL, "bad request\n");
+    mb_http_error err = {0};
+    switch (mb_http_parse_request(conn->rx.ptr, conn->rx.len, &req, &err)) {
+    case MB_HTTP_PARSE_NEED_MORE:
         return;
-    }
-    if (req.has_transfer_encoding) {
-        respond_and_close(conn, 400, "Bad Request", NULL, "transfer encoding is not supported\n");
+    case MB_HTTP_PARSE_ERROR:
+        respond_and_close(conn, err.status, err.reason, NULL, err.message);
         return;
+    case MB_HTTP_PARSE_OK:
+        break;
     }
     if (req.method == MB_HTTP_GET) {
         handle_get(conn, &req);
         return;
     }
-
-    if (!req.has_content_length) {
-        respond_and_close(conn, 411, "Length Required", NULL, "Content-Length is required\n");
-        return;
-    }
-    if (req.content_length > MB_MAX_PAYLOAD) {
-        respond_and_close(conn, 413, "Payload Too Large", NULL, "payload too large\n");
-        return;
-    }
-    if (conn->rx.len - header_end < req.content_length) {
-        return;
-    }
-    const mb_slice body = {.ptr = conn->rx.ptr + header_end, .len = req.content_length};
-    handle_post(conn, &req, body);
+    handle_post(conn, &req, req.body);
 }
 
 static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {

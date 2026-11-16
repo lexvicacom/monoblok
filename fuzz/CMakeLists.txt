@@ -18,7 +18,7 @@ mb_add_fuzzer(proto)
 target_link_libraries(fuzz-proto PRIVATE monoblok_core)
 
 # HTTP/SSE adapter request parsing (src/server/http_parse.c).
-mb_add_fuzzer(http)
+mb_add_fuzzer(http ../src/server/http_parse.c)
 target_link_libraries(fuzz-http PRIVATE monoblok_core)
 
 # Patchbay source loaders: EDN, JSON and YAML spellings.

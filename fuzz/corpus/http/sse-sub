@@ -1,0 +1,5 @@
+€GET /sub/sensors/temp HTTP/1.1
+Host: a
+Accept: text/event-stream
+Cache-Control: no-cache
+

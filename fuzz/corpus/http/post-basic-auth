@@ -1,0 +1,5 @@
+€POST /pub/a HTTP/1.0
+Authorization: Basic dXNlcjpwYXNz
+content-type:  Text/Plain	
+content-length:0
+
