@@ -1,0 +1,5 @@
+CONNECT {}
+SUB a.b 1
+PUB a.b r 2
+hi
+PING
