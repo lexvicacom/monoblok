@@ -54,6 +54,18 @@ if(MB_ASAN)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
+# libFuzzer harnesses for network- and file-facing parsers (see fuzz/README.md).
+# Instruments everything with coverage + ASan/UBSan; harness targets add
+# -fsanitize=fuzzer at link time.
+option(MB_FUZZ "Build libFuzzer harnesses (requires clang)" OFF)
+if(MB_FUZZ)
+  if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "MB_FUZZ requires clang (configure with CC=clang)")
+  endif()
+  add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
 set(MB_LOAD_SOAK_SUBSCRIBERS 64)
 set(MB_LOAD_SOAK_MESSAGES_PER_SUBJECT 1024)
 set(MB_LOAD_SOAK_FLUSH_EVERY 0)
@@ -300,3 +312,7 @@ add_custom_target(load-soak
 add_custom_target(tidy
   COMMAND ${CMAKE_COMMAND} -E echo "No clang-tidy checks configured for monoblok."
 )
+
+if(MB_FUZZ)
+  add_subdirectory(fuzz)
+endif()
