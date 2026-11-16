@@ -23,6 +23,7 @@ typedef struct value_vec {
 typedef struct json_conv {
     pb_arena *arena;
     pb_parse_error err;
+    size_t depth; // open arrays being converted; capped at PB_MAX_NEST_DEPTH
     bool bindings; // rule-body forms: "$name" strings are bound symbols; config forms keep plain strings
     char msg[192];
 } json_conv;
@@ -83,7 +84,7 @@ static bool freeze_vec(json_conv *c, value_vec *v, pb_value_kind kind, pb_value 
 
 static pb_value convert_expr(json_conv *c, yyjson_val *v);
 
-static bool convert_vec_array(json_conv *c, yyjson_val *array, pb_value *out) {
+static bool convert_vec_array_body(json_conv *c, yyjson_val *array, pb_value *out) {
     value_vec items = {0};
     size_t idx = 0;
     size_t max = 0;
@@ -99,6 +100,27 @@ static bool convert_vec_array(json_conv *c, yyjson_val *array, pb_value *out) {
     }
     const bool ok = freeze_vec(c, &items, PB_VECTOR, out);
     free(items.items);
+    return ok;
+}
+
+// Counts one level of array nesting; yyjson gives no source offsets, so the error offset is 0.
+static bool convert_enter(json_conv *c) {
+    if (c->depth >= PB_MAX_NEST_DEPTH) {
+        if (c->err == PB_PARSE_OK) {
+            c->err = PB_PARSE_TOO_DEEP;
+        }
+        return false;
+    }
+    c->depth += 1;
+    return true;
+}
+
+static bool convert_vec_array(json_conv *c, yyjson_val *array, pb_value *out) {
+    if (!convert_enter(c)) {
+        return false;
+    }
+    const bool ok = convert_vec_array_body(c, array, out);
+    c->depth -= 1;
     return ok;
 }
 
@@ -148,7 +170,7 @@ static bool convert_special_object(json_conv *c, yyjson_val *obj, pb_value *out)
     return false;
 }
 
-static bool convert_form(json_conv *c, yyjson_val *array, pb_value *out) {
+static bool convert_form_body(json_conv *c, yyjson_val *array, pb_value *out) {
     if (!yyjson_is_arr(array) || yyjson_arr_size(array) == 0) {
         c->err = PB_PARSE_INVALID_LIST_HEAD;
         return false;
@@ -214,6 +236,15 @@ static bool convert_form(json_conv *c, yyjson_val *array, pb_value *out) {
 
     const bool ok = freeze_vec(c, &items, PB_LIST, out);
     free(items.items);
+    return ok;
+}
+
+static bool convert_form(json_conv *c, yyjson_val *array, pb_value *out) {
+    if (!convert_enter(c)) {
+        return false;
+    }
+    const bool ok = convert_form_body(c, array, out);
+    c->depth -= 1;
     return ok;
 }
 

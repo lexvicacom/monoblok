@@ -60,6 +60,10 @@ _Static_assert(offsetof(pb_value, tag) + sizeof(uint32_t) <= offsetof(pb_value, 
 _Static_assert(sizeof(pb_value) == (sizeof(void *) == 8 ? 24 : 16),
                "unexpected pb_value layout");
 
+// Maximum bracket nesting any patchbay adapter accepts. It bounds parser recursion and,
+// because the AST cannot be deeper, the recursive resolve, eval and free passes too.
+#define PB_MAX_NEST_DEPTH 128
+
 typedef enum pb_parse_error {
     PB_PARSE_OK,
     PB_PARSE_OOM,
@@ -73,6 +77,7 @@ typedef enum pb_parse_error {
     PB_PARSE_INVALID_LIST_HEAD,
     PB_PARSE_INVALID_JSON,
     PB_PARSE_INVALID_YAML,
+    PB_PARSE_TOO_DEEP, // more than PB_MAX_NEST_DEPTH open brackets; offset is the offending open bracket
 } pb_parse_error;
 
 // Parse result with top-level forms owned by the supplied arena.

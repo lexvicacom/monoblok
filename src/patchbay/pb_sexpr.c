@@ -19,6 +19,7 @@ typedef struct parser {
     const char *src;
     size_t len;
     size_t pos;
+    size_t depth; // open list/vector brackets around pos; capped at PB_MAX_NEST_DEPTH
 } parser;
 
 bool pb_slice_eq(pb_slice a, pb_slice b) {
@@ -88,7 +89,7 @@ static bool parse_number(pb_slice tok, double *out) {
 
 static pb_parse_error parse_one(parser *p, pb_value *out);
 
-static pb_parse_error parse_seq(parser *p, char close, char wrong_close, pb_value_kind kind, pb_value *out) {
+static pb_parse_error parse_seq_body(parser *p, char close, char wrong_close, pb_value_kind kind, pb_value *out) {
     const size_t open = p->pos;
     p->pos += 1;
     value_vec items = {0};
@@ -135,6 +136,17 @@ static pb_parse_error parse_seq(parser *p, char close, char wrong_close, pb_valu
             return PB_PARSE_OOM;
         }
     }
+}
+
+// Counts one level of nesting around parse_seq_body; on too-deep, pos stays on the open bracket.
+static pb_parse_error parse_seq(parser *p, char close, char wrong_close, pb_value_kind kind, pb_value *out) {
+    if (p->depth >= PB_MAX_NEST_DEPTH) {
+        return PB_PARSE_TOO_DEEP;
+    }
+    p->depth += 1;
+    const pb_parse_error err = parse_seq_body(p, close, wrong_close, kind, out);
+    p->depth -= 1;
+    return err;
 }
 
 // Reads "..." or, with raw set, a #"..." regex literal (backslash pairs kept
@@ -330,6 +342,7 @@ const char *pb_parse_error_name(pb_parse_error err) {
     case PB_PARSE_INVALID_LIST_HEAD: return "invalid list head";
     case PB_PARSE_INVALID_JSON: return "invalid json";
     case PB_PARSE_INVALID_YAML: return "invalid yaml";
+    case PB_PARSE_TOO_DEEP: return "nesting too deep (limit 128)";
     }
     return "unknown parse error";
 }

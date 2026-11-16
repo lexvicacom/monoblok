@@ -78,6 +78,7 @@ typedef struct y_parse {
     size_t line_len;
     size_t line_cap;
     size_t pos;
+    size_t depth; // open block and flow containers around pos; capped at PB_MAX_NEST_DEPTH
     pb_parse_error err;
     size_t err_offset;
 } y_parse;
@@ -120,6 +121,20 @@ static void set_err_msg(y_parse *p, size_t offset, const char *fmt, ...) {
         vsnprintf(p->msg, sizeof p->msg, fmt, ap);
         va_end(ap);
     }
+}
+
+// Enters one container level. False (with err set) when it would pass PB_MAX_NEST_DEPTH;
+// offset should point at the container's first byte. Pair with p->depth -= 1.
+static bool nest_enter(y_parse *p, size_t offset) {
+    if (p->depth >= PB_MAX_NEST_DEPTH) {
+        if (p->err == PB_PARSE_OK) {
+            p->err = PB_PARSE_TOO_DEEP;
+            p->err_offset = offset;
+        }
+        return false;
+    }
+    p->depth += 1;
+    return true;
 }
 
 static y_node *node_new(y_parse *p, y_node_kind kind, size_t offset) {
@@ -484,7 +499,7 @@ static void flow_skip_ws(pb_slice s, size_t *pos) {
     }
 }
 
-static y_node *parse_flow_array(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
+static y_node *parse_flow_array_body(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
     y_node *list = node_new(p, Y_LIST, base_offset + *pos);
     if (list == NULL) {
         return NULL;
@@ -523,6 +538,15 @@ static y_node *parse_flow_array(y_parse *p, pb_slice s, size_t *pos, size_t base
     }
 }
 
+static y_node *parse_flow_array(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
+    if (!nest_enter(p, base_offset + *pos)) {
+        return NULL;
+    }
+    y_node *n = parse_flow_array_body(p, s, pos, base_offset);
+    p->depth -= 1;
+    return n;
+}
+
 static y_node *parse_flow_scalar(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
     const size_t start = *pos;
     if (*pos < s.len && (s.ptr[*pos] == '"' || s.ptr[*pos] == '\'')) {
@@ -545,7 +569,7 @@ static y_node *parse_flow_scalar(y_parse *p, pb_slice s, size_t *pos, size_t bas
     return scalar_from_slice(p, raw, base_offset + start);
 }
 
-static y_node *parse_flow_map(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
+static y_node *parse_flow_map_body(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
     y_node *map = node_new(p, Y_MAP, base_offset + *pos);
     if (map == NULL) {
         return NULL;
@@ -584,6 +608,15 @@ static y_node *parse_flow_map(y_parse *p, pb_slice s, size_t *pos, size_t base_o
         }
         *pos += 1;
     }
+}
+
+static y_node *parse_flow_map(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
+    if (!nest_enter(p, base_offset + *pos)) {
+        return NULL;
+    }
+    y_node *n = parse_flow_map_body(p, s, pos, base_offset);
+    p->depth -= 1;
+    return n;
 }
 
 static y_node *parse_flow_value(y_parse *p, pb_slice s, size_t *pos, size_t base_offset) {
@@ -627,7 +660,7 @@ static bool parse_map_pair_from_line(y_parse *p, y_node *map, y_line line, bool 
     pb_slice raw_value = trim_slice((pb_slice){.ptr = line.ptr + colon + 1, .len = line.len - colon - 1});
     y_node *value = NULL;
     if (raw_value.len != 0) {
-        value = parse_inline_value(p, raw_value, line.offset + colon + 1);
+        value = parse_inline_value(p, raw_value, line.offset + (size_t)(raw_value.ptr - line.ptr));
         if (advance_line) {
             p->pos += 1;
         }
@@ -666,7 +699,7 @@ static y_node *parse_map(y_parse *p, size_t indent) {
     return map;
 }
 
-static y_node *parse_seq_map_item(y_parse *p, y_line line, pb_slice rest, size_t colon, size_t indent) {
+static y_node *parse_seq_map_item_body(y_parse *p, y_line line, pb_slice rest, size_t colon, size_t indent) {
     y_node *map = node_new(p, Y_MAP, line.offset);
     if (map == NULL) {
         return NULL;
@@ -704,6 +737,15 @@ static y_node *parse_seq_map_item(y_parse *p, y_line line, pb_slice rest, size_t
         }
     }
     return map;
+}
+
+static y_node *parse_seq_map_item(y_parse *p, y_line line, pb_slice rest, size_t colon, size_t indent) {
+    if (!nest_enter(p, line.offset)) {
+        return NULL;
+    }
+    y_node *n = parse_seq_map_item_body(p, line, rest, colon, indent);
+    p->depth -= 1;
+    return n;
 }
 
 static y_node *parse_seq(y_parse *p, size_t indent) {
@@ -744,7 +786,7 @@ static y_node *parse_seq(y_parse *p, size_t indent) {
     return list;
 }
 
-static y_node *parse_block(y_parse *p, size_t indent) {
+static y_node *parse_block_body(y_parse *p, size_t indent) {
     if (p->pos >= p->line_len || p->lines[p->pos].indent != indent) {
         set_err(p, p->pos < p->line_len ? p->lines[p->pos].offset : p->len);
         return NULL;
@@ -753,6 +795,15 @@ static y_node *parse_block(y_parse *p, size_t indent) {
         return parse_seq(p, indent);
     }
     return parse_map(p, indent);
+}
+
+static y_node *parse_block(y_parse *p, size_t indent) {
+    if (!nest_enter(p, p->pos < p->line_len ? p->lines[p->pos].offset : p->len)) {
+        return NULL;
+    }
+    y_node *n = parse_block_body(p, indent);
+    p->depth -= 1;
+    return n;
 }
 
 static y_pair *map_find(y_node *map, const char *key) {

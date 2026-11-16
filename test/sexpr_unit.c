@@ -197,6 +197,61 @@ static void test_result_does_not_borrow_source_atoms(void) {
     pb_arena_free(&arena);
 }
 
+// Builds `open` repeated depth times around an atom, then the matching closers.
+static char *nested_source(const char *open, char close, size_t depth) {
+    const size_t open_len = strlen(open);
+    char *src = malloc(depth * (open_len + 1) + 2);
+    CHECK(src != NULL);
+    size_t n = 0;
+    for (size_t i = 0; i < depth; i += 1) {
+        memcpy(src + n, open, open_len);
+        n += open_len;
+    }
+    src[n++] = 'x';
+    for (size_t i = 0; i < depth; i += 1) {
+        src[n++] = close;
+    }
+    src[n] = '\0';
+    return src;
+}
+
+static void test_nesting_limit(void) {
+    pb_arena arena = {0};
+    char *src = nested_source("(a ", ')', PB_MAX_NEST_DEPTH);
+    CHECK(parse(&arena, src).err == PB_PARSE_OK);
+    free(src);
+    src = nested_source("[", ']', PB_MAX_NEST_DEPTH);
+    CHECK(parse(&arena, src).err == PB_PARSE_OK);
+    free(src);
+
+    // One more level fails, and the offset is the offending open bracket.
+    src = nested_source("(a ", ')', PB_MAX_NEST_DEPTH + 1);
+    pb_parse_result r = parse(&arena, src);
+    CHECK(r.err == PB_PARSE_TOO_DEEP);
+    CHECK(r.err_offset == PB_MAX_NEST_DEPTH * 3);
+    CHECK(src[r.err_offset] == '(');
+    free(src);
+    src = nested_source("[", ']', PB_MAX_NEST_DEPTH + 1);
+    r = parse(&arena, src);
+    CHECK(r.err == PB_PARSE_TOO_DEEP);
+    CHECK(r.err_offset == PB_MAX_NEST_DEPTH);
+    free(src);
+
+    // Siblings do not accumulate depth.
+    CHECK(parse(&arena, "(a (b) (c) [d] (e [f]))").err == PB_PARSE_OK);
+    pb_arena_free(&arena);
+
+    // Absurd depth fails cleanly instead of overflowing the stack.
+    pb_arena big = {0};
+    src = nested_source("(a ", ')', 100000);
+    CHECK(parse(&big, src).err == PB_PARSE_TOO_DEEP);
+    free(src);
+    src = nested_source("[", ']', 100000);
+    CHECK(parse(&big, src).err == PB_PARSE_TOO_DEEP);
+    free(src);
+    pb_arena_free(&big);
+}
+
 TEST_MAIN(sexpr,
           test_arena_trim,
           test_atoms,
@@ -207,4 +262,5 @@ TEST_MAIN(sexpr,
           test_vectors,
           test_errors,
           test_offset_at_eof,
-          test_result_does_not_borrow_source_atoms)
+          test_result_does_not_borrow_source_atoms,
+          test_nesting_limit)

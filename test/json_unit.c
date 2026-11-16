@@ -75,6 +75,148 @@ static void test_json_replaying_symbol(void) {
     pb_arena_free(&arena);
 }
 
+// Appends `count` copies of `text` to buf at *n.
+static void repeat_text(char *buf, size_t *n, const char *text, size_t count) {
+    const size_t len = strlen(text);
+    for (size_t i = 0; i < count; i += 1) {
+        memcpy(buf + *n, text, len);
+        *n += len;
+    }
+}
+
+// ["on","a", ["do", ["do", ... 1 ...]]] with `inner` nested arrays under the root form.
+static char *deep_json_source(size_t inner, size_t *len) {
+    char *buf = malloc(inner * 8 + 32);
+    CHECK(buf != NULL);
+    size_t n = 0;
+    repeat_text(buf, &n, "[\"on\",\"a\",", 1);
+    repeat_text(buf, &n, "[\"do\",", inner);
+    repeat_text(buf, &n, "1", 1);
+    repeat_text(buf, &n, "]", inner + 1);
+    buf[n] = '\0';
+    *len = n;
+    return buf;
+}
+
+// {"vector":[{"vector":[ ... 1 ...]}]} wrapped in ["on","a", ...]; each level is one array.
+static char *deep_json_vector_source(size_t levels, size_t *len) {
+    char *buf = malloc(levels * 14 + 32);
+    CHECK(buf != NULL);
+    size_t n = 0;
+    repeat_text(buf, &n, "[\"on\",\"a\",", 1);
+    repeat_text(buf, &n, "{\"vector\":[", levels);
+    repeat_text(buf, &n, "1", 1);
+    repeat_text(buf, &n, "]}", levels);
+    repeat_text(buf, &n, "]", 1);
+    buf[n] = '\0';
+    *len = n;
+    return buf;
+}
+
+static pb_parse_error parse_json_err(char *src, size_t len) {
+    pb_arena arena = {0};
+    pb_parse_result r = pb_parse_patchbay_source(&arena, "patchbay.json", src, len);
+    pb_arena_free(&arena);
+    return r.err;
+}
+
+static void test_json_nesting_limit(void) {
+    size_t len = 0;
+    // The root form is level 1, so PB_MAX_NEST_DEPTH - 1 inner arrays reach the limit.
+    char *src = deep_json_source(PB_MAX_NEST_DEPTH - 1, &len);
+    CHECK(parse_json_err(src, len) == PB_PARSE_OK);
+    free(src);
+    src = deep_json_source(PB_MAX_NEST_DEPTH, &len);
+    CHECK(parse_json_err(src, len) == PB_PARSE_TOO_DEEP);
+    free(src);
+    src = deep_json_source(100000, &len);
+    CHECK(parse_json_err(src, len) == PB_PARSE_TOO_DEEP);
+    free(src);
+
+    src = deep_json_vector_source(PB_MAX_NEST_DEPTH - 1, &len);
+    CHECK(parse_json_err(src, len) == PB_PARSE_OK);
+    free(src);
+    src = deep_json_vector_source(PB_MAX_NEST_DEPTH, &len);
+    CHECK(parse_json_err(src, len) == PB_PARSE_TOO_DEEP);
+    free(src);
+    src = deep_json_vector_source(100000, &len);
+    CHECK(parse_json_err(src, len) == PB_PARSE_TOO_DEEP);
+    free(src);
+}
+
+// on: map (1), list (2), rule map (3), then one level per flow array.
+static char *deep_yaml_flow_source(size_t arrays, size_t *len, size_t *last_open) {
+    static const char prefix[] = "on:\n  - sub: a\n    do: ";
+    char *buf = malloc(sizeof prefix + arrays * 6 + 16);
+    CHECK(buf != NULL);
+    size_t n = 0;
+    repeat_text(buf, &n, prefix, 1);
+    *last_open = n + (arrays - 1) * 5;
+    repeat_text(buf, &n, "[do, ", arrays);
+    repeat_text(buf, &n, "1", 1);
+    repeat_text(buf, &n, "]", arrays);
+    buf[n] = '\0';
+    *len = n;
+    return buf;
+}
+
+// Block maps k0: / k1: ... nested one indent level (2 spaces) per key.
+static char *deep_yaml_block_source(size_t levels, size_t *len) {
+    char *buf = malloc(levels * (levels * 2 + 8) + 16);
+    CHECK(buf != NULL);
+    size_t n = 0;
+    for (size_t i = 0; i < levels; i += 1) {
+        for (size_t j = 0; j < i * 2; j += 1) {
+            buf[n++] = ' ';
+        }
+        repeat_text(buf, &n, "k:\n", 1);
+    }
+    for (size_t j = 0; j < levels * 2; j += 1) {
+        buf[n++] = ' ';
+    }
+    repeat_text(buf, &n, "v: 1\n", 1);
+    buf[n] = '\0';
+    *len = n;
+    return buf;
+}
+
+static pb_parse_result parse_yaml_text(pb_arena *arena, const char *src, size_t len) {
+    return pb_parse_patchbay_source(arena, "patchbay.yml", src, len);
+}
+
+static void test_yaml_nesting_limit(void) {
+    size_t len = 0;
+    size_t last_open = 0;
+    pb_arena arena = {0};
+
+    char *src = deep_yaml_flow_source(PB_MAX_NEST_DEPTH - 3, &len, &last_open);
+    CHECK(parse_yaml_text(&arena, src, len).err == PB_PARSE_OK);
+    free(src);
+
+    src = deep_yaml_flow_source(PB_MAX_NEST_DEPTH - 2, &len, &last_open);
+    pb_parse_result r = parse_yaml_text(&arena, src, len);
+    CHECK(r.err == PB_PARSE_TOO_DEEP);
+    CHECK(r.err_offset == last_open);
+    CHECK(src[r.err_offset] == '[');
+    free(src);
+
+    src = deep_yaml_flow_source(100000, &len, &last_open);
+    CHECK(parse_yaml_text(&arena, src, len).err == PB_PARSE_TOO_DEEP);
+    free(src);
+    pb_arena_free(&arena);
+
+    // Block nesting is capped too; the error must be the depth error, not a stack overflow.
+    arena = (pb_arena){0};
+    src = deep_yaml_block_source(PB_MAX_NEST_DEPTH + 1, &len);
+    r = parse_yaml_text(&arena, src, len);
+    CHECK(r.err == PB_PARSE_TOO_DEEP);
+    free(src);
+    src = deep_yaml_block_source(2000, &len);
+    CHECK(parse_yaml_text(&arena, src, len).err == PB_PARSE_TOO_DEEP);
+    free(src);
+    pb_arena_free(&arena);
+}
+
 static void test_json_invalid_inputs(void) {
     pb_arena arena = {0};
     pb_parse_result r = pb_parse_patchbay_source(&arena, "patchbay.json", "{\"not\":\"a list\"}", strlen("{\"not\":\"a list\"}"));
@@ -538,4 +680,6 @@ TEST_MAIN(json,
           test_yaml_scalar_rules,
           test_yaml_quoted_scalars,
           test_yaml_rule_shape,
-          test_json_binding_rules)
+          test_json_binding_rules,
+          test_json_nesting_limit,
+          test_yaml_nesting_limit)
