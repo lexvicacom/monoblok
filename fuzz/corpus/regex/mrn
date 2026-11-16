@@ -1,0 +1,1 @@
+$(?i)\b(?:mrn|dob|nhs)[ :=#]*[a-z0-9]patient MRN: 12345 dob=1980
